@@ -9,6 +9,7 @@ export type SessionUser = {
 export type SessionPayload = SessionUser & {
   exp: number;
   iat: number;
+  sid?: string;
 };
 
 export const AUTH_COOKIE = "fna_session";

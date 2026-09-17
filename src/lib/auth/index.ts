@@ -5,7 +5,18 @@ export {
   createSessionToken,
   getAuthSecret,
   isAuthEnforced,
+  isAuthFailClosed,
+  mustProtectRoutes,
   readSessionFromCookieHeader,
+  revokeSessionToken,
   sessionCookieOptions,
   verifySessionToken,
 } from "./session";
+export { safeNextPath } from "./safe-next";
+export { passwordsMatch, consumeLoginAttempt, resetLoginRateLimitForTests } from "./password";
+export {
+  createStoredSession,
+  getStoredSession,
+  revokeStoredSession,
+  resetAuthSessionsForTests,
+} from "./session-store";

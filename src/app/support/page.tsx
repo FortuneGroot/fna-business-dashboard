@@ -6,21 +6,42 @@ import { BRAND } from "@/lib/brand";
 import { getConsentCopy } from "@/lib/mapping";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+type TenantContact = {
+  businessName?: string;
+  supportEmail?: string;
+  phone?: string;
+  website?: string;
+};
+
 export default function SupportPage() {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
-  const [bizName, setBizName] = useState(BRAND.name);
+  const [contact, setContact] = useState<TenantContact>({ businessName: BRAND.name });
 
   useEffect(() => {
     fetch("/api/tenant/public")
       .then((r) => r.json())
       .then((d) => {
-        if (d?.client?.businessName) setBizName(d.client.businessName);
+        if (d?.client) {
+          setContact({
+            businessName: d.client.businessName || BRAND.name,
+            supportEmail: d.client.supportEmail || "",
+            phone: d.client.phone || "",
+            website: d.client.website || "",
+          });
+        }
       })
       .catch(() => undefined);
   }, []);
 
+  const bizName = contact.businessName || BRAND.name;
   const consent = useMemo(() => getConsentCopy(bizName), [bizName]);
+
+  const contactBits = [
+    contact.supportEmail || null,
+    contact.phone || null,
+    contact.website ? contact.website.replace(/^https?:\/\//, "") : null,
+  ].filter(Boolean);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -57,7 +78,11 @@ export default function SupportPage() {
     <AppShell>
       <PageHead
         title="Support / Contact"
-        description={`Contact ${bizName}. Recovered training-pack channels (confirm live before publishing): ${BRAND.supportEmailRecovered} · ${BRAND.supportPhoneRecovered} · ${BRAND.website.replace("https://", "")}`}
+        description={
+          contactBits.length
+            ? `Contact ${bizName}: ${contactBits.join(" · ")}`
+            : `Contact ${bizName}. Support channels are not configured for this deployment yet.`
+        }
       />
       <p className="muted">
         This form posts to a dry-run lead API. Use a fake email such as{" "}

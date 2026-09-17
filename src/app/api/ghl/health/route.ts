@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const enforced = isAuthEnforced();
   const session = enforced
-    ? readSessionFromCookieHeader(req.headers.get("cookie"))
+    ? await readSessionFromCookieHeader(req.headers.get("cookie"))
     : null;
   const privileged = !enforced || Boolean(session);
 
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
         : null,
       locationId: health.locationId ? "[redacted]" : "",
       locationName: null,
-      httpStatus: health.httpStatus,
+      httpStatus: null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "CRM health check failed";

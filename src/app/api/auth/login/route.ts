@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   AUTH_COOKIE,
   authenticateCredentials,
+  consumeLoginAttempt,
   createSessionToken,
   getAuthSecret,
   isAuthEnforced,
@@ -21,6 +22,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown";
+
   let body: { email?: string; password?: string } = {};
   try {
     body = await req.json();
@@ -34,12 +40,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Email and password required" }, { status: 400 });
   }
 
+  const rl = consumeLoginAttempt(`login:${ip}:${email.toLowerCase()}`);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Too many attempts. Try again later." },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
+  }
+
   const user = authenticateCredentials(email, password);
   if (!user) {
     return NextResponse.json({ ok: false, error: "Invalid credentials" }, { status: 401 });
   }
 
-  const token = createSessionToken(user, getAuthSecret());
+  const token = await createSessionToken(user, getAuthSecret());
   const res = NextResponse.json({
     ok: true,
     user: { email: user.email, role: user.role, name: user.name },

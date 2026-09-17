@@ -54,9 +54,13 @@ describe("tenant defaults (F&A LIVE)", () => {
     assert.equal(platformProductName(), BRAND.product);
   });
 
-  it("F&A default readiness is READY", () => {
+  it("F&A default readiness is PARTIAL/BLOCKED without invented owner URLs", () => {
     const report = evaluateClientReadiness(faLiveDefaultClientConfig());
-    assert.equal(report.status, "READY", JSON.stringify(report.checks.filter((c) => !c.passed)));
+    assert.notEqual(
+      report.status,
+      "READY",
+      JSON.stringify(report.checks.filter((c) => !c.passed))
+    );
   });
 });
 

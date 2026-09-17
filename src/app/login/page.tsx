@@ -9,10 +9,32 @@ type TenantPublic = {
   platform?: { productName?: string; brandName?: string };
 };
 
+/** Client-side mirror of safeNextPath — keep in sync with src/lib/auth/safe-next.ts */
+function safeNextPathClient(raw: string | null, fallback = "/dashboard"): string {
+  if (!raw) return fallback;
+  let value = raw.trim();
+  for (let i = 0; i < 4; i++) {
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) break;
+      value = decoded;
+    } catch {
+      return fallback;
+    }
+  }
+  value = value.trim();
+  if (!value.startsWith("/")) return fallback;
+  if (value.startsWith("//") || value.startsWith("/\\")) return fallback;
+  if (value.includes("://") || value.includes("\\") || value.includes("@")) return fallback;
+  if (/[\0\r\n]/.test(value)) return fallback;
+  return value || fallback;
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const nextPath = params.get("next") || "/dashboard";
+  const nextPath = safeNextPathClient(params.get("next"), "/dashboard");
+  const misconfigured = params.get("error") === "auth_misconfigured";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,6 +52,9 @@ function LoginForm() {
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
         setAuthReady(Boolean(data.authEnforced));
+        if (data.authFailClosed && !data.authEnforced) {
+          setError("Authentication is required but AUTH_SECRET is not configured.");
+        }
         if (r.ok && data.user) router.replace(nextPath);
       })
       .catch(() => setAuthReady(false));
@@ -51,7 +76,7 @@ function LoginForm() {
         setBusy(false);
         return;
       }
-      router.replace(nextPath.startsWith("/") ? nextPath : "/dashboard");
+      router.replace(safeNextPathClient(nextPath, "/dashboard"));
     } catch {
       setError("Login request failed");
       setBusy(false);
@@ -75,7 +100,14 @@ function LoginForm() {
           Client: <strong style={{ color: "var(--primary)" }}>{clientName}</strong>
         </p>
 
-        {authReady === false ? (
+        {misconfigured || (authReady === false && error.includes("AUTH_SECRET")) ? (
+          <div className="banner error">
+            This environment requires authentication but <code>AUTH_SECRET</code> is missing.
+            Production must never fail open.
+          </div>
+        ) : null}
+
+        {authReady === false && !misconfigured ? (
           <div className="banner">
             Authentication is not enforced on this deployment yet. Set{" "}
             <code>AUTH_SECRET</code> and owner credentials in the environment to enable login.
@@ -106,7 +138,12 @@ function LoginForm() {
             required
             disabled={authReady === false}
           />
-          <button className="btn" type="submit" disabled={busy || authReady === false} style={{ width: "100%", marginTop: "1rem" }}>
+          <button
+            className="btn"
+            type="submit"
+            disabled={busy || authReady === false}
+            style={{ width: "100%", marginTop: "1rem" }}
+          >
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
@@ -120,7 +157,13 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="login-wrap"><div className="login-card">Loading…</div></div>}>
+    <Suspense
+      fallback={
+        <div className="login-wrap">
+          <div className="login-card">Loading…</div>
+        </div>
+      }
+    >
       <LoginForm />
     </Suspense>
   );

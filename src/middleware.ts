@@ -4,7 +4,6 @@ import {
   getCookieValue,
   verifySessionTokenEdge,
 } from "@/lib/auth/session-edge";
-import { roleAllowsDashboard } from "@/lib/auth/types";
 
 /** Paths that never require a session (machine or public). */
 const PUBLIC_EXACT = new Set([
@@ -22,7 +21,6 @@ const PUBLIC_EXACT = new Set([
 
 const PUBLIC_PREFIXES = ["/api/auth/"];
 
-/** Page routes that require auth when AUTH_SECRET is set. */
 const PROTECTED_PAGE_PREFIXES = [
   "/dashboard",
   "/contacts",
@@ -43,7 +41,6 @@ const PROTECTED_PAGE_PREFIXES = [
   "/help",
 ];
 
-/** API routes that require auth when AUTH_SECRET is set. */
 const PROTECTED_API_PREFIXES = [
   "/api/dashboard",
   "/api/events",
@@ -70,14 +67,17 @@ function isProtectedApi(pathname: string): boolean {
   );
 }
 
+function mustProtect(): boolean {
+  const secret = (process.env.AUTH_SECRET || "").trim();
+  if (secret) return true;
+  const vercelEnv = (process.env.VERCEL_ENV || "").trim().toLowerCase();
+  if (vercelEnv === "production") return true;
+  if ((process.env.AUTH_FAIL_CLOSED || "").toLowerCase() === "true") return true;
+  return false;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const secret = (process.env.AUTH_SECRET || "").trim();
-
-  // Auth not configured → preserve Preview open access (document as real-client gate).
-  if (!secret) {
-    return NextResponse.next();
-  }
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();
@@ -88,9 +88,29 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  if (!mustProtect()) {
+    // Preview/local without AUTH_SECRET and without fail-closed → open
+    // (Vercel Deployment Protection remains the Preview gate).
+    return NextResponse.next();
+  }
+
+  const secret = (process.env.AUTH_SECRET || "").trim();
+  if (!secret) {
+    // Production / fail-closed without AUTH_SECRET — never public.
+    if (isProtectedApi(pathname)) {
+      return NextResponse.json(
+        { ok: false, error: "Authentication misconfigured" },
+        { status: 503 }
+      );
+    }
+    const login = new URL("/login", req.url);
+    login.searchParams.set("error", "auth_misconfigured");
+    return NextResponse.redirect(login);
+  }
+
   const token = getCookieValue(req.headers.get("cookie"), AUTH_COOKIE);
   const session = token ? await verifySessionTokenEdge(token, secret) : null;
-  const ok = Boolean(session && roleAllowsDashboard(session.role));
+  const ok = Boolean(session);
 
   if (ok) {
     if (pathname === "/") {

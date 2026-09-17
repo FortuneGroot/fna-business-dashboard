@@ -8,9 +8,9 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { loadClientConfigFromFile } from "../src/lib/onboarding";
+import { loadClientConfigFromFile, looksLikePlaceholder } from "../src/lib/onboarding";
 import { PROTECTED_MASTER_LOCATION_ID } from "../src/lib/tenant";
-import { looksLikePlaceholder } from "../src/lib/onboarding";
+import { assertCanGenerateManifest } from "../src/lib/deployment/manifest-gate";
 
 function main() {
   const raw = process.argv.slice(2).filter((a) => a !== "--");
@@ -33,6 +33,13 @@ function main() {
 
   const abs = resolve(configPath);
   const config = loadClientConfigFromFile(abs);
+
+  try {
+    assertCanGenerateManifest(config);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : "Refusing to generate manifest for BLOCKED config");
+    process.exit(1);
+  }
 
   const manifest = {
     schemaVersion: "1.0",

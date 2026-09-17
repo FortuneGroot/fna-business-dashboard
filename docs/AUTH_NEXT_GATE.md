@@ -1,12 +1,14 @@
-# Dashboard authentication — foundation shipped
+# Dashboard authentication — foundation + hardening
 
-Cookie sessions (`AUTH_SECRET` HMAC) with roles OWNER / ADMIN / CLIENT.
-Login UI at `/login`. Middleware protects dashboard pages + private APIs.
-Webhooks remain machine endpoints.
+Cookie sessions with server-side session IDs (memory + optional Supabase `auth_sessions`).
+Logout revokes the session record (replay denied).
+Production (`VERCEL_ENV=production`) **fail-closes** if `AUTH_SECRET` is missing.
+See `docs/VERCEL_RELEASE_POLICY.md`.
 
-Still required before real-client go-live (owner action):
-- Set `AUTH_SECRET` and at least owner credentials in Vercel
-- Confirm Vercel Deployment Protection policy alongside app auth
-- Optional: migrate from plaintext env passwords to hashed secrets store
+Owner must set:
+- `AUTH_SECRET`
+- `AUTH_OWNER_EMAIL` / `AUTH_OWNER_PASSWORD`
+- optional Admin/Client credentials
 
+Apply `supabase/migrations/20260917_auth_sessions.sql` manually before relying on multi-instance revocation.
 Do not require HighLevel $497 OAuth for dashboard login.

@@ -1,35 +1,56 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, PageHead, Button } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
+import {
+  clientBookingUrl,
+  clientBusinessName,
+  clientSupportEmail,
+  getTenantConfig,
+  platformProductName,
+} from "@/lib/tenant";
+
+export const dynamic = "force-dynamic";
 
 export default function HelpPage() {
+  const cfg = getTenantConfig();
+  const biz = clientBusinessName();
+  const supportEmail = clientSupportEmail() || cfg.business.supportEmail || "";
+  const phone = cfg.business.businessPhone || cfg.ghl.phoneNumber || "";
+  const booking = clientBookingUrl();
+  const product = platformProductName();
+
   return (
     <AppShell>
       <PageHead
         title="Help & Support"
-        description="Client-facing answers only. Vendor platform names are not used here. Empty topics stay empty rather than fabricated."
+        description={`${product} help for ${biz}. Empty topics stay empty rather than fabricated.`}
       />
 
       <div className="grid grid-3">
         <Card title="Getting Started">
           <p>
-            Fortune & Automations (F&amp;A) is a B2B technology and services business offering
-            Automation, Websites, Branding, and Systems work.
+            You are using the <strong>{product}</strong> for{" "}
+            <strong>{biz}</strong>
+            {cfg.business.industry ? ` (${cfg.business.industry})` : ""}.
           </p>
           <p className="muted">{BRAND.voice}</p>
           <p>
             Sign in at <strong>{BRAND.appHost}</strong>. Bookmark it on your phone — no third-party
-            CRM app is required for this dashboard.
+            CRM mobile app is required for this dashboard.
           </p>
         </Card>
 
         <Card title="Contact Support">
           <p>
-            Email: {BRAND.supportEmailRecovered || "Not yet configured"}
+            Email: {supportEmail || "Not yet configured"}
             <br />
-            Phone: {BRAND.supportPhoneRecovered || "Not yet configured"}
+            Phone: {phone || "Not yet configured"}
           </p>
-          <p className="muted">Recovered from the training pack — confirm live before publishing.</p>
+          {!supportEmail && !phone ? (
+            <p className="muted">Client support channels are not configured for this deployment yet.</p>
+          ) : (
+            <p className="muted">Contact details resolve from this deployment&apos;s client config.</p>
+          )}
           <Button variant="secondary" href="/support">
             Open the support form
           </Button>
@@ -50,14 +71,24 @@ export default function HelpPage() {
 
       <div className="grid grid-2" style={{ marginTop: "1.1rem" }}>
         <Card title="Booking a conversation">
-          <p>
-            Use a calendar booking link when one is offered. A submitted form with a preferred time is
-            not a confirmed appointment.
-          </p>
+          {booking ? (
+            <p>
+              Booking link:{" "}
+              <a href={booking} rel="noreferrer" target="_blank">
+                {booking}
+              </a>
+              . A submitted form with a preferred time is not a confirmed appointment.
+            </p>
+          ) : (
+            <p className="muted">
+              No booking URL is configured for this client yet. A form preferred-time is not a
+              reserved appointment.
+            </p>
+          )}
         </Card>
         <Card title="Texts & emails">
           <p>
-            You&apos;ll only hear from us if you opt in on an independent consent checkbox. A phone
+            You&apos;ll only hear from {biz} if you opt in on an independent consent checkbox. A phone
             number or email by itself is not treated as marketing consent. Reply STOP to opt out of
             texts.
           </p>
@@ -73,8 +104,7 @@ export default function HelpPage() {
         </Card>
         <Card title="Additional FAQs">
           <p className="muted">
-            [Client confirmation required] — additional Q&amp;A stays empty until George approves real
-            answers.
+            Additional Q&amp;A stays empty until real client-approved answers are configured.
           </p>
         </Card>
       </div>

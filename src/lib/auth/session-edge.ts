@@ -1,8 +1,9 @@
 /**
- * Edge-safe session verify for middleware (Web Crypto).
- * Must stay in sync with src/lib/auth/session.ts signing scheme.
+ * Edge-safe session cookie shape check for middleware (Web Crypto).
+ * Full revocation is enforced in Node via session-store on API/login paths.
+ * Cookie body is { sid, exp } only — no roles/PII in the browser token payload beyond ids.
  */
-import { AUTH_COOKIE, type SessionPayload, isAuthRole } from "./types";
+import { AUTH_COOKIE } from "./types";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -24,15 +25,16 @@ async function hmacSign(body: string, secret: string): Promise<string> {
   const bytes = new Uint8Array(sig);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
-  // base64url
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
+
+export type EdgeTokenOk = { sid: string; exp: number };
 
 export async function verifySessionTokenEdge(
   token: string,
   secret: string,
   nowSec = Math.floor(Date.now() / 1000)
-): Promise<SessionPayload | null> {
+): Promise<EdgeTokenOk | null> {
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   const [body, sig] = parts;
@@ -42,10 +44,9 @@ export async function verifySessionTokenEdge(
   try {
     const pad = body.length % 4 === 0 ? "" : "=".repeat(4 - (body.length % 4));
     const b64 = body.replace(/-/g, "+").replace(/_/g, "/") + pad;
-    const json = JSON.parse(atob(b64)) as SessionPayload;
-    if (!json.email || !isAuthRole(json.role) || !json.exp) return null;
-    if (json.exp < nowSec) return null;
-    return json;
+    const json = JSON.parse(atob(b64)) as { sid?: string; exp?: number };
+    if (!json.sid || !json.exp || json.exp < nowSec) return null;
+    return { sid: json.sid, exp: json.exp };
   } catch {
     return null;
   }

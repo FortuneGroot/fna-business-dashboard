@@ -115,11 +115,28 @@ export function validateClientDeployment(
   if (secrets.GHL_API_TOKEN === "MISSING") {
     warnings.push("GHL_API_TOKEN missing — health probe will be unconfigured");
   }
+  // Real-client gate: auth is required for READY (not merely a warning).
   if (secrets.AUTH_SECRET === "MISSING") {
-    warnings.push("AUTH_SECRET missing — dashboard auth not enforced");
+    blockers.push("AUTH_SECRET missing — required for real-client / Production");
   }
   if (secrets.AUTH_OWNER_CREDENTIALS === "MISSING") {
-    warnings.push("AUTH_OWNER credentials missing — no owner login until set");
+    blockers.push("AUTH_OWNER credentials missing — required for dashboard login");
+  }
+
+  const envLoc = (env.GHL_LOCATION_ID || "").trim();
+  if (envLoc && loc && envLoc !== loc) {
+    blockers.push(
+      `GHL_LOCATION_ID (${envLoc}) must match config locationId (${loc}) — refusing mismatch`
+    );
+  }
+  if (envLoc === PROTECTED_MASTER_LOCATION_ID) {
+    blockers.push("GHL_LOCATION_ID is the protected Master");
+  }
+  const envPipe = (env.GHL_PIPELINE_ID || "").trim();
+  if (envPipe && pipe && envPipe !== pipe) {
+    blockers.push(
+      `GHL_PIPELINE_ID (${envPipe}) must match config pipelineId (${pipe}) — refusing mismatch`
+    );
   }
   if (secrets.SUPABASE_URL === "PRESENT" && secrets.SUPABASE_SERVICE_ROLE_KEY === "MISSING") {
     blockers.push("SUPABASE_URL set but SUPABASE_SERVICE_ROLE_KEY missing");

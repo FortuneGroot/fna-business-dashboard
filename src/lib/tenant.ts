@@ -90,7 +90,7 @@ export function faLiveDefaultClientConfig(): ClientConfig {
       supportEmail: BRAND.supportEmailRecovered,
       leadNotificationEmail: BRAND.supportEmailRecovered,
       websiteUrl: BRAND.website,
-      logoUrl: "https://www.fortuneandautomations.com/logo.png",
+      logoUrl: "",
       address: "",
       city: "",
       state: "",
@@ -104,9 +104,9 @@ export function faLiveDefaultClientConfig(): ClientConfig {
       stageIds: faLiveStageIds(),
       bookingCalendarId: "fa-live-cal-discovery-call",
       calendarIds: faLiveCalendarIds(),
-      bookingUrl: "https://www.fortuneandautomations.com/booking",
-      rescheduleUrl: "https://www.fortuneandautomations.com/reschedule",
-      reviewUrl: "https://www.fortuneandautomations.com/review",
+      bookingUrl: "",
+      rescheduleUrl: "",
+      reviewUrl: "",
       assignedUserIds: ["fa-live-user-owner"],
       phoneNumber: BRAND.supportPhoneRecovered,
       domain: BRAND.appHost,
@@ -115,7 +115,7 @@ export function faLiveDefaultClientConfig(): ClientConfig {
       primaryColor: BRAND.colors.blue,
       secondaryColor: BRAND.colors.gold,
       backgroundColor: BRAND.colors.cream,
-      logo: "https://www.fortuneandautomations.com/logo.png",
+      logo: "",
       favicon: "/favicon.ico",
     },
     channels: {
@@ -133,7 +133,7 @@ export function faLiveDefaultClientConfig(): ClientConfig {
       aiEscalationTarget: "fa-live-user-owner",
     },
     sync: {
-      webhookDestination: "https://fna-client-app-git-main-fortuneautomations.vercel.app/api/webhooks/ghl",
+      webhookDestination: "",
       webhookSecretConfigured: true,
       locationGuard: true,
       masterGuard: true,
@@ -173,17 +173,34 @@ export function loadTenantConfigFromEnv(
     config = faLiveDefaultClientConfig();
   }
 
-  // Env overrides for location/pipeline when explicitly set (still Master-blocked).
+  // Env must MATCH config when both are set — never silently override.
   const envLoc = (env.GHL_LOCATION_ID || "").trim();
   const envPipe = (env.GHL_PIPELINE_ID || "").trim();
-  if (envLoc) {
-    assertNotMasterLocation(envLoc);
+  const configLoc = (config.ghl.locationId || "").trim();
+  const configPipe = (config.ghl.pipelineId || "").trim();
+
+  if (envLoc) assertNotMasterLocation(envLoc);
+  assertNotMasterLocation(configLoc);
+
+  if (path && envLoc && configLoc && envLoc !== configLoc) {
+    throw new Error(
+      `GHL_LOCATION_ID (${envLoc}) must match CLIENT_CONFIG_PATH locationId (${configLoc}). Refusing silent override.`
+    );
+  }
+  if (path && envPipe && configPipe && envPipe !== configPipe) {
+    throw new Error(
+      `GHL_PIPELINE_ID (${envPipe}) must match CLIENT_CONFIG_PATH pipelineId (${configPipe}). Refusing silent override.`
+    );
+  }
+
+  // When no CLIENT_CONFIG_PATH, env may supply location/pipeline (still Master-blocked).
+  if (!path && envLoc) {
     config = parseClientConfig({
       ...config,
       ghl: { ...config.ghl, locationId: envLoc },
     });
   }
-  if (envPipe) {
+  if (!path && envPipe) {
     config = parseClientConfig({
       ...config,
       ghl: { ...config.ghl, pipelineId: envPipe },
