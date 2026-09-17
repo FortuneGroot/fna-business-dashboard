@@ -1,0 +1,27 @@
+#,Check,Pass means,Status,Conflict vs LIVE
+1,Lead enters via form,one contact created no duplicate,NOT_RUN,
+2,Opportunity created,one opportunity in New Lead Open,NOT_RUN,Stage name not index
+3,Pipeline correct,single Fortune & Automations Sales Pipeline 6XevPh4T3rX0qAYRfuta + 10 custom stages + native Won/Lost,NOT_RUN,OLD spec said F&A MASTER | LEAD & SALES PIPELINE — SUPERSEDED
+4,No backward stage move,intake/reply never overwrites terminal status,NOT_RUN,
+5,Form works all 5,submit at mobile width clear success,NOT_RUN,FORM-004 Customer Feedback still missing on LIVE
+6,Consent unchecked no SMS,inquiry saved zero SMS queued,NOT_RUN,
+7,STOP / DND honoured,after STOP no further sends,NOT_RUN,
+8,Booking works,calendar slot creates appointment one confirmation owner,NOT_RUN,
+9,Reminder single owner,native reminder OR WF 30.02 never both,NOT_RUN,
+10,Missed-call single owner,native text-back OR WF 20.02 never both,NOT_RUN,WF 20.02 skipped until phone exists
+11,Review request single owner,Reputation OR WF 60.01 never both,NOT_RUN,GBP OAuth owner
+12,No duplicate acknowledgement,form + chat same minute one opportunity one reply,NOT_RUN,
+13,Human takeover,human-required suppresses automation,NOT_RUN,
+14,AI disable per contact,do-not-automate suppresses sends AI Off,NOT_RUN,WF 00.01 Draft only
+15,Global kill-switch,WF 00.01 present public trigger bound,NOT_RUN,Live graph is incomplete UI_ONLY
+16,Won path,Won thank-you only,NOT_RUN,
+17,Lost path,Lost path only lost reason captured,NOT_RUN,Lost Reason native 07ObzonwMIQ5F0wyjSbc
+18,Follow-up logic,nurture respects frequency cap,NOT_RUN,
+19,Reactivation gated,approved cohort + evidence + throttle,NOT_RUN,
+20,Review flow,feedback captured no score gate,NOT_RUN,
+21,Unified inbox,SMS/email/FB/IG/GBP/chat in Conversations,NOT_RUN,Channels not connected
+22,Internal alerts,notification action present recipient unset,NOT_RUN,10 alerts recovered Draft/OFF
+23,AI OFF state,Conversation AI off Voice unassigned,NOT_RUN,
+24,No accidental sends,nothing published enrollment 0,NOT_RUN,
+25,Dashboards render,native widgets real sources no fake data F&A colours,NOT_RUN,This app shell is not HighLevel dashboards
+26,White-label presentation,client login F&A branding no vendor strings,NOT_RUN,DNS not changed; Google login OFF

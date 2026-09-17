@@ -1,0 +1,65 @@
+[
+  {
+    "id": "EMAIL-001",
+    "name": "New Inquiry",
+    "subject": "We received your request",
+    "classification": "Service",
+    "body": "Hi there,\n\nThanks for contacting [[CV:Business Name]]. We have your request and will review it during [[CV:Business Hours]]. If you want to add a detail, reply to this email. You can also choose a conversation time: [[CV:Booking URL]].\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-002",
+    "name": "Appointment Confirmation",
+    "subject": "Your appointment details",
+    "classification": "Appointment",
+    "body": "Hi there,\n\nYour appointment with [[CV:Business Name]] is booked.\nWhen: [[APPT:Start]] ([[APPT:Timezone]])\nWhere: [[APPT:Location]]\nChange your appointment: [[APPT:Reschedule URL]]\nCancel: [[APPT:Cancellation URL]]\nIf you have a question, reply here.\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-003",
+    "name": "Appointment Reminder",
+    "subject": "A reminder about your appointment",
+    "classification": "Appointment",
+    "body": "Hi there,\n\nWe look forward to speaking with you at [[APPT:Start]] ([[APPT:Timezone]]).\nDetails: [[APPT:Location]]\nNeed to change your time? [[APPT:Reschedule URL]]\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-004",
+    "name": "Proposal Follow-Up",
+    "subject": "Any questions about your estimate?",
+    "classification": "Proposal",
+    "body": "Hi there,\n\nOur team at [[CV:Business Name]] is following up on the estimate we sent. If you have questions about the scope or next steps, reply here. Any price or scope change will be confirmed by our team.\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-005",
+    "name": "Educational Follow-Up",
+    "subject": "Planning your next step",
+    "classification": "Marketing",
+    "body": "Hi there,\n\nIf you are comparing options, it can help to list what you need, when you need it and the questions you want answered. Our team at [[CV:Business Name]] can talk through those details with you.\nChoose a time if useful: [[CV:Booking URL]].\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-006",
+    "name": "Customer Thank You",
+    "subject": "Thank you for choosing us",
+    "classification": "Customer service",
+    "body": "Hi there,\n\nThank you for choosing [[CV:Business Name]]. Our team will confirm the next steps for your service. If you have questions in the meantime, reply here.\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-007",
+    "name": "Review Request",
+    "subject": "Would you share your experience?",
+    "classification": "Review",
+    "body": "Hi there,\n\nThank you for working with [[CV:Business Name]]. You are welcome to leave an honest public review here: [[CV:Review URL]]. We appreciate hearing about your experience. If you prefer to contact us directly as well, reply to this email.\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-008",
+    "name": "Reactivation",
+    "subject": "Do you still need a hand?",
+    "classification": "Marketing",
+    "body": "Hi there,\n\nYou previously contacted [[CV:Business Name]] about our services. If that request is still relevant, reply and tell us what you need. If your plans changed, no problem.\n\n[[CV:Business Name]]\n[[CV:Address]], [[CV:City]], [[CV:State]] [[CV:ZIP]]\n[[CV:Support Email]]\nUnsubscribe: [[LINK:Unsubscribe]]"
+  },
+  {
+    "id": "EMAIL-009",
+    "name": "Human Follow-Up Required",
+    "subject": "A conversation needs your attention",
+    "classification": "Internal",
+    "body": "Internal only.\nContact: [[CONTACT:Full Name]]\nReason: [[CONTACT:AI Escalation Reason]]\nSummary: [[CONTACT:AI Lead Summary]]\nOpen contact: [[CONTEXT:Contact URL]]\nClaim the conversation, review the request and set a next action."
+  }
+]

@@ -1,0 +1,92 @@
+[
+  {
+    "id": "ALERT-001",
+    "name": "New Hot Lead",
+    "trigger": "Staff marks Hot",
+    "next": "Respond next staffed hour",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: New Hot Lead | Next step: Respond next staffed hour | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-002",
+    "name": "Appointment Booked",
+    "trigger": "Native booking event",
+    "next": "Review calendar before appointment",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Appointment Booked | Next step: Review calendar before appointment | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-003",
+    "name": "Customer Replied",
+    "trigger": "Reply requiring staff",
+    "next": "Claim conversation next staffed hour",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Customer Replied | Next step: Claim conversation next staffed hour | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-004",
+    "name": "Human Assistance Required",
+    "trigger": "human-required",
+    "next": "Review reason and own next step",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Human Assistance Required | Next step: Review reason and own next step | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-005",
+    "name": "AI Escalation",
+    "trigger": "ai-escalated",
+    "next": "Check unknown fact and callback",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: AI Escalation | Next step: Check unknown fact and callback | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-006",
+    "name": "Missed Appointment",
+    "trigger": "No-show",
+    "next": "Review recovery next business day",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Missed Appointment | Next step: Review recovery next business day | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-007",
+    "name": "Proposal Follow-Up Needed",
+    "trigger": "Proposal sequence ends/decision due",
+    "next": "Set next action",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Proposal Follow-Up Needed | Next step: Set next action | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-008",
+    "name": "New Review/Feedback Event",
+    "trigger": "Feedback/review native event",
+    "next": "Review service feedback; no rating filter",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: New Review/Feedback Event | Next step: Review service feedback | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-009",
+    "name": "Automation Error / Manual Check",
+    "trigger": "Manual review or verified error event",
+    "next": "Inspect logs; no blind retry",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: Automation Error / Manual Check | Next step: Inspect logs; no blind retry | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  },
+  {
+    "id": "ALERT-010",
+    "name": "High-Value Opportunity",
+    "trigger": "Rep flags above client-approved threshold",
+    "next": "Assign experienced rep; no invented universal threshold",
+    "channel": "In-app/task; email and SMS OFF",
+    "body": "Contact: [[CONTACT:Full Name]] | Event: High-Value Opportunity | Next step: Assign experienced rep | Open: [[CONTEXT:Contact URL]]",
+    "activation": "OFF"
+  }
+]

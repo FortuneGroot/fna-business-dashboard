@@ -1,0 +1,62 @@
+[
+  {
+    "id": "SNIP-01",
+    "title": "New inquiry ack",
+    "body": "Thanks for contacting Fortune & Automations. We have your request and will review it during business hours."
+  },
+  {
+    "id": "SNIP-02",
+    "title": "Ask for details",
+    "body": "Thanks \u2014 could you share a bit more about whether this is Automation, Websites, Branding, or Systems work?"
+  },
+  {
+    "id": "SNIP-03",
+    "title": "Booking offer",
+    "body": "If you would rather talk it through, you can choose a time on our calendar. A form request is not a reserved appointment."
+  },
+  {
+    "id": "SNIP-04",
+    "title": "After hours",
+    "body": "Thanks for writing. Our team reviews requests during business hours (US/Eastern). We will follow up using the contact method you provided."
+  },
+  {
+    "id": "SNIP-05",
+    "title": "Human handoff",
+    "body": "I will pass this to the Fortune & Automations team so a person can help with your question."
+  },
+  {
+    "id": "SNIP-06",
+    "title": "No pricing on chat",
+    "body": "Scope, pricing, and availability are confirmed by the team after we review your request. I do not quote a number here."
+  },
+  {
+    "id": "SNIP-07",
+    "title": "STOP received",
+    "body": "You are opted out of texts from Fortune & Automations. We will not send further marketing or service texts to this number."
+  },
+  {
+    "id": "SNIP-08",
+    "title": "Estimate follow-up",
+    "body": "Checking in on the estimate we sent. If you have questions about scope or next steps, reply here. Any price change will be confirmed by our team."
+  },
+  {
+    "id": "SNIP-09",
+    "title": "Thank you / won",
+    "body": "Thank you for choosing Fortune & Automations. Our team will confirm the next steps for your service."
+  },
+  {
+    "id": "SNIP-10",
+    "title": "Review invite",
+    "body": "If you would like to share an honest public review of your experience, I can send the review link. There is no pressure either way."
+  },
+  {
+    "id": "SNIP-11",
+    "title": "Emergency deflect",
+    "body": "If this is an emergency or someone is in danger, please contact local emergency services. Fortune & Automations cannot replace 911."
+  },
+  {
+    "id": "SNIP-12",
+    "title": "Existing customer support",
+    "body": "Thanks \u2014 I will treat this as a support request for an existing project rather than a new sales inquiry."
+  }
+]

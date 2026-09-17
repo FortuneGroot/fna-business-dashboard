@@ -1,0 +1,421 @@
+{
+  "count": 52,
+  "cases": [
+    {
+      "test_id": "RT-001",
+      "test": "Duplicate sends \u2014 form+chat same minute",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-002",
+      "test": "Duplicate sends \u2014 native calendar + WF 30.01",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-003",
+      "test": "Duplicate sends \u2014 reputation + WF 60.01",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-004",
+      "test": "Workflow loop \u2014 re-entry on tag add",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-005",
+      "test": "Recursive entry \u2014 pipeline stage change",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-006",
+      "test": "Wrong pipeline movement \u2014 skip to Won",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-007",
+      "test": "Wrong pipeline \u2014 regression from 05 to 01",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-008",
+      "test": "Bad re-entry \u2014 Allow Re-entry ON for sales cadence",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-009",
+      "test": "Missing rep assignment",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-010",
+      "test": "Wrong rep assignment \u2014 booking RR vs CRM owner",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-011",
+      "test": "Abandoned leads \u2014 no response path stuck",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-012",
+      "test": "Failed escalation / reassignment",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-013",
+      "test": "Appointment confirmation duplication",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-014",
+      "test": "Appointment reminder duplication",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-015",
+      "test": "Cancel failure \u2014 reminder not cancelled",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-016",
+      "test": "Reschedule failure \u2014 stale link",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-017",
+      "test": "No-show failure \u2014 recovery after Showed correction",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-018",
+      "test": "Won customer continuing nurture",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-019",
+      "test": "Lost lead wrong sequences",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-020",
+      "test": "Review request too early \u2014 consultation only",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-021",
+      "test": "STOP failure \u2014 SMS STOP keyword",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-022",
+      "test": "DND failure \u2014 channel-specific during wait",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-023",
+      "test": "Consent failure \u2014 unchecked form treated as opt-in",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-024",
+      "test": "Consent failure \u2014 AI invents opt-in",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-025",
+      "test": "Missed-call loops",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-026",
+      "test": "AI after human takeover",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-027",
+      "test": "AI fabrication \u2014 pricing/warranty",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-028",
+      "test": "AI appointment errors \u2014 book without tool verify",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-029",
+      "test": "Merge-field failures \u2014 semantic markers live",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-030",
+      "test": "Missing Custom Values",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-031",
+      "test": "Missing Custom Fields / options",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-032",
+      "test": "Missing IDs / picker keys",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-033",
+      "test": "Broken calendar mappings",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-034",
+      "test": "Duplicate contacts/opportunities \u2014 race",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-035",
+      "test": "Form validation failures",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-036",
+      "test": "Internal alerts becoming external",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-037",
+      "test": "Live messaging accidentally enabled",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-038",
+      "test": "Cross-client data leakage",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-039",
+      "test": "Snapshot dependency failures",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-040",
+      "test": "Clone-specific broken IDs",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-041",
+      "test": "Industry adapter conflicts",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-042",
+      "test": "Unresolved placeholders in customer path",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-043",
+      "test": "Pages activated too early",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-044",
+      "test": "Calendars activated too early",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-045",
+      "test": "Workflows activated too early",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-046",
+      "test": "Provider/phone/email connected too early",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-047",
+      "test": "WF 98 test recipes still Send actions",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-048",
+      "test": "Conversation AI auto-follow-up vs G7",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-049",
+      "test": "Voice AI circular transfer",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-050",
+      "test": "Cross-adapter + core intake double acknowledge",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-051",
+      "test": "Snapshot includes test contacts",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    },
+    {
+      "test_id": "RT-052",
+      "test": "example.invalid survives clean clone go-live attempt",
+      "current_status": "NOT_RUN",
+      "live_pass_allowed": false,
+      "evidence": "",
+      "note": "Do not mark PASS without live evidence. Copied from 2026-09-10 manifest as tracker only."
+    }
+  ]
+}

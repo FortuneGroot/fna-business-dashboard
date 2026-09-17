@@ -1,0 +1,86 @@
+[
+  {
+    "id": "SMS-001",
+    "text": "Thanks for contacting [[CV:Business Name]]. We received your request. What would you like help with? Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-002",
+    "text": "Hi, this is [[CV:Business Name]]. Sorry we missed your call. How can we help? Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-003",
+    "text": "Thanks for contacting [[CV:Business Name]]. [[CV:After Hours Message]] What can we help with? Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-004",
+    "text": "Hi, [[CV:Business Name]] here. Do you still need help with your request? You can reply here. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-005",
+    "text": "This is [[CV:Business Name]]. If you would like to talk through your request, choose a time here: [[CV:Booking URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-006",
+    "text": "Your appointment with [[CV:Business Name]] is booked for [[APPT:Start]] ([[APPT:Timezone]]). Details: [[APPT:Location]]. To change it: [[APPT:Reschedule URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-007",
+    "text": "A reminder from [[CV:Business Name]]: your appointment is [[APPT:Start]] ([[APPT:Timezone]]). Need another time? [[APPT:Reschedule URL]] Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-008",
+    "text": "Your appointment with [[CV:Business Name]] starts at [[APPT:Start]] ([[APPT:Timezone]]). Details: [[APPT:Location]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-009",
+    "text": "Your appointment with [[CV:Business Name]] has been moved to [[APPT:Start]] ([[APPT:Timezone]]). To make another change: [[APPT:Reschedule URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-010",
+    "text": "Your appointment with [[CV:Business Name]] for [[APPT:Start]] ([[APPT:Timezone]]) has been cancelled. You can book again here: [[CV:Booking URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-011",
+    "text": "Hi, [[CV:Business Name]] here. We were unable to connect at your appointment. If another time works better, you can book here: [[CV:Booking URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-012",
+    "text": "Hi, this is [[CV:Business Name]]. Do you have any questions about the estimate we sent? Reply here and our team can help. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-013",
+    "text": "Hi, [[CV:Business Name]] here. If your plans have changed and you would like help, you can reply or book a conversation: [[CV:Booking URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-014",
+    "text": "Hi, this is [[CV:Business Name]]. You previously asked us about our services. Is this still something you need help with? Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-015",
+    "text": "Thank you for choosing [[CV:Business Name]]. If you have a question about the next steps, reply here and our team will help. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-016",
+    "text": "Thank you for working with [[CV:Business Name]]. If you would like to share your experience, you can leave an honest review here: [[CV:Review URL]]. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-017",
+    "text": "I will pass this to the team at [[CV:Business Name]]. They can help with your question. [[CV:After Hours Message]] Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-018",
+    "text": "This is [[CV:Business Name]]. We will close this follow-up for now. If you need us later, just get in touch. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-019",
+    "text": "Hi, [[CV:Business Name]] here. We will pause our estimate follow-up now. If you have questions later, our team can help. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-020",
+    "text": "A quick reminder from [[CV:Business Name]]: if you want to share your experience, here is the review link: [[CV:Review URL]]. Thank you. Reply STOP to opt out."
+  },
+  {
+    "id": "SMS-021",
+    "text": "This is [[CV:Business Name]]. We will leave this with you. If you want help with your earlier request, reply here. Reply STOP to opt out."
+  }
+]

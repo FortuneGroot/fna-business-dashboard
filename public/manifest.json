@@ -1,0 +1,29 @@
+{
+  "name": "Fortune & Automations Business Dashboard",
+  "short_name": "F&A Dashboard",
+  "description": "Branded client shell for Fortune & Automations. Customer data and messaging are not connected yet.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#F3EFE9",
+  "theme_color": "#314258",
+  "icons": [
+    {
+      "src": "/icon-192.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

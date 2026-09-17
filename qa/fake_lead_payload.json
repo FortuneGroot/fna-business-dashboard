@@ -1,0 +1,11 @@
+{
+  "name": "QA Test Lead",
+  "email": "qa.lead@example.invalid",
+  "phone": "555-010-0199",
+  "service": "Automation",
+  "message": "Dry-run only. Do not create a real contact.",
+  "smsServiceConsent": false,
+  "smsMarketingConsent": false,
+  "source": "website-test",
+  "utm": { "utm_source": "qa", "utm_medium": "manual" }
+}

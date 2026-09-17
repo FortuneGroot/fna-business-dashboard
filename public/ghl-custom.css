@@ -1,0 +1,12 @@
+/* Paste into HighLevel Settings → Business Profile / Custom CSS for Fortune & Automations only.
+   Location kIXDnRuhkj6HLR1g6V6V. Never paste into Master NQwD3zdWCuBSVpOuzybj. */
+.login__button {
+  background-color: #17324F !important;
+  border-color: #C7A16A !important;
+}
+.login__logo img { max-height: 80px !important; }
+.hl_topHeader {
+  background: #10263B !important;
+  border-bottom: 1px solid rgba(199, 161, 106, 0.30) !important;
+}
+.hl_sidebar { background: #0A1827 !important; }
