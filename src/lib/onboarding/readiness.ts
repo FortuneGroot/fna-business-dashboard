@@ -312,6 +312,57 @@ export function evaluateClientReadiness(config: ClientConfig): ReadinessReport {
     )
   );
 
+  const stageEntries = Object.entries(config.ghl?.stageIds || {});
+  const stagesOk =
+    stageEntries.length > 0 &&
+    stageEntries.every(([, id]) => !isBlank(id) && !looksLikePlaceholder(id));
+  checks.push({
+    id: "stage_ids",
+    label: "Pipeline stage IDs mapped",
+    severity: "required",
+    passed: stagesOk,
+    status: stagesOk ? "pass" : stageEntries.length === 0 ? "blocked" : "partial",
+    detail: stagesOk
+      ? `${stageEntries.length} stage id(s) mapped`
+      : "ghl.stageIds missing or contains placeholders",
+    missingField: stagesOk ? undefined : "ghl.stageIds",
+  });
+
+  const calendarEntries = Object.entries(config.ghl?.calendarIds || {});
+  const calendarsMapOk =
+    calendarEntries.length > 0 &&
+    calendarEntries.every(([, id]) => !isBlank(id) && !looksLikePlaceholder(id));
+  checks.push({
+    id: "calendar_ids_map",
+    label: "Calendar IDs mapped",
+    severity: "required",
+    passed: calendarsMapOk,
+    status: calendarsMapOk ? "pass" : "blocked",
+    detail: calendarsMapOk
+      ? `${calendarEntries.length} calendar id(s) mapped`
+      : "ghl.calendarIds missing or contains placeholders",
+    missingField: calendarsMapOk ? undefined : "ghl.calendarIds",
+  });
+
+  const forbidden = config.forbiddenDependencies || {};
+  const planOk =
+    config.highlevelPlan === "$297 Unlimited" &&
+    !forbidden.requiresAgencyPro497 &&
+    !forbidden.requiresAdvancedOAuth &&
+    !forbidden.requiresAgencyCrmApi &&
+    !forbidden.requiresWhiteLabelMobileAddon;
+  checks.push({
+    id: "plan_297_only",
+    label: "$297 plan compatibility (no $497/OAuth/Advanced API)",
+    severity: "required",
+    passed: planOk,
+    status: planOk ? "pass" : "blocked",
+    detail: planOk
+      ? "Config stays on $297 Unlimited without forbidden dependencies"
+      : "Config introduces $497 / OAuth / agency CRM API / WL mobile addon dependency",
+    missingField: planOk ? undefined : "forbiddenDependencies",
+  });
+
   const passed = checks.filter((c) => c.status === "pass").length;
   const partial = checks.filter((c) => c.status === "partial").length;
   const blocked = checks.filter((c) => c.status === "blocked").length;
@@ -392,7 +443,9 @@ export function emptyClientConfig(): ClientConfig {
       locationId: "",
       pipelineId: "",
       pipelineName: "",
+      stageIds: {},
       bookingCalendarId: "",
+      calendarIds: {},
       bookingUrl: "",
       rescheduleUrl: "",
       reviewUrl: "",

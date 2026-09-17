@@ -23,7 +23,11 @@ export type ClientGhlConfig = {
   locationId: string;
   pipelineId: string;
   pipelineName: string;
+  /** Stage name → HighLevel stage ID (client-specific after clone) */
+  stageIds: Record<string, string>;
   bookingCalendarId: string;
+  /** Calendar label → HighLevel calendar ID */
+  calendarIds: Record<string, string>;
   bookingUrl: string;
   rescheduleUrl: string;
   reviewUrl: string;
@@ -89,6 +93,16 @@ export type ClientConfig = {
   sync: ClientSyncConfig;
   payments: ClientPaymentsConfig;
   safety?: ClientSafetyConfig;
+  /**
+   * Anti-patterns that accidentally require $497 / OAuth / Advanced API.
+   * Any true flag blocks readiness.
+   */
+  forbiddenDependencies?: {
+    requiresAgencyPro497?: boolean;
+    requiresAdvancedOAuth?: boolean;
+    requiresAgencyCrmApi?: boolean;
+    requiresWhiteLabelMobileAddon?: boolean;
+  };
   /**
    * Optional remap notes. Never put live secrets here.
    * webhookSecretConfigured is the only secret-related flag allowed in readiness output.

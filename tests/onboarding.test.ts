@@ -40,7 +40,16 @@ function goodConfig(over: Partial<ClientConfig> = {}): ClientConfig {
       locationId: "loc_client_abc123",
       pipelineId: "pipe_client_abc123",
       pipelineName: "Acme Sales Pipeline",
+      stageIds: {
+        "New Lead": "stage_new",
+        "Won": "stage_won",
+        "Lost": "stage_lost",
+      },
       bookingCalendarId: "cal_client_abc123",
+      calendarIds: {
+        primaryBooking: "cal_client_abc123",
+        "Discovery Call": "cal_client_abc123",
+      },
       bookingUrl: "https://book.acme-services.test/discovery",
       rescheduleUrl: "https://book.acme-services.test/reschedule",
       reviewUrl: "https://g.page/r/acme-services-test",
@@ -156,6 +165,31 @@ describe("evaluateClientReadiness", () => {
     );
     assert.equal(report.status, "BLOCKED");
     assert.ok(report.missingFields.includes("ghl.assignedUserIds"));
+  });
+
+  it("$497 dependency flag -> BLOCKED", () => {
+    const report = evaluateClientReadiness(
+      goodConfig({
+        forbiddenDependencies: {
+          requiresAgencyPro497: true,
+          requiresAdvancedOAuth: false,
+          requiresAgencyCrmApi: false,
+          requiresWhiteLabelMobileAddon: false,
+        },
+      })
+    );
+    assert.equal(report.status, "BLOCKED");
+    assert.ok(report.missingFields.includes("forbiddenDependencies"));
+  });
+
+  it("missing stageIds -> BLOCKED", () => {
+    const report = evaluateClientReadiness(
+      goodConfig({
+        ghl: { ...goodConfig().ghl, stageIds: {} },
+      })
+    );
+    assert.equal(report.status, "BLOCKED");
+    assert.ok(report.missingFields.includes("ghl.stageIds"));
   });
 
   it("synthetic email -> PARTIAL (not READY)", () => {

@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "description": "Clone remap manifest template — replace every REPLACE_ME / PLACEHOLDER before go-live. No live secrets. HighLevel plan: $297 Unlimited.",
+  "description": "Clone remap manifest template — replace every REPLACE_ME before go-live. No live secrets. HighLevel plan: $297 Unlimited.",
   "highlevelPlan": "$297 Unlimited",
   "notDependentOn": [
     "$497 Agency Pro",
@@ -9,7 +9,11 @@
     "white-label native mobile app add-on"
   ],
   "sourceReference": {
-    "note": "Source snapshot may originate from F&A LIVE patterns — never copy the protected Master location into a client.",
+    "note": "Source snapshot may follow F&A LIVE patterns. Never copy the protected Master into a client.",
+    "documentedLiveExampleOnly": {
+      "label": "F&A LIVE (reference only — not a client)",
+      "locationId": "kIXDnRuhkj6HLR1g6V6V"
+    },
     "forbiddenMasterLocationId": "NQwD3zdWCuBSVpOuzybj",
     "forbiddenMasterName": "F&A MASTER CORE - DO NOT USE LIVE - v1.0"
   },
@@ -32,8 +36,12 @@
       "Long-Term Nurture": "REPLACE_ME_STAGE_ID"
     },
     "calendarIds": {
+      "primaryBooking": "REPLACE_ME_CALENDAR_ID",
       "Discovery Call": "REPLACE_ME_CALENDAR_ID",
-      "primaryBooking": "REPLACE_ME_CALENDAR_ID"
+      "Website Consultation": "REPLACE_ME_CALENDAR_ID",
+      "Business Consultation": "REPLACE_ME_CALENDAR_ID",
+      "Client / Project Meeting": "REPLACE_ME_CALENDAR_ID",
+      "Core Booking": "REPLACE_ME_CALENDAR_ID"
     },
     "users": {
       "owner": "REPLACE_ME_USER_ID",
@@ -44,16 +52,27 @@
     "phone": "REPLACE_ME_PHONE",
     "businessName": "REPLACE_ME_BUSINESS_NAME",
     "legalBusinessName": "REPLACE_ME_LEGAL_BUSINESS_NAME",
+    "industry": "REPLACE_ME_INDUSTRY",
+    "websiteUrl": "https://REPLACE_ME/",
     "address": "REPLACE_ME_ADDRESS",
     "city": "REPLACE_ME_CITY",
     "state": "REPLACE_ME_STATE",
     "zip": "REPLACE_ME_ZIP",
+    "timezone": "US/Eastern",
     "bookingUrl": "https://REPLACE_ME/booking",
     "rescheduleUrl": "https://REPLACE_ME/reschedule",
     "reviewUrl": "https://REPLACE_ME/review",
     "logoUrl": "https://REPLACE_ME/logo.png",
+    "domain": "REPLACE_ME_DOMAIN",
     "webhookDestination": "https://REPLACE_ME/api/webhooks/ghl",
     "webhookSecret": "REPLACE_ME_WEBHOOK_SECRET_DO_NOT_COMMIT",
+    "channels": {
+      "smsEnabled": false,
+      "emailEnabled": false,
+      "voiceEnabled": false,
+      "reviewEnabled": true,
+      "calendarEnabled": true
+    },
     "branding": {
       "primaryColor": "REPLACE_ME_HEX",
       "secondaryColor": "REPLACE_ME_HEX",
@@ -62,9 +81,15 @@
       "favicon": "https://REPLACE_ME/favicon.ico"
     },
     "aiBusinessContext": {
+      "conversationAiEnabled": false,
+      "voiceAiEnabled": false,
       "aiBusinessName": "REPLACE_ME_AI_BUSINESS_NAME",
       "aiGreeting": "REPLACE_ME_AI_GREETING",
       "aiEscalationTarget": "REPLACE_ME_USER_OR_EMAIL"
+    },
+    "payments": {
+      "stripeConnected": false,
+      "paymentsEnabled": false
     }
   }
 }

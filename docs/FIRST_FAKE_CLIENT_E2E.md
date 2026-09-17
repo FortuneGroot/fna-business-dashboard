@@ -2,6 +2,7 @@
 
 **Purpose:** First synthetic clone / end-to-end proof after Grok finishes workflow wiring.  
 **Client config:** `config/examples/fake-roofing-client.json`  
+**Remap:** copy `config/client-remap.template.json` → client-specific remap file  
 **Plan:** HighLevel **$297 Unlimited** only — no OAuth / $497 features.
 
 **Rules:**
@@ -10,72 +11,68 @@
 - Never use Master `NQwD3zdWCuBSVpOuzybj`.
 - Keep `GHL_DRY_RUN=true`, `ALLOW_PRODUCTION_CONTACT_WRITES=false`, `FAKE_CONTACT_ONLY=true` during this run.
 - Do not attach `app.fortuneandautomations.com` or touch Production for this test.
+- Do not modify GHL workflows while Grok owns that lane — only configure webhook destinations/secrets after actions exist.
 
 ---
 
-## Exact order
+## Exact operational order
 
-### 1. Create fake client location
-Create a new HighLevel sub-account named **F&A Roofing Test** (or similar). Record `locationId` into the client config / remap manifest.
+### 1. Create GHL sub-account
+Create sub-account **F&A Roofing Test**. Record `locationId` into fake client JSON + remap. Confirm ≠ Master.
 
 ### 2. Apply snapshot / clone
-Apply the approved Snapshot / clone package into this sub-account only. Confirm you did **not** target the protected Master.
+Apply approved Snapshot into this sub-account only.
 
 ### 3. Remap values
-Fill `config/client-remap.template.json` → client-specific file:
-- location, pipeline, stages, calendars, users
-- support / lead emails (synthetic)
-- phone, address/ZIP
-- booking / reschedule / review / logo URLs
-- webhook destination
-- branding + AI business context  
-Run Custom Value replacements in GHL to match.
+Fill location, pipeline, **stageIds**, **calendarIds**, users, synthetic emails, phone, URLs, branding, AI context. Update GHL Custom Values to match.
 
 ### 4. Verify pipeline
-Confirm Fortune-style Sales Pipeline (or client-named copy) exists with expected stage **names**. Save `pipelineId`.
+Confirm pipeline + stage names; save `pipelineId` and each stage ID.
 
 ### 5. Verify calendars
-Confirm at least one bookable calendar; save `bookingCalendarId` and HTTPS booking/reschedule URLs (placeholders OK only until gate — must be real HTTPS before READY).
+Confirm bookable calendar(s); save `bookingCalendarId`, `calendarIds`, booking/reschedule HTTPS links (may still be REPLACE_ME until links exist).
 
 ### 6. Verify workflow Draft state
-Confirm workflows are present and remain **Draft / unpublished** for send actions until QA. Do not enable live customer sends.
+Workflows present; send actions remain Draft/unpublished. No live customer sends.
 
 ### 7. Configure signed sync
-- Set Preview `GHL_WEBHOOK_SECRET`
-- Point workflow Custom Webhooks at Preview `/api/webhooks/ghl`
-- Ensure Supabase URL + service role set if durable store required
-- Set `sync.webhookSecretConfigured=true` and destination URL in client JSON  
-Confirm `GET /api/sync/health` (`storageMode`, secret flags) and Master rejection still hold.
+- Preview `GHL_WEBHOOK_SECRET`
+- Custom Webhooks → Preview `/api/webhooks/ghl`
+- Supabase Preview env if durable required
+- Set `webhookDestination` + `webhookSecretConfigured=true` in config  
+Confirm `/api/sync/health` and Master rejection.
 
 ### 8. Submit fake lead
-Submit a fake lead (form or manual enroll) with synthetic identity only.
+Synthetic identity only (`@example.invalid`).
 
 ### 9. Verify GHL contact
-Contact exists in **F&A Roofing Test** location only — not Master, not F&A live unless intentionally using live as donor (prefer separate fake location).
+Contact in **F&A Roofing Test** location only.
 
 ### 10. Verify pipeline movement
-Opportunity created / stage moves per intake + follow-up design (even if Draft for messaging).
+Opportunity created / stage moves per intake design.
 
 ### 11. Verify appointment
-Book a test appointment on the fake calendar; confirm appointment record in GHL.
+Book test appointment on fake calendar.
 
 ### 12. Verify dashboard sync
-Confirm webhook events ingested; `/api/dashboard/summary` no longer empty; contacts/opportunities/appointments reflect sync (not CRM list APIs).
+Webhook ingest → `/api/dashboard/summary` and entity routes populate (not CRM list APIs).
 
 ### 13. Verify duplicate protection
-Re-send the same webhook / re-trigger with same idempotency key — dashboard must not double-apply.
+Same idempotency key → no double-apply.
 
 ### 14. Verify review path
-Fire review-requested path in Draft/test mode; confirm `review.*` sync event or task without public review spam.
+`review.requested` (or equivalent) sync without public spam.
 
 ### 15. Run QA
-- `npm run check:readiness -- config/examples/fake-roofing-client.json` (expect PARTIAL/BLOCKED until placeholders cleared)
-- Sync health + Agency PIT health still OK
-- No real SMS/email delivered to humans
+```bash
+npm run check:readiness -- config/examples/fake-roofing-client.json
+curl -s localhost:3000/api/onboarding/readiness
+```
+Expect **BLOCKED** or **PARTIAL** until REPLACE_ME IDs / synthetic emails cleared. Sync health PASS. No real SMS/email to humans.
 
 ### 16. GO / NO-GO
-- **GO** only if `docs/CLIENT_GO_LIVE_GATE.md` would pass for a **real** client after replacing synthetic fields.  
-- For this fake run: **NO-GO for production**, **GO for “clone path proven”** when sync + pipeline + appointment + duplicate checks pass with Draft messaging.
+- **GO (clone path proven):** fake lead + pipeline + appointment + signed webhook + dashboard + idempotency with Draft messaging.
+- **NO-GO (production / real client):** until `docs/CLIENT_GO_LIVE_GATE.md` PASS with non-synthetic values.
 
 ---
 

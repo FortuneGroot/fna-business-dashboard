@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ClientConfig } from "./types";
+import type { ClientConfig, ClientGhlConfig } from "./types";
 import { emptyClientConfig } from "./readiness";
 
 export function parseClientConfig(raw: unknown): ClientConfig {
@@ -15,13 +15,24 @@ export function parseClientConfig(raw: unknown): ClientConfig {
     schemaVersion: "1.0",
     highlevelPlan: "$297 Unlimited",
     business: { ...base.business, ...(incoming.business || {}) },
-    ghl: { ...base.ghl, ...(incoming.ghl || {}) },
+    ghl: {
+      ...base.ghl,
+      ...(incoming.ghl || {}),
+      stageIds: { ...(base.ghl.stageIds || {}), ...((incoming.ghl as ClientGhlConfig | undefined)?.stageIds || {}) },
+      calendarIds: {
+        ...(base.ghl.calendarIds || {}),
+        ...((incoming.ghl as ClientGhlConfig | undefined)?.calendarIds || {}),
+      },
+    },
     branding: { ...base.branding, ...(incoming.branding || {}) },
     channels: { ...base.channels, ...(incoming.channels || {}) },
     ai: { ...base.ai, ...(incoming.ai || {}) },
     sync: { ...base.sync, ...(incoming.sync || {}) },
     payments: { ...base.payments, ...(incoming.payments || {}) },
     safety: { ...base.safety, ...(incoming.safety || {}) },
+    forbiddenDependencies: {
+      ...(incoming.forbiddenDependencies || {}),
+    },
   };
 }
 
