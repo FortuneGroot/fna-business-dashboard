@@ -53,7 +53,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid credentials" }, { status: 401 });
   }
 
-  const token = await createSessionToken(user, getAuthSecret());
+  let token: string;
+  try {
+    token = await createSessionToken(user, getAuthSecret());
+  } catch {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Unable to create a durable login session. Try again or contact support.",
+      },
+      { status: 503 }
+    );
+  }
+
   const res = NextResponse.json({
     ok: true,
     user: { email: user.email, role: user.role, name: user.name },

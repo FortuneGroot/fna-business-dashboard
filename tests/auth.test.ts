@@ -55,6 +55,9 @@ describe("auth sessions", () => {
       "AUTH_ADMIN_PASSWORD",
       "VERCEL_ENV",
       "AUTH_FAIL_CLOSED",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "AUTH_ALLOW_MEMORY_SESSIONS",
     ]) {
       prev[k] = process.env[k];
     }
@@ -67,6 +70,9 @@ describe("auth sessions", () => {
     process.env.AUTH_ADMIN_PASSWORD = "admin-pass";
     delete process.env.VERCEL_ENV;
     delete process.env.AUTH_FAIL_CLOSED;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.AUTH_ALLOW_MEMORY_SESSIONS;
   });
 
   afterEach(() => {
@@ -115,14 +121,24 @@ describe("auth sessions", () => {
 
   it("edge session-store check rejects revoked sessions", async () => {
     const originalFetch = globalThis.fetch;
+    const sid = "ab".repeat(24);
     globalThis.fetch = async () =>
-      new Response(JSON.stringify([{ id: "sid", expires_at: new Date(Date.now() + 60_000).toISOString(), revoked: true }]), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      new Response(
+        JSON.stringify([
+          {
+            id: sid,
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+            revoked: true,
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      );
     try {
       assert.equal(
-        await isStoredSessionActiveEdge("sid", undefined, {
+        await isStoredSessionActiveEdge(sid, undefined, {
           SUPABASE_URL: "https://db.example.invalid",
           SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
         }),
@@ -135,9 +151,118 @@ describe("auth sessions", () => {
 
   it("edge session-store check fails closed in production without store", async () => {
     assert.equal(
-      await isStoredSessionActiveEdge("sid", undefined, { VERCEL_ENV: "production" }),
+      await isStoredSessionActiveEdge("ab".repeat(24), undefined, { VERCEL_ENV: "production" }),
       false
     );
+  });
+
+  it("edge session-store check fails closed on Preview without store credentials", async () => {
+    assert.equal(
+      await isStoredSessionActiveEdge("a".repeat(48), undefined, { VERCEL_ENV: "preview" }),
+      false
+    );
+  });
+
+  it("durable-store write failure prevents cookie issuance", async () => {
+    const originalFetch = globalThis.fetch;
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ message: "forced failure" }), { status: 500 });
+    try {
+      const user = authenticateCredentials("owner@example.invalid", "owner-pass")!;
+      await assert.rejects(() => createSessionToken(user, SECRET), /Durable session write failed/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
+  });
+
+  it("newly created durable session is accepted across independent runtime instances", async () => {
+    const originalFetch = globalThis.fetch;
+    const durable = new Map<
+      string,
+      { id: string; email: string; role: string; name: string; created_at: string; expires_at: string; revoked: boolean }
+    >();
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/rest/v1/auth_sessions") && init?.method === "POST") {
+        const row = JSON.parse(String(init.body || "{}")) as {
+          id: string;
+          email: string;
+          role: string;
+          name: string;
+          created_at: string;
+          expires_at: string;
+          revoked: boolean;
+        };
+        durable.set(row.id, row);
+        return new Response(JSON.stringify([row]), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/rest/v1/auth_sessions?") && (!init?.method || init.method === "GET")) {
+        const idMatch = url.match(/id=eq\.([^&]+)/);
+        const id = idMatch ? decodeURIComponent(idMatch[1]) : "";
+        const row = durable.get(id);
+        return new Response(JSON.stringify(row ? [row] : []), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/rest/v1/auth_sessions") && init?.method === "PATCH") {
+        const idMatch = url.match(/id=eq\.([^&]+)/);
+        const id = idMatch ? decodeURIComponent(idMatch[1]) : "";
+        const row = durable.get(id);
+        if (row) {
+          row.revoked = true;
+          durable.set(id, row);
+        }
+        return new Response(null, { status: 204 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
+    // Simulate instance A with empty memory after login on instance B.
+    resetAuthSessionsForTests();
+    try {
+      const user = authenticateCredentials("owner@example.invalid", "owner-pass")!;
+      const token = await createSessionToken(user, SECRET);
+      resetAuthSessionsForTests(); // wipe instance-local memory
+      const edge = await verifySessionTokenEdge(token, SECRET);
+      assert.ok(edge);
+      assert.equal(
+        await isStoredSessionActiveEdge(edge!.sid, undefined, {
+          SUPABASE_URL: "https://db.example.invalid",
+          SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
+        }),
+        true
+      );
+      const session = await verifySessionToken(token, SECRET);
+      assert.ok(session);
+      assert.equal(session!.email, "owner@example.invalid");
+
+      await revokeSessionToken(token, SECRET);
+      resetAuthSessionsForTests();
+      assert.equal(await verifySessionToken(token, SECRET), null);
+      assert.equal(
+        await isStoredSessionActiveEdge(edge!.sid, undefined, {
+          SUPABASE_URL: "https://db.example.invalid",
+          SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
+        }),
+        false
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      resetAuthSessionsForTests();
+    }
   });
 
   it("logout revokes session — replay denied", async () => {

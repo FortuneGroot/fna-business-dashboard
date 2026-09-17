@@ -19,5 +19,7 @@ export {
   getStoredSession,
   revokeStoredSession,
   resetAuthSessionsForTests,
+  allowMemorySessionFallback,
+  createSessionId,
 } from "./session-store";
 export { requireApiSession, requirePageSession } from "./guards";

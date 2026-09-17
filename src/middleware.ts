@@ -20,7 +20,7 @@ const PUBLIC_EXACT = new Set([
   "/api/leads",
 ]);
 
-const PUBLIC_PREFIXES = ["/api/auth/"];
+const PUBLIC_PREFIXES: string[] = [];
 
 const PROTECTED_PAGE_PREFIXES = [
   "/dashboard",
