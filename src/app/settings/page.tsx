@@ -61,8 +61,8 @@ export default function SettingsPage() {
             {health?.ghl?.error ? <span className="muted"> — {health.ghl.error}</span> : null}
           </p>
           <p className="muted">
-            Status reflects a live health check. Contacts, calendars, and pipeline data will not sync
-            until this shows Connected.
+            Agency PIT health proves authentication and live location only. Dashboard lists populate
+            from HighLevel workflow webhooks (/api/webhooks/ghl). See /api/sync/health for sync counts.
           </p>
         </Card>
       </div>

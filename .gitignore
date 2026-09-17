@@ -35,3 +35,9 @@ Thumbs.db
 qa/output/
 .turbo/
 .cache/
+
+# local-only GHL probe (do not commit)
+probe-ghl.mjs
+
+# local sync persistence (if enabled later)
+.data/
