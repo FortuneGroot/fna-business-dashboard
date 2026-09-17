@@ -5,10 +5,13 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const store = getSyncStore();
+  const conversations = await store.listConversationEvents(100);
+  const summary = await store.summary();
   return NextResponse.json({
     ok: true,
     source: "sync-store",
-    conversations: store.listConversationEvents(100).map((c) => ({
+    storageMode: store.storageMode,
+    conversations: conversations.map((c) => ({
       id: c.id,
       contactId: c.contactId || "—",
       direction: c.direction || "unknown",
@@ -17,6 +20,6 @@ export async function GET() {
       timestamp: c.timestamp,
       summary: c.summary || "—",
     })),
-    waitingForSync: store.summary().waitingForSync,
+    waitingForSync: summary.waitingForSync,
   });
 }

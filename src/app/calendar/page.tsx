@@ -14,8 +14,8 @@ const CALENDARS = [
   { name: "Core Booking", duration: "1 hr" },
 ];
 
-export default function CalendarPage() {
-  const appointments = getSyncStore().listAppointments();
+export default async function CalendarPage() {
+  const appointments = await getSyncStore().listAppointments();
   const waiting = appointments.length === 0;
 
   return (

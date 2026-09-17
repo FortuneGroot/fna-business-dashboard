@@ -22,8 +22,8 @@ const STAGES = [
   "Long-Term Nurture",
 ];
 
-export default function PipelinePage() {
-  const opps = getSyncStore().listOpportunities();
+export default async function PipelinePage() {
+  const opps = await getSyncStore().listOpportunities();
   const waiting = opps.length === 0;
 
   const byStage = (stage: string) =>

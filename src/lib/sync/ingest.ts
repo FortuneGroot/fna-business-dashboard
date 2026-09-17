@@ -2,7 +2,7 @@ import { createHash, randomUUID, timingSafeEqual as nodeTimingSafeEqual } from "
 import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
 import { normalizeEventName } from "./events";
-import { getSyncStore } from "./memory-store";
+import { getSyncStore } from "./factory";
 import type { SyncStore } from "./store";
 import type { InboundSyncPayload, SyncEventType } from "./types";
 
@@ -144,11 +144,11 @@ export function verifyWebhookSecret(opts: {
   return { ok: true };
 }
 
-export function ingestSyncPayload(
+export async function ingestSyncPayload(
   rawBody: string,
   payloadUnknown: unknown,
   opts?: { store?: SyncStore; now?: string }
-): IngestResult {
+): Promise<IngestResult> {
   const env = loadEnv();
   const store = opts?.store || getSyncStore();
   const now = opts?.now || new Date().toISOString();
@@ -196,7 +196,7 @@ export function ingestSyncPayload(
   }
 
   const idempotencyKey = computeIdempotencyKey(payload, eventType, rawBody);
-  if (store.hasIdempotencyKey(idempotencyKey)) {
+  if (await store.hasIdempotencyKey(idempotencyKey)) {
     return {
       ok: true,
       accepted: true,
@@ -251,7 +251,7 @@ export function ingestSyncPayload(
     const firstName = str(payload.firstName, contactObj?.firstName, contactObj?.first_name);
     const lastName = str(payload.lastName, contactObj?.lastName, contactObj?.last_name);
     const name = str(payload.name, contactObj?.name, contactObj?.displayName);
-    store.upsertContact({
+    await store.upsertContact({
       externalContactId: contactId,
       firstName,
       lastName,
@@ -291,7 +291,7 @@ export function ingestSyncPayload(
       status = status || "lost";
       stageName = stageName || "Lost";
     }
-    store.upsertOpportunity({
+    await store.upsertOpportunity({
       externalOpportunityId: opportunityId,
       contactId,
       pipelineId: str(
@@ -327,7 +327,7 @@ export function ingestSyncPayload(
     if (eventType === "appointment.cancelled") status = status || "cancelled";
     if (eventType === "appointment.no_show") status = status || "no_show";
     if (eventType === "appointment.completed") status = status || "completed";
-    store.upsertAppointment({
+    await store.upsertAppointment({
       externalAppointmentId: appointmentId,
       contactId,
       calendarId: str(
@@ -364,7 +364,7 @@ export function ingestSyncPayload(
           : eventType === "conversation.outbound"
             ? "outbound"
             : "unknown";
-    store.appendConversationEvent({
+    await store.appendConversationEvent({
       id: randomUUID(),
       contactId,
       direction,
@@ -381,7 +381,7 @@ export function ingestSyncPayload(
   }
 
   if (eventType.startsWith("task.")) {
-    store.appendTaskEvent({
+    await store.appendTaskEvent({
       id: randomUUID(),
       contactId,
       opportunityId,
@@ -395,7 +395,7 @@ export function ingestSyncPayload(
   }
 
   if (eventType.startsWith("review.")) {
-    store.appendReviewEvent({
+    await store.appendReviewEvent({
       id: randomUUID(),
       contactId,
       kind: eventType === "review.requested" ? "review-requested" : "feedback-received",
@@ -404,8 +404,8 @@ export function ingestSyncPayload(
     });
   }
 
-  store.rememberIdempotencyKey(idempotencyKey);
-  store.appendAudit({
+  await store.rememberIdempotencyKey(idempotencyKey);
+  await store.appendAudit({
     id: randomUUID(),
     idempotencyKey,
     eventType,

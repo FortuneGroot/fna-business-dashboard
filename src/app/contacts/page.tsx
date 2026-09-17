@@ -6,8 +6,8 @@ import { getSyncStore } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 
-export default function ContactsPage() {
-  const contacts = getSyncStore().listContacts();
+export default async function ContactsPage() {
+  const contacts = await getSyncStore().listContacts();
   const waiting = contacts.length === 0;
 
   const rows = contacts.map((c) => [

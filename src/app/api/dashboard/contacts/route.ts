@@ -5,10 +5,13 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const store = getSyncStore();
+  const contacts = await store.listContacts();
+  const summary = await store.summary();
   return NextResponse.json({
     ok: true,
     source: "sync-store",
-    contacts: store.listContacts().map((c) => ({
+    storageMode: store.storageMode,
+    contacts: contacts.map((c) => ({
       id: c.externalContactId,
       displayName: c.displayName || [c.firstName, c.lastName].filter(Boolean).join(" ") || "—",
       email: c.email ? "[redacted]" : undefined,
@@ -20,6 +23,6 @@ export async function GET() {
       assignedUser: c.assignedUser || "—",
       updatedAt: c.updatedAt,
     })),
-    waitingForSync: store.summary().waitingForSync,
+    waitingForSync: summary.waitingForSync,
   });
 }

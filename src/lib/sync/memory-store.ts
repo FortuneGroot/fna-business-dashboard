@@ -28,9 +28,7 @@ function definedOnly<T extends Record<string, unknown>>(obj: T): Partial<T> {
 }
 
 export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
-  const state: SyncSnapshot = seed
-    ? structuredClone(seed)
-    : emptySnapshot();
+  const state: SyncSnapshot = seed ? structuredClone(seed) : emptySnapshot();
 
   const touch = (iso?: string) => {
     const ts = iso || new Date().toISOString();
@@ -39,16 +37,18 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
   };
 
   return {
-    hasIdempotencyKey(key: string) {
+    storageMode: "memory",
+
+    async hasIdempotencyKey(key: string) {
       return state.idempotencyKeys.includes(key);
     },
-    rememberIdempotencyKey(key: string) {
+    async rememberIdempotencyKey(key: string) {
       if (!state.idempotencyKeys.includes(key)) {
         state.idempotencyKeys.unshift(key);
         if (state.idempotencyKeys.length > IDEMP_MAX) state.idempotencyKeys.pop();
       }
     },
-    upsertContact(record) {
+    async upsertContact(record) {
       const prev = state.contacts[record.externalContactId];
       const patch = definedOnly(record as unknown as Record<string, unknown>);
       const next: ContactRecord = {
@@ -62,7 +62,7 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
       touch(next.updatedAt);
       return next;
     },
-    upsertOpportunity(record) {
+    async upsertOpportunity(record) {
       const prev = state.opportunities[record.externalOpportunityId];
       const patch = definedOnly(record as unknown as Record<string, unknown>);
       const next: OpportunityRecord = {
@@ -75,7 +75,7 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
       touch(next.updatedAt);
       return next;
     },
-    upsertAppointment(record) {
+    async upsertAppointment(record) {
       const prev = state.appointments[record.externalAppointmentId];
       const patch = definedOnly(record as unknown as Record<string, unknown>);
       const next: AppointmentRecord = {
@@ -88,60 +88,60 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
       touch(next.updatedAt);
       return next;
     },
-    appendConversationEvent(record) {
+    async appendConversationEvent(record: ConversationEventRecord) {
       state.conversationEvents.unshift(record);
       if (state.conversationEvents.length > CONVO_MAX) state.conversationEvents.pop();
       touch(record.timestamp);
     },
-    appendTaskEvent(record) {
+    async appendTaskEvent(record: TaskEventRecord) {
       state.taskEvents.unshift(record);
       if (state.taskEvents.length > CONVO_MAX) state.taskEvents.pop();
       touch(record.timestamp);
     },
-    appendReviewEvent(record) {
+    async appendReviewEvent(record: ReviewEventRecord) {
       state.reviewEvents.unshift(record);
       if (state.reviewEvents.length > CONVO_MAX) state.reviewEvents.pop();
       touch(record.timestamp);
     },
-    appendAudit(record) {
+    async appendAudit(record: AuditEventRecord) {
       state.auditTrail.unshift(record);
       if (state.auditTrail.length > AUDIT_MAX) state.auditTrail.pop();
       touch(record.receivedAt);
     },
-    listContacts() {
+    async listContacts() {
       return Object.values(state.contacts).sort((a, b) =>
         (b.updatedAt || "").localeCompare(a.updatedAt || "")
       );
     },
-    listOpportunities() {
+    async listOpportunities() {
       return Object.values(state.opportunities).sort((a, b) =>
         (b.updatedAt || "").localeCompare(a.updatedAt || "")
       );
     },
-    listAppointments() {
+    async listAppointments() {
       return Object.values(state.appointments).sort((a, b) =>
         (b.start || b.updatedAt || "").localeCompare(a.start || a.updatedAt || "")
       );
     },
-    listConversationEvents(limit = 100) {
+    async listConversationEvents(limit = 100) {
       return state.conversationEvents.slice(0, limit);
     },
-    listAuditEvents(limit = 100) {
+    async listAuditEvents(limit = 100) {
       return state.auditTrail.slice(0, limit);
     },
-    getContact(id) {
+    async getContact(id) {
       return state.contacts[id];
     },
-    getOpportunity(id) {
+    async getOpportunity(id) {
       return state.opportunities[id];
     },
-    getAppointment(id) {
+    async getAppointment(id) {
       return state.appointments[id];
     },
-    summary() {
+    async summary() {
       return summaryFromSnapshot(state);
     },
-    stats(): SyncStoreStats {
+    async stats(): Promise<SyncStoreStats> {
       return {
         contactsSynced: Object.keys(state.contacts).length,
         opportunitiesSynced: Object.keys(state.opportunities).length,
@@ -153,10 +153,10 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
         lastEventAt: state.lastEventAt,
       };
     },
-    snapshot() {
+    async snapshot() {
       return structuredClone(state);
     },
-    clear() {
+    async clear() {
       const empty = emptySnapshot();
       Object.assign(state, empty);
       state.contacts = {};
@@ -170,20 +170,4 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
       delete state.lastEventAt;
     },
   };
-}
-
-const GLOBAL_KEY = "__fna_sync_store__";
-
-type GlobalStore = typeof globalThis & { [GLOBAL_KEY]?: SyncStore };
-
-export function getSyncStore(): SyncStore {
-  const g = globalThis as GlobalStore;
-  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = createMemoryStore();
-  return g[GLOBAL_KEY]!;
-}
-
-export function resetSyncStoreForTests(store?: SyncStore): SyncStore {
-  const g = globalThis as GlobalStore;
-  g[GLOBAL_KEY] = store ?? createMemoryStore();
-  return g[GLOBAL_KEY]!;
 }

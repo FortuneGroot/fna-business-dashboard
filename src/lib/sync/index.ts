@@ -1,6 +1,22 @@
-export type { SyncStore, SyncStoreStats } from "./store";
+export type { SyncStore, SyncStoreStats, StorageMode } from "./store";
 export { emptySnapshot, summaryFromSnapshot } from "./store";
-export { createMemoryStore, getSyncStore, resetSyncStoreForTests } from "./memory-store";
+export { createMemoryStore } from "./memory-store";
+export {
+  createSyncStore,
+  getSyncStore,
+  getStorageMode,
+  isDatabaseConfigured,
+  rebindSyncStoreFromEnv,
+  resetSyncStoreForTests,
+  resolveStorageMode,
+} from "./factory";
+export { createPostgresStore } from "./postgres-store";
+export {
+  createMockSyncDb,
+  createSupabaseRestClient,
+  isSupabaseConfigured,
+} from "./db-client";
+export { assertAllowedLocationId, deploymentLocationId } from "./location-guard";
 export {
   computeIdempotencyKey,
   ingestSyncPayload,

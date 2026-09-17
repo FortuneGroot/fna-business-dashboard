@@ -5,10 +5,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const store = getSyncStore();
-  const summary = store.summary();
+  const summary = await store.summary();
   return NextResponse.json({
     ok: true,
     source: "sync-store",
+    storageMode: store.storageMode,
     summary,
   });
 }

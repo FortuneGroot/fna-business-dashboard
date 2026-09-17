@@ -5,10 +5,13 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const store = getSyncStore();
+  const opportunities = await store.listOpportunities();
+  const summary = await store.summary();
   return NextResponse.json({
     ok: true,
     source: "sync-store",
-    opportunities: store.listOpportunities().map((o) => ({
+    storageMode: store.storageMode,
+    opportunities: opportunities.map((o) => ({
       id: o.externalOpportunityId,
       contactId: o.contactId || "—",
       pipelineId: o.pipelineId || "—",
@@ -19,6 +22,6 @@ export async function GET() {
       assignedUser: o.assignedUser || "—",
       updatedAt: o.updatedAt,
     })),
-    waitingForSync: store.summary().waitingForSync,
+    waitingForSync: summary.waitingForSync,
   });
 }

@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = ingestSyncPayload(raw, payload);
+  const result = await ingestSyncPayload(raw, payload);
   logEvent(
     result.ok
       ? result.duplicate

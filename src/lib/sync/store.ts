@@ -10,6 +10,8 @@ import type {
   TaskEventRecord,
 } from "./types";
 
+export type StorageMode = "memory" | "postgres";
+
 export type SyncStoreStats = {
   contactsSynced: number;
   opportunitiesSynced: number;
@@ -21,28 +23,30 @@ export type SyncStoreStats = {
   lastEventAt?: string;
 };
 
+/** Durable or in-memory sync persistence. All methods are async for Postgres compatibility. */
 export interface SyncStore {
-  hasIdempotencyKey(key: string): boolean;
-  rememberIdempotencyKey(key: string): void;
-  upsertContact(record: ContactRecord): ContactRecord;
-  upsertOpportunity(record: OpportunityRecord): OpportunityRecord;
-  upsertAppointment(record: AppointmentRecord): AppointmentRecord;
-  appendConversationEvent(record: ConversationEventRecord): void;
-  appendTaskEvent(record: TaskEventRecord): void;
-  appendReviewEvent(record: ReviewEventRecord): void;
-  appendAudit(record: AuditEventRecord): void;
-  listContacts(): ContactRecord[];
-  listOpportunities(): OpportunityRecord[];
-  listAppointments(): AppointmentRecord[];
-  listConversationEvents(limit?: number): ConversationEventRecord[];
-  listAuditEvents(limit?: number): AuditEventRecord[];
-  getContact(id: string): ContactRecord | undefined;
-  getOpportunity(id: string): OpportunityRecord | undefined;
-  getAppointment(id: string): AppointmentRecord | undefined;
-  summary(): DashboardSummary;
-  stats(): SyncStoreStats;
-  snapshot(): SyncSnapshot;
-  clear(): void;
+  readonly storageMode: StorageMode;
+  hasIdempotencyKey(key: string): Promise<boolean>;
+  rememberIdempotencyKey(key: string): Promise<void>;
+  upsertContact(record: ContactRecord): Promise<ContactRecord>;
+  upsertOpportunity(record: OpportunityRecord): Promise<OpportunityRecord>;
+  upsertAppointment(record: AppointmentRecord): Promise<AppointmentRecord>;
+  appendConversationEvent(record: ConversationEventRecord): Promise<void>;
+  appendTaskEvent(record: TaskEventRecord): Promise<void>;
+  appendReviewEvent(record: ReviewEventRecord): Promise<void>;
+  appendAudit(record: AuditEventRecord): Promise<void>;
+  listContacts(): Promise<ContactRecord[]>;
+  listOpportunities(): Promise<OpportunityRecord[]>;
+  listAppointments(): Promise<AppointmentRecord[]>;
+  listConversationEvents(limit?: number): Promise<ConversationEventRecord[]>;
+  listAuditEvents(limit?: number): Promise<AuditEventRecord[]>;
+  getContact(id: string): Promise<ContactRecord | undefined>;
+  getOpportunity(id: string): Promise<OpportunityRecord | undefined>;
+  getAppointment(id: string): Promise<AppointmentRecord | undefined>;
+  summary(): Promise<DashboardSummary>;
+  stats(): Promise<SyncStoreStats>;
+  snapshot(): Promise<SyncSnapshot>;
+  clear(): Promise<void>;
 }
 
 export function emptySnapshot(): SyncSnapshot {

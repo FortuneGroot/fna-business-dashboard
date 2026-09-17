@@ -8,9 +8,10 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
-  const summary = getSyncStore().summary();
-  const events = getSyncStore().listAuditEvents(8);
+export default async function DashboardPage() {
+  const store = getSyncStore();
+  const summary = await store.summary();
+  const events = await store.listAuditEvents(8);
   const waiting = summary.waitingForSync;
 
   const metrics = [
