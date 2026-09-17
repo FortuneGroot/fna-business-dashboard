@@ -3,12 +3,25 @@ import emails from "@/content/emails.json";
 import sms from "@/content/sms.json";
 import snippets from "@/content/snippets.json";
 import alerts from "@/content/alerts.json";
+import { applyClientBusinessName } from "@/lib/mapping";
+import { clientBusinessName } from "@/lib/tenant";
+
+export const dynamic = "force-dynamic";
 
 export default function LibraryPage() {
+  const biz = clientBusinessName();
+  const resolvedSnippets = snippets.map((s) => ({
+    ...s,
+    body: applyClientBusinessName(s.body, biz),
+  }));
+
   return (
     <AppShell>
       <h1>Content library</h1>
-      <p className="muted">Local drafts only. Nothing here sends. Copy is ready to use once messaging is connected.</p>
+      <p className="muted">
+        Local drafts for <strong>{biz}</strong>. Nothing here sends. Copy uses the configured
+        client business name where marked.
+      </p>
       <article className="card">
         <h2>Email templates ({emails.length})</h2>
         {emails.map((e) => (
@@ -44,8 +57,8 @@ export default function LibraryPage() {
         ))}
       </article>
       <article className="card" style={{ marginTop: "1rem" }}>
-        <h2>Conversation snippets ({snippets.length})</h2>
-        {snippets.map((s) => (
+        <h2>Conversation snippets ({resolvedSnippets.length})</h2>
+        {resolvedSnippets.map((s) => (
           <p key={s.id}>
             <strong>{s.title}</strong> — {s.body}
           </p>

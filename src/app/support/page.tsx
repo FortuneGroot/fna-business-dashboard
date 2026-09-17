@@ -3,8 +3,8 @@
 import { AppShell } from "@/components/AppShell";
 import { PageHead, Button } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
-import { CONSENT_COPY } from "@/lib/mapping";
-import { FormEvent, useEffect, useState } from "react";
+import { getConsentCopy } from "@/lib/mapping";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 export default function SupportPage() {
   const [status, setStatus] = useState<string>("");
@@ -19,6 +19,8 @@ export default function SupportPage() {
       })
       .catch(() => undefined);
   }, []);
+
+  const consent = useMemo(() => getConsentCopy(bizName), [bizName]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -86,11 +88,11 @@ export default function SupportPage() {
         <textarea id="message" name="message" placeholder="How can we help?" />
         <label className="check">
           <input type="checkbox" name="smsService" />
-          <span>{CONSENT_COPY.smsService}</span>
+          <span>{consent.smsService}</span>
         </label>
         <label className="check">
           <input type="checkbox" name="smsMarketing" />
-          <span>{CONSENT_COPY.smsMarketing}</span>
+          <span>{consent.smsMarketing}</span>
         </label>
         <div style={{ marginTop: "1rem" }}>
           <Button type="submit">Send my request (dry-run)</Button>

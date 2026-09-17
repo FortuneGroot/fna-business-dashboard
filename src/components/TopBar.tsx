@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { MobileMenuButton } from "./Sidebar";
 
 const TITLES: Record<string, string> = {
@@ -23,7 +24,15 @@ const TITLES: Record<string, string> = {
 };
 
 export function TopBar({ path, onMenu }: { path: string; onMenu: () => void }) {
-  const title = TITLES[path] ?? "Fortune & Automations";
+  const router = useRouter();
+  const title = TITLES[path] ?? "Business Dashboard";
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.replace("/login");
+    router.refresh();
+  }
+
   return (
     <div className="app-topbar">
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
@@ -45,9 +54,14 @@ export function TopBar({ path, onMenu }: { path: string; onMenu: () => void }) {
           </svg>
           <span className="dot" />
         </button>
-        <div className="topbar-profile">
-          <span className="topbar-avatar">GN</span>
-        </div>
+        <button
+          className="btn secondary"
+          type="button"
+          onClick={logout}
+          style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem" }}
+        >
+          Sign out
+        </button>
       </div>
     </div>
   );

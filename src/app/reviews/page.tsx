@@ -1,38 +1,77 @@
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
-import { PageHead, Card, MetricTile, EmptyState } from "@/components/ui";
+import { PageHead, Card, MetricTile, EmptyState, Badge } from "@/components/ui";
+import { WaitingForSync } from "@/components/WaitingForSync";
+import { getSyncStore } from "@/lib/sync";
+import { clientReviewUrl } from "@/lib/tenant";
 
-const METRICS = [
-  { label: "Review Count", value: "—", note: "Total public reviews once connected." },
-  { label: "Average Rating", value: "—", note: "Across all connected review sources." },
-  { label: "Response Rate", value: "—", note: "Share of reviews with a reply." },
-];
+export const dynamic = "force-dynamic";
 
-export default function ReviewsPage() {
+export default async function ReviewsPage() {
+  const reviews = await getSyncStore().listReviewEvents(50);
+  const waiting = reviews.length === 0;
+  const requested = reviews.filter((r) => r.kind === "review-requested").length;
+  const feedback = reviews.filter((r) => r.kind === "feedback-received").length;
+  const reviewUrl = clientReviewUrl();
+
+  const metrics = [
+    {
+      label: "Review events",
+      value: waiting ? "—" : String(reviews.length),
+      note: "Synced review.request / feedback events only.",
+    },
+    {
+      label: "Requests sent",
+      value: waiting ? "—" : String(requested),
+      note: "review.requested webhook count.",
+    },
+    {
+      label: "Feedback received",
+      value: waiting ? "—" : String(feedback),
+      note: "review.feedback_received webhook count.",
+    },
+  ];
+
   return (
     <AppShell>
       <PageHead
         title="Reputation"
-        description="Honest public reviews and private customer feedback. Nothing on this page is estimated — figures stay blank until a review source is connected."
+        description="Review request and feedback events from HighLevel workflows. Figures stay blank until sync events arrive."
       />
 
       <StatusBanner>
-        Native review-request sending stays off while a custom workflow owns sending review requests
-        instead.
+        {waiting
+          ? "Waiting for HighLevel sync / no review events yet."
+          : `${reviews.length} review event(s) synced.${reviewUrl ? " Client review URL is configured." : ""}`}
       </StatusBanner>
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
-        {METRICS.map((m) => (
+        {metrics.map((m) => (
           <MetricTile key={m.label} label={m.label} value={m.value} note={m.note} />
         ))}
       </div>
 
       <div style={{ marginTop: "1.1rem" }}>
-        <Card title="Reviews">
-          <EmptyState
-            title="No reviews yet"
-            note="Reputation is blocked on connecting your Google Business Profile. No review is shown or fabricated here in the meantime."
-          />
+        <Card title="Review events" action={<Badge tone="neutral">{reviews.length}</Badge>}>
+          {waiting ? (
+            <WaitingForSync entity="review events" />
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+              {reviews.map((r) => (
+                <li key={r.id} className="muted">
+                  {r.kind}
+                  {r.resultStatus ? ` · ${r.resultStatus}` : ""}
+                  {r.timestamp ? ` · ${r.timestamp.slice(0, 16).replace("T", " ")}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!waiting && reviews.length === 0 ? (
+            <EmptyState
+              title="No reviews yet"
+              note="Waiting for HighLevel sync / no events yet."
+            />
+          ) : null}
         </Card>
       </div>
     </AppShell>

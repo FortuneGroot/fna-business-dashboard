@@ -45,14 +45,27 @@ export const FORM_SHELLS = [
 
 export const FORM_004_STATUS = "NOT_ON_PLATFORM — dedicated Customer Feedback shell still missing";
 
+/** @deprecated Prefer getConsentCopy() so client business name resolves from tenant config. */
 export const CONSENT_COPY = {
   smsService:
-    "I agree to receive texts from Fortune & Automations about my request and appointments. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help.",
+    "I agree to receive texts from {{CLIENT_BUSINESS_NAME}} about my request and appointments. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help.",
   smsMarketing:
-    "I agree to receive marketing texts from Fortune & Automations. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help.",
+    "I agree to receive marketing texts from {{CLIENT_BUSINESS_NAME}}. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help.",
   emailMarketing:
-    "I agree to receive email updates from Fortune & Automations about my request. I can unsubscribe at any time.",
+    "I agree to receive email updates from {{CLIENT_BUSINESS_NAME}} about my request. I can unsubscribe at any time.",
 };
+
+export function applyClientBusinessName(template: string, businessName: string): string {
+  return template.replace(/\{\{CLIENT_BUSINESS_NAME\}\}/g, businessName);
+}
+
+export function getConsentCopy(businessName: string) {
+  return {
+    smsService: applyClientBusinessName(CONSENT_COPY.smsService, businessName),
+    smsMarketing: applyClientBusinessName(CONSENT_COPY.smsMarketing, businessName),
+    emailMarketing: applyClientBusinessName(CONSENT_COPY.emailMarketing, businessName),
+  };
+}
 
 export const UTM_FIELDS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "fbclid"] as const;
 

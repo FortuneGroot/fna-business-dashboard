@@ -126,6 +126,12 @@ export function createMemoryStore(seed?: SyncSnapshot): SyncStore {
     async listConversationEvents(limit = 100) {
       return state.conversationEvents.slice(0, limit);
     },
+    async listTaskEvents(limit = 100) {
+      return state.taskEvents.slice(0, limit);
+    },
+    async listReviewEvents(limit = 100) {
+      return state.reviewEvents.slice(0, limit);
+    },
     async listAuditEvents(limit = 100) {
       return state.auditTrail.slice(0, limit);
     },

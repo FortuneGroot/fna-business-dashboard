@@ -39,6 +39,8 @@ export interface SyncStore {
   listOpportunities(): Promise<OpportunityRecord[]>;
   listAppointments(): Promise<AppointmentRecord[]>;
   listConversationEvents(limit?: number): Promise<ConversationEventRecord[]>;
+  listTaskEvents(limit?: number): Promise<TaskEventRecord[]>;
+  listReviewEvents(limit?: number): Promise<ReviewEventRecord[]>;
   listAuditEvents(limit?: number): Promise<AuditEventRecord[]>;
   getContact(id: string): Promise<ContactRecord | undefined>;
   getOpportunity(id: string): Promise<OpportunityRecord | undefined>;

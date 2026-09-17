@@ -335,6 +335,42 @@ export function createPostgresStore(db: SyncDb, locationIdInput: string): SyncSt
       );
     },
 
+    async listTaskEvents(limit = 100) {
+      const rows = await db.select("sync_tasks", {
+        eq: { location_id: locationId },
+        order: { column: "occurred_at", ascending: false },
+        limit,
+      });
+      return rows.map(
+        (r): TaskEventRecord => ({
+          id: String(r.id),
+          contactId: asStr(r.external_contact_id),
+          opportunityId: asStr(r.external_opportunity_id),
+          type: asStr(r.task_type),
+          status: asStr(r.status),
+          assignedUser: asStr(r.assigned_user),
+          timestamp: asStr(r.occurred_at) || new Date().toISOString(),
+        })
+      );
+    },
+
+    async listReviewEvents(limit = 100) {
+      const rows = await db.select("sync_review_events", {
+        eq: { location_id: locationId },
+        order: { column: "occurred_at", ascending: false },
+        limit,
+      });
+      return rows.map(
+        (r): ReviewEventRecord => ({
+          id: String(r.id),
+          contactId: asStr(r.external_contact_id),
+          kind: (asStr(r.kind) as ReviewEventRecord["kind"]) || "review-requested",
+          resultStatus: asStr(r.result_status),
+          timestamp: asStr(r.occurred_at) || new Date().toISOString(),
+        })
+      );
+    },
+
     async listAuditEvents(limit = 100) {
       const rows = await db.select("sync_events", {
         eq: { location_id: locationId },

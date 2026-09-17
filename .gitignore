@@ -41,3 +41,6 @@ probe-ghl.mjs
 
 # local sync persistence (if enabled later)
 .data/
+
+# generated deployment manifests (may be regenerated; never commit secrets)
+generated/

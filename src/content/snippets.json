@@ -2,7 +2,7 @@
   {
     "id": "SNIP-01",
     "title": "New inquiry ack",
-    "body": "Thanks for contacting Fortune & Automations. We have your request and will review it during business hours."
+    "body": "Thanks for contacting {{CLIENT_BUSINESS_NAME}}. We have your request and will review it during business hours."
   },
   {
     "id": "SNIP-02",
@@ -22,7 +22,7 @@
   {
     "id": "SNIP-05",
     "title": "Human handoff",
-    "body": "I will pass this to the Fortune & Automations team so a person can help with your question."
+    "body": "I will pass this to the {{CLIENT_BUSINESS_NAME}} team so a person can help with your question."
   },
   {
     "id": "SNIP-06",
@@ -32,7 +32,7 @@
   {
     "id": "SNIP-07",
     "title": "STOP received",
-    "body": "You are opted out of texts from Fortune & Automations. We will not send further marketing or service texts to this number."
+    "body": "You are opted out of texts from {{CLIENT_BUSINESS_NAME}}. We will not send further marketing or service texts to this number."
   },
   {
     "id": "SNIP-08",
@@ -42,7 +42,7 @@
   {
     "id": "SNIP-09",
     "title": "Thank you / won",
-    "body": "Thank you for choosing Fortune & Automations. Our team will confirm the next steps for your service."
+    "body": "Thank you for choosing {{CLIENT_BUSINESS_NAME}}. Our team will confirm the next steps for your service."
   },
   {
     "id": "SNIP-10",
@@ -52,7 +52,7 @@
   {
     "id": "SNIP-11",
     "title": "Emergency deflect",
-    "body": "If this is an emergency or someone is in danger, please contact local emergency services. Fortune & Automations cannot replace 911."
+    "body": "If this is an emergency or someone is in danger, please contact local emergency services. {{CLIENT_BUSINESS_NAME}} cannot replace 911."
   },
   {
     "id": "SNIP-12",
