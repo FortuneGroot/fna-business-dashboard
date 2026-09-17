@@ -16,7 +16,7 @@ import {
   resetLoginRateLimitForTests,
   passwordsMatch,
 } from "../src/lib/auth";
-import { verifySessionTokenEdge } from "../src/lib/auth/session-edge";
+import { isStoredSessionActiveEdge, verifySessionTokenEdge } from "../src/lib/auth/session-edge";
 import { verifyWebhookSecret } from "../src/lib/sync";
 import {
   PROTECTED_MASTER_LOCATION_ID,
@@ -111,6 +111,33 @@ describe("auth sessions", () => {
     const edge = await verifySessionTokenEdge(token, SECRET);
     assert.ok(edge);
     assert.ok(edge!.sid);
+  });
+
+  it("edge session-store check rejects revoked sessions", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify([{ id: "sid", expires_at: new Date(Date.now() + 60_000).toISOString(), revoked: true }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    try {
+      assert.equal(
+        await isStoredSessionActiveEdge("sid", undefined, {
+          SUPABASE_URL: "https://db.example.invalid",
+          SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
+        }),
+        false
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("edge session-store check fails closed in production without store", async () => {
+    assert.equal(
+      await isStoredSessionActiveEdge("sid", undefined, { VERCEL_ENV: "production" }),
+      false
+    );
   });
 
   it("logout revokes session — replay denied", async () => {

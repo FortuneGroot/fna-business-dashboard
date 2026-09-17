@@ -129,10 +129,14 @@ export async function getStoredSession(
   nowSec = Math.floor(Date.now() / 1000)
 ): Promise<StoredSession | null> {
   if (!id) return null;
-  let session = memoryMap().get(id) || null;
-  if (!session && isSupabaseConfigured(env)) {
+  let session: StoredSession | null;
+  if (isSupabaseConfigured(env)) {
+    // Durable store is authoritative across serverless/Edge instances. Never
+    // accept a cached row after another instance may have revoked it.
     session = await supabaseGet(id, env);
     if (session) memoryMap().set(session.id, session);
+  } else {
+    session = memoryMap().get(id) || null;
   }
   if (!session) return null;
   if (session.revoked) return null;

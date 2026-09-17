@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth";
 import { getSyncStore } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = await requireApiSession(req);
+  if (denied) return denied;
   const store = getSyncStore();
   const events = await store.listAuditEvents(100);
   const summary = await store.summary();

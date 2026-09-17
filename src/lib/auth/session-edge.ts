@@ -30,6 +30,50 @@ async function hmacSign(body: string, secret: string): Promise<string> {
 
 export type EdgeTokenOk = { sid: string; exp: number };
 
+/**
+ * Durable revocation check for Edge middleware. Production/fail-closed auth
+ * never trusts a signed cookie without confirming its session-store row.
+ */
+export async function isStoredSessionActiveEdge(
+  sid: string,
+  nowSec = Math.floor(Date.now() / 1000),
+  env: Record<string, string | undefined> = process.env
+): Promise<boolean> {
+  const url = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
+  const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!url || !key) {
+    const production = (env.VERCEL_ENV || "").trim().toLowerCase() === "production";
+    const failClosed = (env.AUTH_FAIL_CLOSED || "").trim().toLowerCase() === "true";
+    return !(production || failClosed);
+  }
+
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/auth_sessions?id=eq.${encodeURIComponent(sid)}&select=id,expires_at,revoked&limit=1`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) return false;
+    const rows = (await res.json()) as Array<{
+      id?: string;
+      expires_at?: string;
+      revoked?: boolean;
+    }>;
+    const row = rows[0];
+    if (!row?.id || row.revoked) return false;
+    const expiresAt = Math.floor(new Date(String(row.expires_at || "")).getTime() / 1000);
+    return Number.isFinite(expiresAt) && expiresAt >= nowSec;
+  } catch {
+    return false;
+  }
+}
+
 export async function verifySessionTokenEdge(
   token: string,
   secret: string,

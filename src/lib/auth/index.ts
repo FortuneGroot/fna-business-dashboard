@@ -20,3 +20,4 @@ export {
   revokeStoredSession,
   resetAuthSessionsForTests,
 } from "./session-store";
+export { requireApiSession, requirePageSession } from "./guards";

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkGhlConnection, GhlRefusedError } from "@/lib/ghl";
-import { isAuthEnforced, readSessionFromCookieHeader } from "@/lib/auth";
+import { isAuthEnforced, mustProtectRoutes, readSessionFromCookieHeader } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   const session = enforced
     ? await readSessionFromCookieHeader(req.headers.get("cookie"))
     : null;
-  const privileged = !enforced || Boolean(session);
+  const privileged = Boolean(session) || (!enforced && !mustProtectRoutes());
 
   try {
     const health = await checkGhlConnection();

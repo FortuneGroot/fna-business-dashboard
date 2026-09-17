@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth";
 import { loadEnv } from "@/lib/env";
 import {
   getStorageMode,
@@ -18,7 +19,9 @@ export const dynamic = "force-dynamic";
  * Does not call HighLevel CRM read APIs.
  * Never exposes secret values.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = await requireApiSession(req);
+  if (denied) return denied;
   const env = loadEnv();
   const store = getSyncStore();
   const stats = await store.stats();

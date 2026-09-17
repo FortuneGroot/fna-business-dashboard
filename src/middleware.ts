@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   AUTH_COOKIE,
   getCookieValue,
+  isStoredSessionActiveEdge,
   verifySessionTokenEdge,
 } from "@/lib/auth/session-edge";
 
@@ -110,7 +111,7 @@ export async function middleware(req: NextRequest) {
 
   const token = getCookieValue(req.headers.get("cookie"), AUTH_COOKIE);
   const session = token ? await verifySessionTokenEdge(token, secret) : null;
-  const ok = Boolean(session);
+  const ok = Boolean(session && (await isStoredSessionActiveEdge(session.sid)));
 
   if (ok) {
     if (pathname === "/") {

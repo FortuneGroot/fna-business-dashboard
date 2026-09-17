@@ -14,3 +14,8 @@ create table if not exists auth_sessions (
 
 create index if not exists auth_sessions_expires_idx on auth_sessions (expires_at);
 create index if not exists auth_sessions_email_idx on auth_sessions (email);
+
+alter table auth_sessions enable row level security;
+
+-- Runtime access is exclusively through the server-side service-role key.
+-- No anon/authenticated policy is intentionally created.

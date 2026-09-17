@@ -3,7 +3,7 @@ import { loadEnv, validateEnv } from "@/lib/env";
 import { checkGhlConnection, GhlRefusedError } from "@/lib/ghl";
 import { logEvent } from "@/lib/logging";
 import { BRAND } from "@/lib/brand";
-import { isAuthEnforced, readSessionFromCookieHeader } from "@/lib/auth";
+import { isAuthEnforced, mustProtectRoutes, readSessionFromCookieHeader } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const session = enforced
     ? await readSessionFromCookieHeader(req.headers.get("cookie"))
     : null;
-  const privileged = !enforced || Boolean(session);
+  const privileged = Boolean(session) || (!enforced && !mustProtectRoutes());
 
   let ghlConnected = false;
   let ghlMode: string = "unconfigured";
