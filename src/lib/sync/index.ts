@@ -1,3 +1,4 @@
+export { assertAllowedLocationId, deploymentLocationId } from "./location-guard";
 export type { SyncStore, SyncStoreStats, StorageMode } from "./store";
 export { emptySnapshot, summaryFromSnapshot } from "./store";
 export { createMemoryStore } from "./memory-store";
@@ -16,7 +17,6 @@ export {
   createSupabaseRestClient,
   isSupabaseConfigured,
 } from "./db-client";
-export { assertAllowedLocationId, deploymentLocationId } from "./location-guard";
 export {
   computeIdempotencyKey,
   ingestSyncPayload,

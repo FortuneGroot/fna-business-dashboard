@@ -1,25 +1,25 @@
 import { NextResponse } from "next/server";
 import {
   evaluateClientReadiness,
-  loadResolvedClientConfig,
   toPublicReadinessPayload,
 } from "@/lib/onboarding";
+import { getTenantConfig } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Config-only onboarding readiness.
+ * Config-only onboarding readiness — same tenant model as runtime.
  * Never exposes webhook secrets, Supabase keys, GHL tokens, or passwords.
  */
 export async function GET() {
-  const { config, path } = loadResolvedClientConfig(process.cwd(), process.env);
+  const config = getTenantConfig();
   const report = evaluateClientReadiness(config);
   const payload = toPublicReadinessPayload(report);
 
   const body = {
     ...payload,
-    configPath: path ? path.replace(/\\/g, "/").split("/").slice(-3).join("/") : null,
-    source: "client-config",
+    source: "tenant-config",
+    configuredLocationId: config.ghl.locationId,
   };
 
   const text = JSON.stringify(body);

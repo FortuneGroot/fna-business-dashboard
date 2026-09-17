@@ -18,8 +18,14 @@ type Health = {
   };
 };
 
+type TenantPublic = {
+  client?: { businessName?: string; timezone?: string };
+  platform?: { brandName?: string; productName?: string };
+};
+
 export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [tenant, setTenant] = useState<TenantPublic | null>(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -27,11 +33,17 @@ export default function SettingsPage() {
       .then((r) => r.json())
       .then(setHealth)
       .catch(() => setErr("Health endpoint is not reachable. Start the Next.js server."));
+    fetch("/api/tenant/public")
+      .then((r) => r.json())
+      .then(setTenant)
+      .catch(() => undefined);
   }, []);
 
   const connected = Boolean(health?.ghl?.connected);
   const crmTone = connected ? "ok" : health?.ghl?.error ? "warn" : "neutral";
   const crmLabel = connected ? "Connected" : "Not connected";
+  const bizName = tenant?.client?.businessName || BRAND.name;
+  const bizTz = tenant?.client?.timezone || BRAND.timezone;
 
   return (
     <AppShell>
@@ -44,13 +56,14 @@ export default function SettingsPage() {
       <div className="grid grid-2">
         <Card title="Business Profile">
           <label htmlFor="biz-name">Business name</label>
-          <input id="biz-name" defaultValue={BRAND.name} disabled />
+          <input id="biz-name" value={bizName} readOnly disabled />
           <label htmlFor="biz-tz">Timezone</label>
-          <input id="biz-tz" defaultValue={BRAND.timezone} disabled />
+          <input id="biz-tz" value={bizTz} readOnly disabled />
           <label htmlFor="biz-hours">Business hours</label>
           <input id="biz-hours" placeholder="Not set yet" disabled />
           <p className="muted" style={{ marginTop: "0.6rem" }}>
-            Read-only preview. Editing turns on once account settings are wired to the CRM.
+            Client business identity comes from deployment ClientConfig. Product chrome remains{" "}
+            {tenant?.platform?.productName || BRAND.product}.
           </p>
         </Card>
 
@@ -61,8 +74,9 @@ export default function SettingsPage() {
             {health?.ghl?.error ? <span className="muted"> — {health.ghl.error}</span> : null}
           </p>
           <p className="muted">
-            Agency PIT health proves authentication and live location only. Dashboard lists populate
-            from HighLevel workflow webhooks (/api/webhooks/ghl). See /api/sync/health for sync counts.
+            Agency PIT health proves authentication and configured location identity. Dashboard lists
+            populate from HighLevel workflow webhooks (/api/webhooks/ghl). See /api/sync/health for
+            sync counts.
           </p>
         </Card>
       </div>

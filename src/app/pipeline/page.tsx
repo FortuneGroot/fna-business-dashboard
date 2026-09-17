@@ -3,28 +3,20 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getSyncStore } from "@/lib/sync";
+import {
+  configuredPipelineName,
+  configuredStageNames,
+  looksLikePlaceholderStages,
+} from "@/lib/tenant-ui";
 
 export const dynamic = "force-dynamic";
-
-// Fortune & Automations Sales Pipeline — bind by stage name, never column index.
-const STAGES = [
-  "New Lead",
-  "Attempting Contact",
-  "Connected",
-  "Qualified",
-  "Appointment Booked",
-  "Appointment Completed",
-  "Estimate / Proposal Sent",
-  "Follow-Up",
-  "Decision Pending",
-  "Won",
-  "Lost",
-  "Long-Term Nurture",
-];
 
 export default async function PipelinePage() {
   const opps = await getSyncStore().listOpportunities();
   const waiting = opps.length === 0;
+  const stages = configuredStageNames();
+  const pipelineName = configuredPipelineName();
+  const stagesBlocked = looksLikePlaceholderStages();
 
   const byStage = (stage: string) =>
     opps.filter((o) => {
@@ -40,9 +32,11 @@ export default async function PipelinePage() {
       />
 
       <StatusBanner>
-        {waiting
-          ? "Waiting for HighLevel sync — no opportunities received yet."
-          : "Fortune & Automations Sales Pipeline (synced). Won is not cash until reconciled in Payments."}
+        {stagesBlocked
+          ? "Pipeline stages still contain placeholders — capture real GHL stage IDs before go-live."
+          : waiting
+            ? "Waiting for HighLevel sync — no opportunities received yet."
+            : `${pipelineName} (synced). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
 
       <div
@@ -54,7 +48,7 @@ export default async function PipelinePage() {
           marginTop: "1.1rem",
         }}
       >
-        {STAGES.map((stage) => {
+        {stages.map((stage) => {
           const items = byStage(stage);
           const value = items.reduce((s, o) => s + (Number(o.monetaryValue) || 0), 0);
           return (

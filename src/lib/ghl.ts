@@ -1,6 +1,7 @@
 import { BRAND } from "./brand";
 import { loadEnv, validateEnv } from "./env";
 import { logEvent } from "./logging";
+import { PROTECTED_MASTER_LOCATION_ID, configuredLocationId, clientBusinessName } from "./tenant";
 
 const SERVICES = "https://services.leadconnectorhq.com";
 
@@ -11,14 +12,27 @@ export class GhlRefusedError extends Error {
   }
 }
 
-export function assertLiveLocation(locationId: string): void {
+/** Assert location is the configured client location and never Master. */
+export function assertConfiguredLocation(locationId: string): void {
   const env = loadEnv();
-  if (locationId === env.forbiddenMasterId || locationId === BRAND.forbiddenMasterId) {
+  if (
+    locationId === PROTECTED_MASTER_LOCATION_ID ||
+    locationId === env.forbiddenMasterId ||
+    locationId === BRAND.forbiddenMasterId
+  ) {
     throw new GhlRefusedError("Refused: protected Master location.");
   }
-  if (locationId !== BRAND.liveLocationId) {
-    throw new GhlRefusedError(`Refused: location ${locationId} is not LIVE Fortune & Automations.`);
+  const configured = configuredLocationId();
+  if (locationId !== configured || locationId !== env.locationId) {
+    throw new GhlRefusedError(
+      `Refused: location ${locationId} is not the configured client location (${configured}).`
+    );
   }
+}
+
+/** @deprecated Use assertConfiguredLocation */
+export function assertLiveLocation(locationId: string): void {
+  assertConfiguredLocation(locationId);
 }
 
 export type GhlHealth = {
@@ -27,6 +41,8 @@ export type GhlHealth = {
   locationId: string;
   httpStatus: number | null;
   locationName: string | null;
+  matchesConfigured: boolean;
+  /** @deprecated use matchesConfigured */
   matchesLive: boolean;
   looksLikeMaster: boolean;
   error: string | null;
@@ -42,8 +58,9 @@ export async function checkGhlConnection(): Promise<GhlHealth> {
       locationId: env.locationId,
       httpStatus: null,
       locationName: null,
+      matchesConfigured: false,
       matchesLive: false,
-      looksLikeMaster: env.locationId === env.forbiddenMasterId,
+      looksLikeMaster: env.locationId === PROTECTED_MASTER_LOCATION_ID,
       error: envErrors.join(" "),
     };
   }
@@ -55,15 +72,17 @@ export async function checkGhlConnection(): Promise<GhlHealth> {
       locationId: env.locationId,
       httpStatus: null,
       locationName: null,
-      matchesLive: env.locationId === BRAND.liveLocationId,
+      matchesConfigured: env.locationId === configuredLocationId(),
+      matchesLive: env.locationId === configuredLocationId(),
       looksLikeMaster: false,
       error: "GHL_API_TOKEN is empty. PIT not configured. No request sent.",
     };
   }
 
-  assertLiveLocation(env.locationId);
+  assertConfiguredLocation(env.locationId);
   const token = (process.env.GHL_API_TOKEN || "").trim();
-  const res = await fetch(`${SERVICES}/locations/${BRAND.liveLocationId}`, {
+  const targetLocation = configuredLocationId();
+  const res = await fetch(`${SERVICES}/locations/${targetLocation}`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -80,30 +99,33 @@ export async function checkGhlConnection(): Promise<GhlHealth> {
   const id = String(loc.id || "");
   const name = String(loc.name || "");
   const looksLikeMaster =
-    name.toLowerCase().includes("master") || name.toLowerCase().includes("do not use live");
-  const matchesLive =
-    id === BRAND.liveLocationId &&
-    name.toLowerCase().includes("fortune") &&
-    name.toLowerCase().includes("automation");
+    id === PROTECTED_MASTER_LOCATION_ID ||
+    name.toLowerCase().includes("master") ||
+    name.toLowerCase().includes("do not use live");
+  const expectedName = clientBusinessName().toLowerCase();
+  const matchesConfigured =
+    id === targetLocation &&
+    (expectedName.length < 3 || name.toLowerCase().includes(expectedName.split(" ")[0] || ""));
 
   logEvent("ghl.health", {
     httpStatus: res.status,
-    matchesLive,
+    matchesConfigured,
     looksLikeMaster,
     namePresent: Boolean(name),
   });
 
-  if (looksLikeMaster || id === BRAND.forbiddenMasterId) {
+  if (looksLikeMaster || id === PROTECTED_MASTER_LOCATION_ID || id === BRAND.forbiddenMasterId) {
     throw new GhlRefusedError("Health check returned protected Master. Aborting.");
   }
 
   return {
-    connected: res.ok && matchesLive,
+    connected: res.ok && id === targetLocation,
     mode: "live-read",
     locationId: id || env.locationId,
     httpStatus: res.status,
     locationName: name || null,
-    matchesLive,
+    matchesConfigured: id === targetLocation,
+    matchesLive: id === targetLocation,
     looksLikeMaster,
     error: res.ok ? null : String(body.message || body.error || `HTTP ${res.status}`),
   };

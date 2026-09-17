@@ -3,20 +3,18 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getSyncStore } from "@/lib/sync";
+import {
+  configuredCalendars,
+  looksLikePlaceholderCalendars,
+} from "@/lib/tenant-ui";
 
 export const dynamic = "force-dynamic";
-
-const CALENDARS = [
-  { name: "Discovery Call", duration: "30 min" },
-  { name: "Website Consultation", duration: "30 min" },
-  { name: "Business Consultation", duration: "30 min" },
-  { name: "Client / Project Meeting", duration: "30 min" },
-  { name: "Core Booking", duration: "1 hr" },
-];
 
 export default async function CalendarPage() {
   const appointments = await getSyncStore().listAppointments();
   const waiting = appointments.length === 0;
+  const calendars = configuredCalendars();
+  const calendarsBlocked = looksLikePlaceholderCalendars();
 
   return (
     <AppShell>
@@ -26,28 +24,30 @@ export default async function CalendarPage() {
       />
 
       <StatusBanner>
-        {waiting
-          ? "Waiting for HighLevel sync — no appointments received yet."
-          : `${appointments.length} appointment(s) synced from webhooks.`}
+        {calendarsBlocked
+          ? "Calendar IDs still contain placeholders — capture real GHL calendar IDs before go-live."
+          : waiting
+            ? "Waiting for HighLevel sync — no appointments received yet."
+            : `${appointments.length} appointment(s) synced from webhooks.`}
       </StatusBanner>
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
-        {CALENDARS.map((cal) => {
+        {calendars.map((cal) => {
           const items = appointments.filter(
             (a) =>
               !a.calendarName ||
               a.calendarName.toLowerCase() === cal.name.toLowerCase() ||
+              a.calendarId === cal.id ||
               a.calendarName.toLowerCase().includes(cal.name.toLowerCase().split(" ")[0])
           );
-          const show = waiting ? [] : items.length ? items : appointments;
           return (
             <Card key={cal.name} title={cal.name}>
               <p className="muted" style={{ marginTop: 0 }}>
-                Duration: {cal.duration}
+                Duration: {cal.duration || "—"}
               </p>
               {waiting ? (
                 <WaitingForSync entity="appointments" />
-              ) : show.length === 0 ? (
+              ) : items.length === 0 && appointments.length === 0 ? (
                 <EmptyState
                   title="No appointments scheduled"
                   note="Bookings will appear here once appointment sync events arrive."

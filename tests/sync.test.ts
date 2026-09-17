@@ -23,8 +23,13 @@ import {
   verifyWebhookSecret,
   type SyncStore,
 } from "../src/lib/sync";
+import {
+  FA_LIVE_LOCATION_ID,
+  faLiveDefaultClientConfig,
+  resetTenantConfigForTests,
+} from "../src/lib/tenant";
 
-const LIVE = BRAND.liveLocationId;
+const LIVE = FA_LIVE_LOCATION_ID;
 const MASTER = BRAND.forbiddenMasterId;
 
 function baseLead(over: Record<string, unknown> = {}) {
@@ -132,6 +137,8 @@ beforeEach(() => {
   delete process.env.GHL_WEBHOOK_ENFORCE_SECRET;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.CLIENT_CONFIG_PATH;
+  resetTenantConfigForTests(faLiveDefaultClientConfig());
   resetSyncStoreForTests(createMemoryStore());
 });
 

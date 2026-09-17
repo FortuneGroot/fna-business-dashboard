@@ -1,6 +1,10 @@
 import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
 import {
+  PROTECTED_MASTER_LOCATION_ID,
+  configuredLocationId,
+} from "@/lib/tenant";
+import {
   createSupabaseRestClient,
   isSupabaseConfigured,
   type SyncDb,
@@ -38,7 +42,17 @@ export function createSyncStore(opts?: {
   const mode = opts?.forceMode || resolveStorageMode(env);
   if (mode === "postgres") {
     const db = opts?.db || createSupabaseRestClient(env);
-    const locationId = (env.GHL_LOCATION_ID || BRAND.liveLocationId).trim();
+    let locationId = (env.GHL_LOCATION_ID || "").trim();
+    if (!locationId) {
+      try {
+        locationId = configuredLocationId();
+      } catch {
+        locationId = BRAND.liveLocationId;
+      }
+    }
+    if (locationId === PROTECTED_MASTER_LOCATION_ID || locationId === BRAND.forbiddenMasterId) {
+      throw new Error("Protected Master location refused");
+    }
     return createPostgresStore(db, locationId);
   }
   return createMemoryStore();
@@ -76,10 +90,15 @@ export function rebindSyncStoreFromEnv(env: NodeJS.ProcessEnv = process.env): Sy
 
 export function assertDeploymentLocationSafe(): void {
   const env = loadEnv();
-  if (env.locationId === env.forbiddenMasterId || env.locationId === BRAND.forbiddenMasterId) {
+  if (
+    env.locationId === PROTECTED_MASTER_LOCATION_ID ||
+    env.locationId === env.forbiddenMasterId ||
+    env.locationId === BRAND.forbiddenMasterId
+  ) {
     throw new Error("Protected Master location refused");
   }
-  if (env.locationId !== BRAND.liveLocationId) {
+  const configured = configuredLocationId();
+  if (env.locationId !== configured) {
     throw new Error("Location not allowed for this dashboard");
   }
 }

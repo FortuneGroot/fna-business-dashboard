@@ -16,7 +16,7 @@ export const NOT_DEPENDENT_ON = [
 ] as const;
 
 const PLACEHOLDER_RE =
-  /(placeholder|replace_me|replace-me|todo|tbd|your_|changeme|\{\{|\}\}|example\.com\/your|pending|not-set|^x+$)/i;
+  /(placeholder|replace_me|replace-me|\btodo\b|\btbd\b|your_|changeme|\{\{|\}\}|example\.com\/your|not-set|^x+$)/i;
 
 export function isBlank(value: unknown): boolean {
   return value == null || String(value).trim() === "";

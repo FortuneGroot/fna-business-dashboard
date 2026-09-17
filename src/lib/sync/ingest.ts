@@ -176,7 +176,7 @@ export async function ingestSyncPayload(
       status: 409,
     };
   }
-  if (locationId !== env.locationId || locationId !== BRAND.liveLocationId) {
+  if (locationId !== env.locationId) {
     return {
       ok: false,
       error: "Location not allowed for this dashboard",
@@ -298,7 +298,7 @@ export async function ingestSyncPayload(
         payload.pipelineId,
         payload.pipeline_id,
         opportunityObj?.pipelineId,
-        BRAND.pipelineId
+        env.pipelineId
       ),
       stageId: str(payload.stageId, payload.stage_id, opportunityObj?.stageId),
       stageName,

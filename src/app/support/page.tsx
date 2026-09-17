@@ -4,11 +4,21 @@ import { AppShell } from "@/components/AppShell";
 import { PageHead, Button } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
 import { CONSENT_COPY } from "@/lib/mapping";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 export default function SupportPage() {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [bizName, setBizName] = useState(BRAND.name);
+
+  useEffect(() => {
+    fetch("/api/tenant/public")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.client?.businessName) setBizName(d.client.businessName);
+      })
+      .catch(() => undefined);
+  }, []);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -45,7 +55,7 @@ export default function SupportPage() {
     <AppShell>
       <PageHead
         title="Support / Contact"
-        description={`Contact Fortune & Automations. Recovered from the training pack — confirm live before publishing: ${BRAND.supportEmailRecovered} · ${BRAND.supportPhoneRecovered} · ${BRAND.website.replace("https://", "")}`}
+        description={`Contact ${bizName}. Recovered training-pack channels (confirm live before publishing): ${BRAND.supportEmailRecovered} · ${BRAND.supportPhoneRecovered} · ${BRAND.website.replace("https://", "")}`}
       />
       <p className="muted">
         This form posts to a dry-run lead API. Use a fake email such as{" "}

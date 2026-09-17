@@ -4,6 +4,7 @@ import { Card, MetricTile, Badge, EmptyState, QuickActions, Button } from "@/com
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { SidebarIcon } from "@/components/Sidebar";
 import { getSyncStore } from "@/lib/sync";
+import { clientBusinessName, platformProductName } from "@/lib/tenant";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -57,10 +58,10 @@ export default async function DashboardPage() {
     <AppShell>
       <section className="hero">
         <Badge tone="gold">Owner Command Center</Badge>
-        <h1 style={{ marginTop: "0.6rem" }}>Fortune & Automations Business Dashboard</h1>
+        <h1 style={{ marginTop: "0.6rem" }}>{platformProductName()}</h1>
         <p>
-          AUTOMATION · WEBSITES · BRANDING · SYSTEMS. Make your business look better, work smarter, and run
-          smoother. Data on this page comes from HighLevel workflow webhooks — not live CRM list APIs.
+          Client: <strong>{clientBusinessName()}</strong>. AUTOMATION · WEBSITES · BRANDING · SYSTEMS.
+          Data on this page comes from HighLevel workflow webhooks — not live CRM list APIs.
         </p>
       </section>
 

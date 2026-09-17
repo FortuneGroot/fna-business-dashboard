@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
-import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
 import {
   getStorageMode,
   getSyncStore,
   isDatabaseConfigured,
 } from "@/lib/sync";
+import {
+  PROTECTED_MASTER_LOCATION_ID,
+  configuredLocationId,
+  clientBusinessName,
+} from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -22,18 +26,26 @@ export async function GET() {
     (process.env.GHL_WEBHOOK_ENFORCE_SECRET || "").toLowerCase() === "true";
   const storageMode = getStorageMode();
   const webhookSecretEnforced = enforceFlag || !env.dryRun;
+  let configuredLocation = env.locationId;
+  try {
+    configuredLocation = configuredLocationId();
+  } catch {
+    /* keep env */
+  }
 
   return NextResponse.json({
     ok: true,
     locationId: env.locationId,
-    liveLocationId: BRAND.liveLocationId,
-    matchesLive: env.locationId === BRAND.liveLocationId,
+    configuredLocationId: configuredLocation,
+    clientBusinessName: clientBusinessName(),
+    matchesConfigured: env.locationId === configuredLocation,
     storageMode,
     databaseConfigured: isDatabaseConfigured(),
     masterGuard: {
-      forbiddenMasterId: env.forbiddenMasterId,
+      forbiddenMasterId: PROTECTED_MASTER_LOCATION_ID,
       masterBlocked: true,
-      locationIsMaster: env.locationId === env.forbiddenMasterId,
+      locationIsMaster: env.locationId === PROTECTED_MASTER_LOCATION_ID,
+      overridable: false,
     },
     webhookSecretConfigured: env.webhookSecretPresent,
     webhookSecretEnforced,

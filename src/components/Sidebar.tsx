@@ -2,7 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+
+type TenantChrome = {
+  client?: { businessName?: string; legalBusinessName?: string };
+  platform?: { brandName?: string; productName?: string; legal?: string };
+};
 
 function Icon({ d }: { d: string }) {
   return (
@@ -71,6 +76,21 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [tenant, setTenant] = useState<TenantChrome | null>(null);
+  useEffect(() => {
+    fetch("/api/tenant/public")
+      .then((r) => r.json())
+      .then(setTenant)
+      .catch(() => undefined);
+  }, []);
+
+  const clientName = tenant?.client?.businessName || "Fortune & Automations";
+  const legal =
+    tenant?.client?.legalBusinessName ||
+    tenant?.platform?.legal ||
+    "Fortune&Finance LLC";
+  const productLine = "Business Dashboard";
+
   return (
     <>
       {open ? <div className="sidebar-scrim" onClick={onClose} /> : null}
@@ -79,15 +99,17 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/fna-logo.jpg" alt="" width={36} height={36} />
           <span className="sidebar-brand-text">
-            <strong>Fortune & Automations</strong>
-            <small>Business Dashboard</small>
+            <strong>{clientName}</strong>
+            <small>{productLine}</small>
           </span>
           <button className="sidebar-close" onClick={onClose} aria-label="Close menu" type="button">
             ×
           </button>
         </Link>
         <SidebarLinks onNavigate={onClose} />
-        <div className="sidebar-footer">Fortune&amp;Finance LLC · AUTOMATION · WEBSITES · BRANDING · SYSTEMS</div>
+        <div className="sidebar-footer">
+          {legal} · AUTOMATION · WEBSITES · BRANDING · SYSTEMS
+        </div>
       </aside>
     </>
   );
