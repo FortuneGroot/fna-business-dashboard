@@ -7,7 +7,7 @@
     "dev": "node ./node_modules/next/dist/bin/next dev",
     "build": "node ./node_modules/next/dist/bin/next build",
     "start": "node ./node_modules/next/dist/bin/next start",
-    "test": "node --import tsx --test tests/sync.test.ts tests/onboarding.test.ts tests/tenant.test.ts tests/auth.test.ts",
+    "test": "node --import tsx --test tests/sync.test.ts tests/onboarding.test.ts tests/tenant.test.ts tests/auth.test.ts tests/client-facing-copy.test.ts",
     "check:readiness": "node ./node_modules/tsx/dist/cli.mjs scripts/check-client-readiness.ts",
     "client:prepare": "node ./node_modules/tsx/dist/cli.mjs scripts/client-prepare.ts",
     "client:validate": "node ./node_modules/tsx/dist/cli.mjs scripts/validate-client-env.ts",

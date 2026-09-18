@@ -8,6 +8,12 @@ import {
   configuredStageNames,
   looksLikePlaceholderStages,
 } from "@/lib/tenant-ui";
+import {
+  PLACEHOLDER_CONFIG_STAGES,
+  SYNC_SOURCE_SHORT,
+  syncBannerWaiting,
+  syncColumnEmpty,
+} from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -28,18 +34,25 @@ export default async function PipelinePage() {
     <AppShell>
       <PageHead
         title="Opportunities"
-        description="Your sales board — opportunities synced from HighLevel webhooks, grouped by stage."
+        description={`Your sales board — opportunities grouped by stage. ${SYNC_SOURCE_SHORT}`}
       />
 
       <StatusBanner>
         {stagesBlocked
-          ? "Pipeline stages still contain placeholders — capture real GHL stage IDs before go-live."
+          ? PLACEHOLDER_CONFIG_STAGES
           : waiting
-            ? "Waiting for HighLevel sync — no opportunities received yet."
+            ? syncBannerWaiting("opportunities")
             : `${pipelineName} (synced). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
 
+      {waiting ? (
+        <div style={{ marginTop: "1.1rem" }}>
+          <WaitingForSync entity="opportunities" />
+        </div>
+      ) : null}
+
       <div
+        className="pipeline-board"
         style={{
           display: "flex",
           gap: "1rem",
@@ -55,14 +68,16 @@ export default async function PipelinePage() {
             <div key={stage} style={{ flex: "0 0 260px", minWidth: 0 }}>
               <Card title={stage} action={<Badge tone="neutral">${value.toLocaleString()}</Badge>}>
                 {waiting ? (
-                  <WaitingForSync entity="opportunities" />
+                  <p className="muted" style={{ margin: 0 }}>
+                    {syncColumnEmpty()}
+                  </p>
                 ) : items.length === 0 ? (
                   <EmptyState title="No opportunities yet" />
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
                     {items.slice(0, 8).map((o) => (
                       <li key={o.externalOpportunityId} className="muted">
-                        {o.externalOpportunityId.slice(0, 8)}…
+                        Opportunity
                         {o.monetaryValue != null ? ` · $${o.monetaryValue}` : ""}
                       </li>
                     ))}

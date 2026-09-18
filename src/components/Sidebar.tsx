@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { BRAND } from "@/lib/brand";
+
 type TenantChrome = {
   client?: { businessName?: string; legalBusinessName?: string };
   platform?: { brandName?: string; productName?: string; legal?: string };
@@ -11,7 +13,18 @@ type TenantChrome = {
 
 function Icon({ d }: { d: string }) {
   return (
-    <svg className="icon" viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d={d} />
     </svg>
   );
@@ -31,6 +44,7 @@ const ICONS: Record<string, string> = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8-3a8 8 0 0 0-.15-1.5l2-1.6-2-3.4-2.4 1a8 8 0 0 0-2.6-1.5L14.5 2h-5l-.35 2.5a8 8 0 0 0-2.6 1.5l-2.4-1-2 3.4 2 1.6a8 8 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a8 8 0 0 0 2.6 1.5L9.5 22h5l.35-2.5a8 8 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6c.1-.5.15-1 .15-1.5Z",
   help: "M9.5 9a2.5 2.5 0 1 1 3.7 2.2c-.8.5-1.2 1-1.2 1.8v.5M12 17.5h.01M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z",
   resources: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5V6A2.5 2.5 0 0 1 6.5 3.5H20v14H6.5A2.5 2.5 0 0 0 4 19.5Z",
+  tasks: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
 };
 
 const PRIMARY = [
@@ -39,6 +53,7 @@ const PRIMARY = [
   { href: "/contacts", label: "Contacts", icon: "contacts" },
   { href: "/pipeline", label: "Opportunities", icon: "opportunities" },
   { href: "/calendar", label: "Calendars", icon: "calendar" },
+  { href: "/tasks", label: "Tasks", icon: "tasks" },
   { href: "/automations", label: "Automations", icon: "automations" },
   { href: "/marketing", label: "Marketing", icon: "marketing" },
   { href: "/reviews", label: "Reputation", icon: "reputation" },
@@ -52,6 +67,12 @@ const SECONDARY = [
   { href: "/library", label: "Resources", icon: "resources" },
 ];
 
+function isActivePath(path: string, href: string): boolean {
+  if (path === href) return true;
+  if (href === "/dashboard") return false;
+  return path.startsWith(`${href}/`);
+}
+
 export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
   const path = usePathname();
   const renderLink = (l: { href: string; label: string; icon: string }) => (
@@ -59,7 +80,7 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
       key={l.href}
       href={l.href}
       className="sidebar-link"
-      aria-current={path === l.href ? "page" : undefined}
+      aria-current={isActivePath(path, l.href) ? "page" : undefined}
       onClick={onNavigate}
     >
       <Icon d={ICONS[l.icon]} />
@@ -67,10 +88,14 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
     </Link>
   );
   return (
-    <nav className="sidebar-nav">
+    <nav className="sidebar-nav" aria-label="Primary">
       {PRIMARY.map(renderLink)}
-      <div className="sidebar-section-label">Account</div>
-      {SECONDARY.map(renderLink)}
+      <div className="sidebar-section-label" id="sidebar-account-label">
+        Account
+      </div>
+      <div role="group" aria-labelledby="sidebar-account-label">
+        {SECONDARY.map(renderLink)}
+      </div>
     </nav>
   );
 }
@@ -84,40 +109,62 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       .catch(() => undefined);
   }, []);
 
-  const clientName = tenant?.client?.businessName || "Fortune & Automations";
+  const clientName = tenant?.client?.businessName || BRAND.name;
   const legal =
-    tenant?.client?.legalBusinessName ||
-    tenant?.platform?.legal ||
-    "Fortune&Finance LLC";
+    tenant?.client?.legalBusinessName || tenant?.platform?.legal || BRAND.legal;
   const productLine = "Business Dashboard";
 
   return (
     <>
-      {open ? <div className="sidebar-scrim" onClick={onClose} /> : null}
-      <aside className={`app-sidebar${open ? " open" : ""}`}>
-        <Link className="sidebar-brand" href="/dashboard" onClick={onClose}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/fna-logo.jpg" alt="" width={36} height={36} />
-          <span className="sidebar-brand-text">
-            <strong>{clientName}</strong>
-            <small>{productLine}</small>
-          </span>
+      {open ? (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="Close menu"
+          onClick={onClose}
+        />
+      ) : null}
+      <aside
+        className={`app-sidebar${open ? " open" : ""}`}
+        aria-label="Application"
+        id="app-sidebar"
+      >
+        <div className="sidebar-brand-row">
+          <Link className="sidebar-brand" href="/dashboard" onClick={onClose}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/fna-logo.jpg" alt="Fortune & Automations" width={36} height={36} />
+            <span className="sidebar-brand-text">
+              <strong>{clientName}</strong>
+              <small>{productLine}</small>
+            </span>
+          </Link>
           <button className="sidebar-close" onClick={onClose} aria-label="Close menu" type="button">
             ×
           </button>
-        </Link>
-        <SidebarLinks onNavigate={onClose} />
-        <div className="sidebar-footer">
-          {legal} · AUTOMATION · WEBSITES · BRANDING · SYSTEMS
         </div>
+        <SidebarLinks onNavigate={onClose} />
+        <div className="sidebar-footer">{legal} · AUTOMATION · WEBSITES · BRANDING · SYSTEMS</div>
       </aside>
     </>
   );
 }
 
-export function MobileMenuButton({ onClick }: { onClick: () => void }) {
+export function MobileMenuButton({
+  onClick,
+  open = false,
+}: {
+  onClick: () => void;
+  open?: boolean;
+}) {
   return (
-    <button className="menu-btn" type="button" onClick={onClick} aria-label="Open menu">
+    <button
+      className="menu-btn"
+      type="button"
+      onClick={onClick}
+      aria-label={open ? "Close menu" : "Open menu"}
+      aria-controls="app-sidebar"
+      aria-expanded={open}
+    >
       <Icon d="M3 6h18M3 12h18M3 18h18" />
     </button>
   );

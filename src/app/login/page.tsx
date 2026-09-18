@@ -96,7 +96,7 @@ function LoginForm() {
       <div className="login-card">
         <div className="brand-lockup" style={{ justifyContent: "center" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="brand-logo" src="/fna-logo.jpg" alt="" width={42} height={42} />
+          <img className="brand-logo" src="/fna-logo.jpg" alt="Fortune & Automations" width={42} height={42} />
         </div>
         <h1 className="serif" style={{ textAlign: "center", fontSize: "1.35rem" }}>
           {product}
@@ -107,16 +107,15 @@ function LoginForm() {
 
         {showMisconfigured ? (
           <div className="banner error">
-            This environment requires authentication but <code>AUTH_SECRET</code> is missing.
-            Production must never fail open.
+            Sign-in is not available for this environment yet. Contact Fortune & Automations for
+            help.
           </div>
         ) : null}
 
         {authReady === false && !showMisconfigured ? (
           <div className="banner">
-            Authentication is not enforced on this deployment yet. Set{" "}
-            <code>AUTH_SECRET</code> and owner credentials in the environment to enable login.
-            Preview may still use Vercel Deployment Protection.
+            Sign-in is not enabled for this deployment yet. Contact Fortune & Automations to finish
+            setup.
           </div>
         ) : null}
 
@@ -153,7 +152,7 @@ function LoginForm() {
           </button>
         </form>
         <p className="muted" style={{ marginTop: "1rem", fontSize: "0.85rem" }}>
-          Roles: Owner / Admin / Client. Credentials are never stored in this repository.
+          Use the email and password provided by Fortune & Automations.
         </p>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, DataTable, Button } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getSyncStore } from "@/lib/sync";
+import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -20,40 +21,44 @@ export default async function ContactsPage() {
 
   return (
     <AppShell>
-      <PageHead
-        title="Contacts"
-        description="People synced from HighLevel workflow webhooks. Search UI remains ready; data is not pulled via CRM list APIs."
-      />
+      <PageHead title="Contacts" description={SYNC_SOURCE_SHORT} />
 
       <StatusBanner>
         {waiting
-          ? "Waiting for HighLevel sync — no contacts received yet."
-          : `${contacts.length} contact(s) from webhook sync. Phone/email masked in this view.`}
+          ? syncBannerWaiting("contacts")
+          : `${contacts.length} contact(s) from workflow sync. Phone/email masked in this view.`}
       </StatusBanner>
 
-      <div className="grid grid-2" style={{ margin: "1.1rem 0" }}>
-        <div>
-          <label htmlFor="contact-search">Search</label>
-          <input
-            id="contact-search"
-            type="text"
-            placeholder="Search by name, email, or phone"
-            disabled
-          />
+      <fieldset className="disabled-controls" disabled aria-disabled="true">
+        <legend className="sr-only">Filters unavailable</legend>
+        <p className="muted" style={{ margin: "0 0 0.6rem" }}>
+          Search, filters, and adding contacts are not available yet.
+        </p>
+        <div className="grid grid-2" style={{ margin: "0 0 1.1rem" }}>
+          <div>
+            <label htmlFor="contact-search">Search (coming soon)</label>
+            <input
+              id="contact-search"
+              type="search"
+              placeholder="Not available yet"
+              disabled
+              tabIndex={-1}
+            />
+          </div>
+          <div>
+            <label htmlFor="contact-source">Source (coming soon)</label>
+            <select id="contact-source" disabled defaultValue="" tabIndex={-1}>
+              <option value="">All sources</option>
+            </select>
+          </div>
         </div>
-        <div>
-          <label htmlFor="contact-source">Source</label>
-          <select id="contact-source" disabled defaultValue="">
-            <option value="">All sources</option>
-          </select>
-        </div>
-      </div>
+      </fieldset>
 
       <Card
         title="All Contacts"
         action={
           <Button size="sm" variant="secondary" disabled>
-            Add a contact
+            Add a contact (coming soon)
           </Button>
         }
       >
@@ -64,7 +69,7 @@ export default async function ContactsPage() {
             columns={["Name", "Phone", "Email", "Source", "Last Activity"]}
             rows={rows}
             emptyTitle="No contacts yet"
-            emptyNote="Contacts will appear here once HighLevel sync events arrive."
+            emptyNote="Contacts will appear here once sync events arrive."
           />
         )}
       </Card>

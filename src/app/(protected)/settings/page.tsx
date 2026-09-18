@@ -3,17 +3,13 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, Badge, EmptyState, PageHead } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
-import { missingOwnerValues } from "@/lib/owner-values";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Health = {
   ok?: boolean;
-  dryRun?: boolean;
   ghl?: {
     connected?: boolean;
-    mode?: string;
     error?: string | null;
-    locationId?: string;
     locationName?: string | null;
   };
 };
@@ -27,21 +23,48 @@ export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
   const [tenant, setTenant] = useState<TenantPublic | null>(null);
   const [err, setErr] = useState("");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthorized" | "error">(
+    "loading"
+  );
+
+  const load = useCallback(async () => {
+    setLoadState("loading");
+    setErr("");
+    try {
+      const [healthRes, tenantRes] = await Promise.all([
+        fetch("/api/health"),
+        fetch("/api/tenant/public"),
+      ]);
+      if (healthRes.status === 401 || healthRes.status === 403) {
+        setLoadState("unauthorized");
+        setErr("Your session expired or you are not signed in. Sign out and sign back in.");
+        return;
+      }
+      if (!healthRes.ok) {
+        setLoadState("error");
+        setErr("Could not load settings status. Try again in a moment.");
+        return;
+      }
+      const healthJson = (await healthRes.json()) as Health;
+      setHealth(healthJson);
+      if (tenantRes.ok) {
+        setTenant((await tenantRes.json()) as TenantPublic);
+      }
+      setLoadState("ready");
+    } catch {
+      setLoadState("error");
+      setErr("Network error while loading settings.");
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then(setHealth)
-      .catch(() => setErr("Health endpoint is not reachable. Start the Next.js server."));
-    fetch("/api/tenant/public")
-      .then((r) => r.json())
-      .then(setTenant)
-      .catch(() => undefined);
-  }, []);
+    void load();
+  }, [load]);
 
   const connected = Boolean(health?.ghl?.connected);
   const crmTone = connected ? "ok" : health?.ghl?.error ? "warn" : "neutral";
-  const crmLabel = connected ? "Connected" : "Not connected";
+  const crmLabel =
+    loadState === "loading" ? "Checking…" : connected ? "Connected" : "Not connected";
   const bizName = tenant?.client?.businessName || BRAND.name;
   const bizTz = tenant?.client?.timezone || BRAND.timezone;
 
@@ -49,34 +72,54 @@ export default function SettingsPage() {
     <AppShell>
       <PageHead
         title="Settings"
-        description="Business profile, integrations, and preferences for this shell. No billing, DNS, or OAuth controls live here yet."
+        description="Business profile and connection status for your Business Dashboard."
       />
-      {err ? <div className="banner error">{err}</div> : null}
+      {err ? (
+        <div className="banner error" role="alert">
+          {err}
+          {loadState === "error" || loadState === "unauthorized" ? (
+            <div style={{ marginTop: "0.6rem" }}>
+              <button type="button" className="btn secondary sm" onClick={() => void load()}>
+                Try again
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid grid-2">
         <Card title="Business Profile">
           <label htmlFor="biz-name">Business name</label>
-          <input id="biz-name" value={bizName} readOnly disabled />
+          <input id="biz-name" value={bizName} readOnly disabled aria-disabled="true" />
           <label htmlFor="biz-tz">Timezone</label>
-          <input id="biz-tz" value={bizTz} readOnly disabled />
+          <input id="biz-tz" value={bizTz} readOnly disabled aria-disabled="true" />
           <label htmlFor="biz-hours">Business hours</label>
-          <input id="biz-hours" placeholder="Not set yet" disabled />
+          <input
+            id="biz-hours"
+            placeholder="Not set yet"
+            disabled
+            aria-disabled="true"
+            title="Editing business hours is not available yet"
+          />
           <p className="muted" style={{ marginTop: "0.6rem" }}>
-            Client business identity comes from deployment ClientConfig. Product chrome remains{" "}
+            Profile details are managed by Fortune & Automations for{" "}
             {tenant?.platform?.productName || BRAND.product}.
           </p>
         </Card>
 
         <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
           <p>
-            CRM connection: {health ? health.ghl?.mode || "unknown" : "checking…"}
-            {health?.ghl?.locationName ? <span> — {health.ghl.locationName}</span> : null}
-            {health?.ghl?.error ? <span className="muted"> — {health.ghl.error}</span> : null}
+            {connected
+              ? "Your CRM connection is active."
+              : loadState === "loading"
+                ? "Checking connection status…"
+                : "Your CRM connection is not active yet."}
+            {health?.ghl?.locationName ? (
+              <span className="muted"> Location label: {health.ghl.locationName}</span>
+            ) : null}
           </p>
           <p className="muted">
-            Agency PIT health proves authentication and configured location identity. Dashboard lists
-            populate from HighLevel workflow webhooks (/api/webhooks/ghl). See /api/sync/health for
-            sync counts.
+            Lists and metrics update when connected workflows send activity into this dashboard.
           </p>
         </Card>
       </div>
@@ -87,37 +130,24 @@ export default function SettingsPage() {
         </Card>
 
         <Card title="Notifications">
-          <label className="check">
-            <input type="checkbox" disabled />
-            <span>New lead alerts</span>
-          </label>
-          <label className="check">
-            <input type="checkbox" disabled />
-            <span>Daily activity summary</span>
-          </label>
-          <label className="check">
-            <input type="checkbox" disabled />
-            <span>Overdue follow-up reminders</span>
-          </label>
-          <p className="muted" style={{ marginTop: "0.4rem" }}>
-            Notification delivery isn&apos;t connected yet — preferences shown for preview only.
+          <p className="muted" style={{ marginTop: 0 }}>
+            Notification preferences are not available yet.
           </p>
-        </Card>
-      </div>
-
-      <div style={{ marginTop: "1.1rem" }}>
-        <Card title="Owner values still required">
-          <p className="muted" style={{ marginBottom: "0.6rem" }}>
-            Single app insertion point: <code>src/lib/owner-values.ts</code>. Mirror the same
-            verified value into the matching GHL Custom Value. Do not invent values.
-          </p>
-          <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-            {missingOwnerValues().map((v) => (
-              <li key={v.key}>
-                {v.label} → {v.ghlCustomValueName}
-              </li>
-            ))}
-          </ul>
+          <fieldset disabled aria-disabled="true" className="disabled-controls">
+            <legend className="sr-only">Notification preferences (unavailable)</legend>
+            <label className="check">
+              <input type="checkbox" disabled tabIndex={-1} />
+              <span>New lead alerts (coming soon)</span>
+            </label>
+            <label className="check">
+              <input type="checkbox" disabled tabIndex={-1} />
+              <span>Daily activity summary (coming soon)</span>
+            </label>
+            <label className="check">
+              <input type="checkbox" disabled tabIndex={-1} />
+              <span>Overdue follow-up reminders (coming soon)</span>
+            </label>
+          </fieldset>
         </Card>
       </div>
     </AppShell>
