@@ -74,9 +74,9 @@ export default function SettingsPage() {
             {health?.ghl?.error ? <span className="muted"> — {health.ghl.error}</span> : null}
           </p>
           <p className="muted">
-            Agency PIT health proves authentication and configured location identity. Dashboard lists
-            populate from HighLevel workflow webhooks (/api/webhooks/ghl). See /api/sync/health for
-            sync counts.
+            Integration health confirms this deployment can authenticate to its configured CRM
+            location. Dashboard lists populate from connected workflow sync — not live CRM list
+            APIs.
           </p>
         </Card>
       </div>
@@ -108,8 +108,8 @@ export default function SettingsPage() {
       <div style={{ marginTop: "1.1rem" }}>
         <Card title="Owner values still required">
           <p className="muted" style={{ marginBottom: "0.6rem" }}>
-            Single app insertion point: <code>src/lib/owner-values.ts</code>. Mirror the same
-            verified value into the matching GHL Custom Value. Do not invent values.
+            Owner checklist values still required for this client. Mirror each verified value into
+            the matching CRM custom field. Do not invent values.
           </p>
           <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
             {missingOwnerValues().map((v) => (

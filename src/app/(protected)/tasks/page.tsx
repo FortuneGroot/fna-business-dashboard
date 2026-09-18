@@ -3,6 +3,7 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getSyncStore } from "@/lib/sync";
+import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -14,13 +15,13 @@ export default async function TasksPage() {
     <AppShell>
       <PageHead
         title="Tasks"
-        description="Staff next actions synced from HighLevel task workflows. Nothing is invented here."
+        description={`Staff next actions from connected task workflows. ${SYNC_SOURCE_SHORT}`}
       />
 
       <StatusBanner>
         {waiting
-          ? "Waiting for HighLevel sync — no task events yet."
-          : `${tasks.length} task event(s) synced from webhooks.`}
+          ? syncBannerWaiting("task events")
+          : `${tasks.length} task event(s) synced.`}
       </StatusBanner>
 
       <div style={{ marginTop: "1.1rem" }}>
@@ -39,7 +40,7 @@ export default async function TasksPage() {
             </ul>
           )}
           {!waiting && tasks.length === 0 ? (
-            <EmptyState title="No tasks yet" note="Waiting for HighLevel sync / no events yet." />
+            <EmptyState title="No tasks yet" note="No task events have arrived yet." />
           ) : null}
         </Card>
       </div>

@@ -5,6 +5,7 @@ import { SidebarIcon } from "@/components/Sidebar";
 import { BRAND } from "@/lib/brand";
 import { getSyncStore } from "@/lib/sync";
 import Link from "next/link";
+import { SYNC_SOURCE_SHORT } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -41,10 +42,7 @@ export default async function ReportingPage() {
 
   return (
     <AppShell>
-      <PageHead
-        title="Reports"
-        description="Figures come from the normalized HighLevel webhook sync store. Nothing is fabricated — values stay at — until sync events arrive."
-      />
+      <PageHead title="Reports" description={SYNC_SOURCE_SHORT} />
 
       <div className="grid grid-4">
         {metrics.map((m) => (

@@ -96,7 +96,7 @@ function LoginForm() {
       <div className="login-card">
         <div className="brand-lockup" style={{ justifyContent: "center" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="brand-logo" src="/fna-logo.jpg" alt="" width={42} height={42} />
+          <img className="brand-logo" src="/fna-logo.jpg" alt="Fortune & Automations" width={42} height={42} />
         </div>
         <h1 className="serif" style={{ textAlign: "center", fontSize: "1.35rem" }}>
           {product}

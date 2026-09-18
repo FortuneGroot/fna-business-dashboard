@@ -7,6 +7,11 @@ import {
   configuredCalendars,
   looksLikePlaceholderCalendars,
 } from "@/lib/tenant-ui";
+import {
+  PLACEHOLDER_CONFIG_CALENDARS,
+  SYNC_SOURCE_SHORT,
+  syncBannerWaiting,
+} from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -20,15 +25,15 @@ export default async function CalendarPage() {
     <AppShell>
       <PageHead
         title="Calendars"
-        description="Bookings synced from HighLevel appointment workflows. A website form preferred time is still a request, not a reserved slot."
+        description={`Bookings from connected appointment workflows. A website form preferred time is still a request, not a reserved slot. ${SYNC_SOURCE_SHORT}`}
       />
 
       <StatusBanner>
         {calendarsBlocked
-          ? "Calendar IDs still contain placeholders — capture real GHL calendar IDs before go-live."
+          ? PLACEHOLDER_CONFIG_CALENDARS
           : waiting
-            ? "Waiting for HighLevel sync — no appointments received yet."
-            : `${appointments.length} appointment(s) synced from webhooks.`}
+            ? syncBannerWaiting("appointments")
+            : `${appointments.length} appointment(s) synced.`}
       </StatusBanner>
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>

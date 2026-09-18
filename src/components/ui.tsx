@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 /** Shared presentational components for the F&A Business Dashboard.
  * Keep these dumb/reusable — pages compose them, they never fetch data
@@ -20,7 +21,7 @@ export function Card({
     <article className={`card ${className}`.trim()}>
       {(title || action) && (
         <div className="card-head">
-          {title ? <h3>{title}</h3> : <span />}
+          {title ? <h2 className="card-title">{title}</h2> : <span />}
           {action}
         </div>
       )}
@@ -34,22 +35,34 @@ export function MetricTile({
   value,
   note,
   icon,
+  href,
 }: {
   label: string;
   value: string;
   note?: string;
   icon?: ReactNode;
+  href?: string;
 }) {
-  return (
-    <article className="card metric-tile">
+  const body = (
+    <>
       <div className="metric-tile-top">
         <span className="metric-label">{label}</span>
-        {icon ? <span className="metric-tile-icon">{icon}</span> : null}
+        {icon ? <span className="metric-tile-icon" aria-hidden="true">{icon}</span> : null}
       </div>
       <div className="metric">{value}</div>
       {note ? <p className="metric-note">{note}</p> : null}
-    </article>
+    </>
   );
+
+  if (href) {
+    return (
+      <Link className="card metric-tile metric-tile-link" href={href} aria-label={`${label}: ${value}`}>
+        {body}
+      </Link>
+    );
+  }
+
+  return <article className="card metric-tile">{body}</article>;
 }
 
 export function Badge({
@@ -73,12 +86,16 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="empty">
+    <div className="empty" role="status">
       <strong>{title}</strong>
       {note ? <span>{note}</span> : null}
       {action}
     </div>
   );
+}
+
+function isInternalHref(href: string): boolean {
+  return href.startsWith("/") && !href.startsWith("//");
 }
 
 export function Button({
@@ -89,6 +106,7 @@ export function Button({
   onClick,
   type = "button",
   disabled,
+  "aria-pressed": ariaPressed,
 }: {
   children: ReactNode;
   variant?: "primary" | "gold" | "secondary" | "ghost";
@@ -97,18 +115,31 @@ export function Button({
   onClick?: () => void;
   type?: "button" | "submit";
   disabled?: boolean;
+  "aria-pressed"?: boolean;
 }) {
   const cls = ["btn", variant === "primary" ? "" : variant, size ?? ""].filter(Boolean).join(" ");
-  if (href) {
-    // eslint-disable-next-line @next/next/no-html-link-for-pages
+  if (href && !disabled) {
+    if (isInternalHref(href)) {
+      return (
+        <Link className={cls} href={href}>
+          {children}
+        </Link>
+      );
+    }
     return (
-      <a className={cls} href={href}>
+      <a className={cls} href={href} rel="noreferrer" target="_blank">
         {children}
       </a>
     );
   }
   return (
-    <button className={cls} type={type} onClick={onClick} disabled={disabled}>
+    <button
+      className={cls}
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={ariaPressed}
+    >
       {children}
     </button>
   );
@@ -138,7 +169,9 @@ export function DataTable({
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c}>{c}</th>
+              <th key={c} scope="col">
+                {c}
+              </th>
             ))}
           </tr>
         </thead>
@@ -171,11 +204,24 @@ export function Modal({
 }) {
   if (!open) return null;
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="modal-overlay"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <h3 style={{ margin: 0 }}>{title}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
+          <button className="modal-close" onClick={onClose} aria-label="Close dialog" type="button">
             ×
           </button>
         </div>
@@ -193,6 +239,21 @@ export function PageHead({ title, description, action }: { title: string; descri
         {description ? <p className="muted">{description}</p> : null}
       </div>
       {action}
+    </div>
+  );
+}
+
+export function LoadError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="banner error" role="alert">
+      <strong>Couldn’t load this view.</strong> {message}
+      {onRetry ? (
+        <div style={{ marginTop: "0.6rem" }}>
+          <button type="button" className="btn secondary sm" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

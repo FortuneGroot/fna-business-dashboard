@@ -4,6 +4,7 @@ import { PageHead, Card, MetricTile, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getSyncStore } from "@/lib/sync";
 import { clientReviewUrl } from "@/lib/tenant";
+import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -18,30 +19,27 @@ export default async function ReviewsPage() {
     {
       label: "Review events",
       value: waiting ? "—" : String(reviews.length),
-      note: "Synced review.request / feedback events only.",
+      note: "Synced review request and feedback events only.",
     },
     {
       label: "Requests sent",
       value: waiting ? "—" : String(requested),
-      note: "review.requested webhook count.",
+      note: "Review-request events received.",
     },
     {
       label: "Feedback received",
       value: waiting ? "—" : String(feedback),
-      note: "review.feedback_received webhook count.",
+      note: "Feedback-received events only.",
     },
   ];
 
   return (
     <AppShell>
-      <PageHead
-        title="Reputation"
-        description="Review request and feedback events from HighLevel workflows. Figures stay blank until sync events arrive."
-      />
+      <PageHead title="Reputation" description={SYNC_SOURCE_SHORT} />
 
       <StatusBanner>
         {waiting
-          ? "Waiting for HighLevel sync / no review events yet."
+          ? syncBannerWaiting("review events")
           : `${reviews.length} review event(s) synced.${reviewUrl ? " Client review URL is configured." : ""}`}
       </StatusBanner>
 
@@ -69,7 +67,7 @@ export default async function ReviewsPage() {
           {!waiting && reviews.length === 0 ? (
             <EmptyState
               title="No reviews yet"
-              note="Waiting for HighLevel sync / no events yet."
+              note="No review events have arrived yet."
             />
           ) : null}
         </Card>

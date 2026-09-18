@@ -8,6 +8,11 @@ import {
   configuredStageNames,
   looksLikePlaceholderStages,
 } from "@/lib/tenant-ui";
+import {
+  PLACEHOLDER_CONFIG_STAGES,
+  SYNC_SOURCE_SHORT,
+  syncBannerWaiting,
+} from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -28,14 +33,14 @@ export default async function PipelinePage() {
     <AppShell>
       <PageHead
         title="Opportunities"
-        description="Your sales board — opportunities synced from HighLevel webhooks, grouped by stage."
+        description={`Your sales board — opportunities grouped by stage. ${SYNC_SOURCE_SHORT}`}
       />
 
       <StatusBanner>
         {stagesBlocked
-          ? "Pipeline stages still contain placeholders — capture real GHL stage IDs before go-live."
+          ? PLACEHOLDER_CONFIG_STAGES
           : waiting
-            ? "Waiting for HighLevel sync — no opportunities received yet."
+            ? syncBannerWaiting("opportunities")
             : `${pipelineName} (synced). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
 
