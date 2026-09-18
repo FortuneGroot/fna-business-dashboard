@@ -68,7 +68,7 @@ export default async function DashboardPage() {
   return (
     <AppShell>
       <section className="hero">
-        <Badge tone="gold">Owner Command Center</Badge>
+        <Badge tone="gold">Business Dashboard</Badge>
         <h1 style={{ marginTop: "0.6rem" }}>{platformProductName()}</h1>
         <p>
           Client: <strong>{clientBusinessName()}</strong>. AUTOMATION · WEBSITES · BRANDING · SYSTEMS.

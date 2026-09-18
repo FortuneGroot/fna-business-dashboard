@@ -11,7 +11,7 @@
   --white: #ffffff;
 
   --ink: #23303f;
-  --muted: #6b7480;
+  --muted: #5a6570;
   --line: rgba(49, 66, 88, 0.1);
   --line-strong: rgba(49, 66, 88, 0.18);
   --card: #ffffff;
@@ -168,7 +168,12 @@ img { max-width: 100%; }
   border: 1px solid rgba(188, 160, 119, 0.25);
 }
 .hero h1 { color: var(--white); margin: 0 0 0.5rem; font-size: clamp(1.5rem, 3vw, 2.1rem); }
-.hero p { color: rgba(243, 239, 233, 0.88); max-width: 46rem; margin: 0; }
+.hero p { color: rgba(243, 239, 233, 0.92); max-width: 46rem; margin: 0; }
+.hero .badge {
+  background: rgba(243, 239, 233, 0.16);
+  color: var(--cream);
+  border: 1px solid rgba(188, 160, 119, 0.55);
+}
 
 /* ---------- Grid / cards ---------- */
 .grid { display: grid; gap: 1.1rem; }

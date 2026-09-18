@@ -10,6 +10,13 @@ import { sanitizeClientFacingCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
+/** Never surface EMAIL-/SMS-/ALERT- template IDs in client-facing headings. */
+function clientFacingTitle(name: string | undefined, fallback: string): string {
+  const raw = String(name || "").trim();
+  if (!raw || /^(EMAIL|SMS|ALERT)-\d+/i.test(raw)) return fallback;
+  return raw.replace(/^(EMAIL|SMS|ALERT)-\d+\s*[—–:-]\s*/i, "").trim() || fallback;
+}
+
 export default function LibraryPage() {
   const biz = clientBusinessName();
   const resolvedSnippets = snippets.map((s) => ({
@@ -38,9 +45,11 @@ export default function LibraryPage() {
       />
 
       <Card title={`Email drafts (${resolvedEmails.length})`}>
-        {resolvedEmails.map((e) => (
+        {resolvedEmails.map((e, index) => (
           <section key={e.id} style={{ marginBottom: "1.1rem" }}>
-            <h3 style={{ marginBottom: "0.25rem" }}>{e.name}</h3>
+            <h3 style={{ marginBottom: "0.25rem" }}>
+              {clientFacingTitle(e.name, `Email draft ${index + 1}`)}
+            </h3>
             <p className="muted" style={{ marginTop: 0 }}>
               Subject: {e.subject}
             </p>
@@ -51,8 +60,13 @@ export default function LibraryPage() {
 
       <div style={{ marginTop: "1rem" }}>
         <Card title={`Text drafts (${resolvedSms.length})`}>
-          {resolvedSms.map((s) => (
-            <p key={s.id}>{s.text}</p>
+          {resolvedSms.map((s, index) => (
+            <section key={s.id} style={{ marginBottom: "0.9rem" }}>
+              <h3 style={{ marginBottom: "0.25rem", fontSize: "1rem" }}>
+                Text message {index + 1}
+              </h3>
+              <p style={{ margin: 0 }}>{s.text}</p>
+            </section>
           ))}
         </Card>
       </div>
@@ -62,9 +76,11 @@ export default function LibraryPage() {
           <p className="muted" style={{ marginTop: 0 }}>
             These drafts are inactive until Fortune & Automations turns them on with you.
           </p>
-          {resolvedAlerts.map((a) => (
+          {resolvedAlerts.map((a, index) => (
             <section key={a.id} style={{ marginBottom: "1rem" }}>
-              <h3 style={{ marginBottom: "0.25rem" }}>{a.name}</h3>
+              <h3 style={{ marginBottom: "0.25rem" }}>
+                {clientFacingTitle(a.name, `Alert draft ${index + 1}`)}
+              </h3>
               <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit" }}>{a.body}</pre>
             </section>
           ))}
@@ -75,7 +91,7 @@ export default function LibraryPage() {
         <Card title={`Conversation snippets (${resolvedSnippets.length})`}>
           {resolvedSnippets.map((s) => (
             <p key={s.id}>
-              <strong>{s.title}</strong> — {s.body}
+              <strong>{clientFacingTitle(s.title, "Snippet")}</strong> — {s.body}
             </p>
           ))}
         </Card>

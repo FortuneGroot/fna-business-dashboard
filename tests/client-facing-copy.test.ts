@@ -57,6 +57,16 @@ describe("client-facing copy hygiene", () => {
     assert.match(note, /Nothing received for contacts yet/i);
   });
 
+  it("library headings never expose EMAIL-/SMS-/ALERT- template IDs", () => {
+    const text = readFileSync(join(ROOT, "app", "(protected)", "library", "page.tsx"), "utf8");
+    const visible = text
+      .replace(/key=\{[^}]+\}/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.match(visible, /clientFacingTitle/);
+    assert.equal(/<h3[^>]*>\{[esa]\.id\}/.test(visible), false);
+  });
+
   it("sanitizeClientFacingCopy strips CRM merge tokens", () => {
     const raw =
       "Hello [[CV:Business Name]] book [[CV:Booking URL]] at [[APPT:Start]] {{CLIENT_BUSINESS_NAME}}";

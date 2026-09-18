@@ -26,7 +26,7 @@ export const SYNC_SOURCE_SHORT =
   "Figures come from connected workflow sync. Values stay at — until events arrive.";
 
 export const SYNC_SOURCE_DETAIL =
-  "Data on this page comes from connected workflow sync — not live CRM list APIs.";
+  "Data on this page updates when your connected workflows send activity — it is not a live contact list.";
 
 export const SYNC_BANNER_ACTIVE =
   "Synced from connected workflows. Your CRM remains the source of record.";
@@ -64,4 +64,6 @@ export const CLIENT_FORBIDDEN_RENDER_TERMS = [
   "ClientConfig",
   "Next.js",
   "AUTH_SECRET",
+  "Owner Command Center",
+  "CRM list APIs",
 ] as const;
