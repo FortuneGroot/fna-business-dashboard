@@ -13,6 +13,8 @@ export {
   verifySessionToken,
 } from "./session";
 export { safeNextPath } from "./safe-next";
+export { interpretAuthMeProbe } from "./auth-me-probe";
+export type { AuthMeProbeBody, AuthMeProbeResult } from "./auth-me-probe";
 export { passwordsMatch, consumeLoginAttempt, resetLoginRateLimitForTests } from "./password";
 export {
   createStoredSession,

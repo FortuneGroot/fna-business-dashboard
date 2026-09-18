@@ -12,7 +12,8 @@
     "client:prepare": "node ./node_modules/tsx/dist/cli.mjs scripts/client-prepare.ts",
     "client:validate": "node ./node_modules/tsx/dist/cli.mjs scripts/validate-client-env.ts",
     "client:generate": "node ./node_modules/tsx/dist/cli.mjs scripts/generate-client-deployment.ts",
-    "qa": "python qa/run_static_audit.py"
+    "qa": "python qa/run_static_audit.py",
+    "verify:auth": "node scripts/verify-auth-runtime.mjs"
   },
   "dependencies": {
     "next": "^15.5.25",
