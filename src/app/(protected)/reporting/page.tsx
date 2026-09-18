@@ -2,7 +2,6 @@ import { AppShell } from "@/components/AppShell";
 import { Card, MetricTile, EmptyState, PageHead } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { SidebarIcon } from "@/components/Sidebar";
-import { BRAND } from "@/lib/brand";
 import { getSyncStore } from "@/lib/sync";
 import Link from "next/link";
 import { SYNC_SOURCE_SHORT } from "@/lib/ui/sync-copy";
@@ -17,26 +16,30 @@ export default async function ReportingPage() {
     {
       label: "Leads Synced",
       value: waiting ? "—" : String(summary.contactsCount),
-      note: "Contacts received via webhook sync — never fabricated.",
+      note: "Contacts received from connected workflow sync.",
       icon: "contacts" as const,
+      href: "/contacts",
     },
     {
       label: "Won Count",
       value: waiting ? "—" : String(summary.wonCount),
-      note: "From opportunity.won sync events.",
+      note: "From won-opportunity sync events.",
       icon: "reports" as const,
+      href: "/pipeline",
     },
     {
       label: "Open Pipeline Value",
       value: waiting ? "—" : `$${summary.openPipelineValue.toLocaleString()}`,
       note: "Sum of open synced opportunities.",
       icon: "opportunities" as const,
+      href: "/pipeline",
     },
     {
       label: "Appointments Synced",
       value: waiting ? "—" : String(summary.appointmentsCount),
-      note: "From appointment.* webhook events.",
+      note: "From appointment sync events.",
       icon: "calendar" as const,
+      href: "/calendar",
     },
   ];
 
@@ -51,6 +54,7 @@ export default async function ReportingPage() {
             label={m.label}
             value={m.value}
             note={m.note}
+            href={m.href}
             icon={<SidebarIcon name={m.icon} />}
           />
         ))}
@@ -62,15 +66,14 @@ export default async function ReportingPage() {
             <WaitingForSync entity="report data" />
           ) : (
             <EmptyState
-              title="Sync-backed reporting"
-              note="Detailed trend charts can be added once durable production persistence is connected. Current totals reflect the in-process sync store."
+              title="Totals only for now"
+              note="Detailed trend charts are not available yet. Current totals reflect synced activity."
             />
           )}
         </Card>
       </div>
 
       <p className="muted" style={{ marginTop: "1.1rem" }}>
-        Full breakdown view (when enabled): {BRAND.dashboards.sales}.{" "}
         <Link href="/dashboard">Back to dashboard</Link>
       </p>
     </AppShell>

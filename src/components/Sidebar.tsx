@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { BRAND } from "@/lib/brand";
+
 type TenantChrome = {
   client?: { businessName?: string; legalBusinessName?: string };
   platform?: { brandName?: string; productName?: string; legal?: string };
@@ -107,11 +109,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       .catch(() => undefined);
   }, []);
 
-  const clientName = tenant?.client?.businessName || "Fortune & Automations";
+  const clientName = tenant?.client?.businessName || BRAND.name;
   const legal =
-    tenant?.client?.legalBusinessName ||
-    tenant?.platform?.legal ||
-    "Fortune&Finance LLC";
+    tenant?.client?.legalBusinessName || tenant?.platform?.legal || BRAND.legal;
   const productLine = "Business Dashboard";
 
   return (

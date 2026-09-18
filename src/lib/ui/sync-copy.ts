@@ -1,12 +1,17 @@
 /**
  * Client-facing sync language for the Business Dashboard.
- * Never name HighLevel / GHL / LeadConnector in UI copy.
+ * Never name HighLevel / GHL / LeadConnector / Vercel / Supabase in UI copy.
  */
 
 export const SYNC_WAITING_TITLE = "Waiting for sync";
 
 export function syncWaitingNote(entity = "data"): string {
-  return `No ${entity} has arrived yet. Connected workflows send updates into this dashboard automatically. Figures stay blank until events arrive — nothing is invented here.`;
+  return `Nothing received for ${entity} yet. Connected workflows send updates into this dashboard automatically. Figures stay blank until events arrive — nothing is invented here.`;
+}
+
+/** Short empty-column note (no repeated full paragraphs). */
+export function syncColumnEmpty(): string {
+  return "None yet";
 }
 
 export function syncBannerWaiting(entity: string): string {
@@ -27,7 +32,36 @@ export const SYNC_BANNER_ACTIVE =
   "Synced from connected workflows. Your CRM remains the source of record.";
 
 export const PLACEHOLDER_CONFIG_STAGES =
-  "Pipeline stages still need final setup before go-live. Contact Fortune & Automations if this persists.";
+  "Pipeline stages still need final setup. Contact Fortune & Automations if this persists.";
 
 export const PLACEHOLDER_CONFIG_CALENDARS =
-  "Calendar setup still needs final IDs before go-live. Contact Fortune & Automations if this persists.";
+  "Calendar setup still needs final configuration. Contact Fortune & Automations if this persists.";
+
+/** Strip CRM merge tokens and technical markers from client-facing drafts. */
+export function sanitizeClientFacingCopy(text: string): string {
+  return String(text || "")
+    .replace(/\[\[CV:([^\]]+)\]\]/gi, (_m, name: string) => `[${String(name).trim()}]`)
+    .replace(/\[\[APPT:([^\]]+)\]\]/gi, (_m, name: string) => `[${String(name).trim()}]`)
+    .replace(/\[\[LINK:([^\]]+)\]\]/gi, (_m, name: string) => `[${String(name).trim()}]`)
+    .replace(/\[\[CONTACT:([^\]]+)\]\]/gi, (_m, name: string) => `[${String(name).trim()}]`)
+    .replace(/\[\[CONTEXT:([^\]]+)\]\]/gi, (_m, name: string) => `[${String(name).trim()}]`)
+    .replace(/\{\{CLIENT_BUSINESS_NAME\}\}/g, "[Business Name]")
+    .replace(/\{\{[^}]+\}\}/g, "[value]");
+}
+
+export const CLIENT_FORBIDDEN_RENDER_TERMS = [
+  "HighLevel",
+  "GoHighLevel",
+  "GHL",
+  "$297",
+  "/api/webhooks/ghl",
+  "Vercel",
+  "Supabase",
+  "qa.lead@example.invalid",
+  "Fortune&Finance",
+  "[[CV:",
+  "[[APPT:",
+  "ClientConfig",
+  "Next.js",
+  "AUTH_SECRET",
+] as const;

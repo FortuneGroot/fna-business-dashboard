@@ -29,30 +29,36 @@ export default async function ContactsPage() {
           : `${contacts.length} contact(s) from workflow sync. Phone/email masked in this view.`}
       </StatusBanner>
 
-      <div className="grid grid-2" style={{ margin: "1.1rem 0" }}>
-        <div>
-          <label htmlFor="contact-search">Search</label>
-          <input
-            id="contact-search"
-            type="search"
-            placeholder="Search by name, email, or phone"
-            disabled
-            aria-disabled="true"
-          />
+      <fieldset className="disabled-controls" disabled aria-disabled="true">
+        <legend className="sr-only">Filters unavailable</legend>
+        <p className="muted" style={{ margin: "0 0 0.6rem" }}>
+          Search, filters, and adding contacts are not available yet.
+        </p>
+        <div className="grid grid-2" style={{ margin: "0 0 1.1rem" }}>
+          <div>
+            <label htmlFor="contact-search">Search (coming soon)</label>
+            <input
+              id="contact-search"
+              type="search"
+              placeholder="Not available yet"
+              disabled
+              tabIndex={-1}
+            />
+          </div>
+          <div>
+            <label htmlFor="contact-source">Source (coming soon)</label>
+            <select id="contact-source" disabled defaultValue="" tabIndex={-1}>
+              <option value="">All sources</option>
+            </select>
+          </div>
         </div>
-        <div>
-          <label htmlFor="contact-source">Source</label>
-          <select id="contact-source" disabled defaultValue="" aria-disabled="true">
-            <option value="">All sources</option>
-          </select>
-        </div>
-      </div>
+      </fieldset>
 
       <Card
         title="All Contacts"
         action={
           <Button size="sm" variant="secondary" disabled>
-            Add a contact
+            Add a contact (coming soon)
           </Button>
         }
       >

@@ -50,7 +50,8 @@ h1, h2, h3, .serif {
 }
 p { line-height: 1.55; }
 .muted { color: var(--muted); }
-.gold { color: var(--gold); }
+.gold { color: var(--primary); }
+.gold-accent { color: var(--gold); }
 img { max-width: 100%; }
 
 /* ---------- App shell layout: left sidebar + top bar + content ---------- */
@@ -81,7 +82,7 @@ img { max-width: 100%; }
 .sidebar-brand img { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--gold); background: var(--primary); }
 .sidebar-brand-text { line-height: 1.2; }
 .sidebar-brand-text strong { display: block; font-family: "Libre Baskerville", Georgia, serif; font-size: 0.98rem; color: var(--white); }
-.sidebar-brand-text small { display: block; color: var(--gold); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 0.15rem; }
+.sidebar-brand-text small { display: block; color: var(--cream); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 0.15rem; }
 
 .sidebar-nav { flex: 1; padding: 0.75rem 0.6rem; display: flex; flex-direction: column; gap: 0.15rem; }
 .sidebar-section-label {
@@ -144,7 +145,7 @@ img { max-width: 100%; }
 }
 .topbar-profile { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; }
 .topbar-avatar {
-  width: 34px; height: 34px; border-radius: 999px; background: var(--primary); color: var(--gold);
+  width: 34px; height: 34px; border-radius: 999px; background: var(--primary); color: var(--white);
   display: grid; place-items: center; font-weight: 700; font-size: 0.8rem; border: 1px solid var(--gold);
 }
 
@@ -193,7 +194,7 @@ img { max-width: 100%; }
 .metric-tile-top { display: flex; align-items: center; justify-content: space-between; }
 .metric-tile-icon {
   width: 34px; height: 34px; border-radius: 10px; background: rgba(188, 160, 119, 0.16);
-  color: var(--gold); display: grid; place-items: center; flex-shrink: 0;
+  color: var(--primary); display: grid; place-items: center; flex-shrink: 0;
 }
 .metric-tile .metric { font-size: 1.9rem; font-family: "Libre Baskerville", Georgia, serif; color: var(--primary); line-height: 1; }
 .metric-tile .metric-label { font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -261,6 +262,13 @@ input:disabled, textarea:disabled, select:disabled { background: var(--cream); c
 textarea { min-height: 120px; }
 .check { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.8rem 0; font-size: 0.9rem; }
 .check input { width: auto; margin-top: 0.25rem; }
+.disabled-controls {
+  border: 0; margin: 0; padding: 0; min-inline-size: 0;
+}
+.disabled-controls[disabled],
+.disabled-controls[aria-disabled="true"] {
+  opacity: 0.85;
+}
 
 /* ---------- Table ---------- */
 .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--line); background: var(--white); }

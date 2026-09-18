@@ -11,6 +11,7 @@ import {
   PLACEHOLDER_CONFIG_CALENDARS,
   SYNC_SOURCE_SHORT,
   syncBannerWaiting,
+  syncColumnEmpty,
 } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,12 @@ export default async function CalendarPage() {
             : `${appointments.length} appointment(s) synced.`}
       </StatusBanner>
 
+      {waiting ? (
+        <div style={{ marginTop: "1.1rem" }}>
+          <WaitingForSync entity="appointments" />
+        </div>
+      ) : null}
+
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
         {calendars.map((cal) => {
           const items = appointments.filter(
@@ -51,12 +58,11 @@ export default async function CalendarPage() {
                 Duration: {cal.duration || "—"}
               </p>
               {waiting ? (
-                <WaitingForSync entity="appointments" />
+                <p className="muted" style={{ margin: 0 }}>
+                  {syncColumnEmpty()}
+                </p>
               ) : items.length === 0 && appointments.length === 0 ? (
-                <EmptyState
-                  title="No appointments scheduled"
-                  note="Bookings will appear here once appointment sync events arrive."
-                />
+                <EmptyState title="No appointments scheduled" />
               ) : (
                 <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
                   {(items.length ? items : appointments)
