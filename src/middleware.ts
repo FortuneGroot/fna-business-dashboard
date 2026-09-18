@@ -16,6 +16,9 @@ const PUBLIC_EXACT = new Set([
   "/api/webhooks/ghl",
   "/api/auth/login",
   "/api/auth/logout",
+  // Probe endpoint for login UI — route handler reports authEnforced / session.
+  // Must not be middleware-blocked with a bare 401 (that falsely looks like "auth off").
+  "/api/auth/me",
   "/api/tenant/public",
   "/api/leads",
 ]);
@@ -47,7 +50,6 @@ const PROTECTED_API_PREFIXES = [
   "/api/events",
   "/api/sync/health",
   "/api/onboarding/readiness",
-  "/api/auth/me",
 ];
 
 function isPublicPath(pathname: string): boolean {
@@ -153,6 +155,5 @@ export const config = {
     "/api/events",
     "/api/sync/health",
     "/api/onboarding/readiness",
-    "/api/auth/me",
   ],
 };

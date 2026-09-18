@@ -124,7 +124,8 @@ export function resolveEventType(payload: InboundSyncPayload): SyncEventType | n
  * Secret policy for $297 webhook ingestion:
  * - If GHL_WEBHOOK_SECRET is configured → always verify header.
  * - If GHL_WEBHOOK_ENFORCE_SECRET=true OR dryRun=false → require a valid secret.
- * - Otherwise (dev / dry-run without secret) → allow explicit development mode.
+ * - Callers must also set enforceFlag when VERCEL_ENV=production (route does this).
+ * - Otherwise (local dry-run without secret) → allow explicit development mode.
  */
 export function verifyWebhookSecret(opts: {
   signatureHeader: string;

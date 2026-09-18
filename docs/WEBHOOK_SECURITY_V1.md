@@ -19,5 +19,13 @@ Workflows should send the deployment secret in:
 - `x-webhook-secret`, or
 - `x-ghl-signature` (treated as shared-secret equality for V1)
 
+## Production endpoint (stable)
+- **URL:** `https://fna-client-app.vercel.app/api/webhooks/ghl`
+- **Method:** `POST`
+- **Auth header name:** `x-webhook-secret` (preferred) or `x-ghl-signature`
+- **Body:** JSON sync events per `GHL_SYNC_WEBHOOK_CONTRACT.md`
+- Middleware keeps this path public (no login redirect for machines).
+- When `VERCEL_ENV=production`, a configured `GHL_WEBHOOK_SECRET` is **required** even if `GHL_DRY_RUN=true`.
+
 ## Future (not V1)
 A shared multi-client secret database / agency-wide router is deferred. Do not build it until multi-tenant routing is an intentional product decision.

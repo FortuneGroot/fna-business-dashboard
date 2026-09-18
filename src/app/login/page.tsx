@@ -51,7 +51,12 @@ function LoginForm() {
     fetch("/api/auth/me")
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
-        setAuthReady(Boolean(data.authEnforced));
+        // Auth is enforced when the API says so, or when it returns 401 Unauthorized
+        // (session required). Do not treat a bare middleware 401 as "auth off".
+        const enforced =
+          data.authEnforced === true ||
+          (r.status === 401 && data.authEnforced !== false);
+        setAuthReady(enforced);
         if (data.authFailClosed && !data.authEnforced) {
           setError("Authentication is required but AUTH_SECRET is not configured.");
         }

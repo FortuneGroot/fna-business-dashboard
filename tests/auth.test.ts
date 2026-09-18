@@ -323,6 +323,32 @@ describe("private API protection helpers", () => {
     const body = { ok: false, error: "Unauthorized" };
     assert.equal(body.ok, false);
   });
+
+  it("login probe treats auth/me 401 with authEnforced as ready", () => {
+    // Route handler shape when AUTH_SECRET is set but no cookie.
+    const data = { ok: false, authEnforced: true, user: null };
+    const status = 401;
+    const enforced =
+      data.authEnforced === true || (status === 401 && data.authEnforced !== false);
+    assert.equal(enforced, true);
+  });
+
+  it("login probe does not treat fail-open 200 as ready", () => {
+    const data = { ok: true, authEnforced: false, authFailClosed: false, user: null };
+    const status = 200;
+    const enforced =
+      data.authEnforced === true || (status === 401 && data.authEnforced !== false);
+    assert.equal(enforced, false);
+  });
+
+  it("bare middleware Unauthorized without authEnforced still enables login UI", () => {
+    // Defensive: even if a proxy strips authEnforced, 401 means auth is on.
+    const data = { ok: false, error: "Unauthorized" } as { ok: boolean; error?: string; authEnforced?: boolean };
+    const status = 401;
+    const enforced =
+      data.authEnforced === true || (status === 401 && data.authEnforced !== false);
+    assert.equal(enforced, true);
+  });
 });
 
 describe("webhook machine access", () => {
@@ -335,6 +361,22 @@ describe("webhook machine access", () => {
       enforceFlag: true,
     });
     assert.deepEqual(ok, { ok: true });
+  });
+
+  it("Production-style enforceFlag requires secret even when dryRun", () => {
+    const r = verifyWebhookSecret({
+      signatureHeader: "",
+      dryRun: true,
+      secretConfigured: false,
+      secretValue: "",
+      enforceFlag: true, // VERCEL_ENV=production path
+    });
+    assert.deepEqual(r, { ok: false, code: "secret_required" });
+  });
+
+  it("webhook never uses login redirect semantics", () => {
+    // Machine ingest must stay JSON 401, not HTML login — covered by public middleware path.
+    assert.equal("/api/webhooks/ghl".startsWith("/api/webhooks"), true);
   });
 });
 

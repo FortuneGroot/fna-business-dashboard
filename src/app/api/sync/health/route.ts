@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
   const store = getSyncStore();
   const stats = await store.stats();
   const enforceFlag =
-    (process.env.GHL_WEBHOOK_ENFORCE_SECRET || "").toLowerCase() === "true";
+    (process.env.GHL_WEBHOOK_ENFORCE_SECRET || "").toLowerCase() === "true" ||
+    (process.env.VERCEL_ENV || "").trim().toLowerCase() === "production";
   const storageMode = getStorageMode();
   const webhookSecretEnforced = enforceFlag || !env.dryRun;
   let configuredLocation = env.locationId;
