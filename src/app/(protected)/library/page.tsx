@@ -4,6 +4,7 @@ import emails from "@/content/emails.json";
 import sms from "@/content/sms.json";
 import snippets from "@/content/snippets.json";
 import alerts from "@/content/alerts.json";
+import { requirePageRole } from "@/lib/auth/guards";
 import { applyClientBusinessName } from "@/lib/mapping";
 import { clientBusinessName } from "@/lib/tenant";
 import { sanitizeClientFacingCopy } from "@/lib/ui/sync-copy";
@@ -17,7 +18,8 @@ function clientFacingTitle(name: string | undefined, fallback: string): string {
   return raw.replace(/^(EMAIL|SMS|ALERT)-\d+\s*[—–:-]\s*/i, "").trim() || fallback;
 }
 
-export default function LibraryPage() {
+export default async function LibraryPage() {
+  await requirePageRole("ADMIN");
   const biz = clientBusinessName();
   const resolvedSnippets = snippets.map((s) => ({
     ...s,

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { BRAND } from "@/lib/brand";
 
 type TenantChrome = {
-  client?: { businessName?: string; legalBusinessName?: string };
+  client?: { businessName?: string };
   platform?: { brandName?: string; productName?: string; legal?: string };
 };
 
@@ -19,8 +19,7 @@ export function Footer() {
   }, []);
 
   const platform = tenant?.platform?.brandName || BRAND.name;
-  const clientLegal =
-    tenant?.client?.legalBusinessName || tenant?.platform?.legal || BRAND.legal;
+  const clientLegal = tenant?.platform?.legal || BRAND.legal;
 
   return (
     <footer className="app-footer">

@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { BRAND } from "@/lib/brand";
+import type { AuthRole } from "@/lib/auth/types";
+import { canAccessLibrary } from "@/lib/auth/types";
 
 type TenantChrome = {
-  client?: { businessName?: string; legalBusinessName?: string };
+  client?: { businessName?: string };
   platform?: { brandName?: string; productName?: string; legal?: string };
 };
 
@@ -61,10 +63,12 @@ const PRIMARY = [
   { href: "/reporting", label: "Reports", icon: "reports" },
 ];
 
-const SECONDARY = [
+type NavItem = { href: string; label: string; icon: string; minRole?: AuthRole };
+
+const SECONDARY: NavItem[] = [
   { href: "/settings", label: "Settings", icon: "settings" },
   { href: "/help", label: "Help & Support", icon: "help" },
-  { href: "/library", label: "Resources", icon: "resources" },
+  { href: "/library", label: "Resources", icon: "resources", minRole: "ADMIN" },
 ];
 
 function isActivePath(path: string, href: string): boolean {
@@ -73,9 +77,22 @@ function isActivePath(path: string, href: string): boolean {
   return path.startsWith(`${href}/`);
 }
 
-export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
+function navVisibleForRole(item: NavItem, role: AuthRole | null): boolean {
+  if (!item.minRole) return true;
+  if (!role) return false;
+  if (item.minRole === "ADMIN") return canAccessLibrary(role);
+  return false;
+}
+
+export function SidebarLinks({
+  onNavigate,
+  role,
+}: {
+  onNavigate?: () => void;
+  role?: AuthRole | null;
+}) {
   const path = usePathname();
-  const renderLink = (l: { href: string; label: string; icon: string }) => (
+  const renderLink = (l: NavItem) => (
     <Link
       key={l.href}
       href={l.href}
@@ -87,6 +104,7 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
       {l.label}
     </Link>
   );
+  const secondary = SECONDARY.filter((l) => navVisibleForRole(l, role ?? null));
   return (
     <nav className="sidebar-nav" aria-label="Primary">
       {PRIMARY.map(renderLink)}
@@ -94,7 +112,7 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
         Account
       </div>
       <div role="group" aria-labelledby="sidebar-account-label">
-        {SECONDARY.map(renderLink)}
+        {secondary.map(renderLink)}
       </div>
     </nav>
   );
@@ -102,16 +120,23 @@ export function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tenant, setTenant] = useState<TenantChrome | null>(null);
+  const [role, setRole] = useState<AuthRole | null>(null);
   useEffect(() => {
     fetch("/api/tenant/public")
       .then((r) => r.json())
       .then(setTenant)
       .catch(() => undefined);
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const next = d?.user?.role;
+        if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
+      })
+      .catch(() => undefined);
   }, []);
 
   const clientName = tenant?.client?.businessName || BRAND.name;
-  const legal =
-    tenant?.client?.legalBusinessName || tenant?.platform?.legal || BRAND.legal;
+  const legal = tenant?.platform?.legal || BRAND.legal;
   const productLine = "Business Dashboard";
 
   return (
@@ -142,7 +167,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ×
           </button>
         </div>
-        <SidebarLinks onNavigate={onClose} />
+        <SidebarLinks onNavigate={onClose} role={role} />
         <div className="sidebar-footer">{legal} · AUTOMATION · WEBSITES · BRANDING · SYSTEMS</div>
       </aside>
     </>
@@ -178,5 +203,3 @@ export function useSidebar() {
 export function SidebarIcon({ name }: { name: keyof typeof ICONS }) {
   return <Icon d={ICONS[name]} />;
 }
-
-export type { ReactNode };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
+import { requireApiRole } from "@/lib/auth";
 import { loadEnv } from "@/lib/env";
 import {
   getStorageMode,
@@ -18,10 +18,11 @@ export const dynamic = "force-dynamic";
  * Sync-layer health for the $297 webhook architecture.
  * Does not call HighLevel CRM read APIs.
  * Never exposes secret values.
+ * ADMIN+ only.
  */
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
+  const { error } = await requireApiRole(req, "ADMIN");
+  if (error) return error;
   const env = loadEnv();
   const store = getSyncStore();
   const stats = await store.stats();

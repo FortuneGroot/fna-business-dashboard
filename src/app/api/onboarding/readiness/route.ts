@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
+import { requireApiRole } from "@/lib/auth";
 import {
   evaluateClientReadiness,
   toPublicReadinessPayload,
@@ -11,10 +11,11 @@ export const dynamic = "force-dynamic";
 /**
  * Config-only onboarding readiness — same tenant model as runtime.
  * Never exposes webhook secrets, Supabase keys, GHL tokens, or passwords.
+ * OWNER only.
  */
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
+  const { error } = await requireApiRole(req, "OWNER");
+  if (error) return error;
   const config = getTenantConfig();
   const report = evaluateClientReadiness(config);
   const payload = toPublicReadinessPayload(report);

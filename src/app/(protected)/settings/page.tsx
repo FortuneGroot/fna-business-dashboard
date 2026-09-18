@@ -3,6 +3,8 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, Badge, EmptyState, PageHead } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
+import type { AuthRole } from "@/lib/auth/types";
+import { canAccessOwnerSettings } from "@/lib/auth/types";
 import { useCallback, useEffect, useState } from "react";
 
 type Health = {
@@ -14,14 +16,15 @@ type Health = {
   };
 };
 
-type TenantPublic = {
+type TenantConfig = {
   client?: { businessName?: string; timezone?: string };
-  platform?: { brandName?: string; productName?: string };
+  owner?: { pipelineName?: string; locationConfigured?: boolean };
 };
 
 export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
-  const [tenant, setTenant] = useState<TenantPublic | null>(null);
+  const [tenant, setTenant] = useState<TenantConfig | null>(null);
+  const [role, setRole] = useState<AuthRole | null>(null);
   const [err, setErr] = useState("");
   const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthorized" | "error">(
     "loading"
@@ -31,25 +34,34 @@ export default function SettingsPage() {
     setLoadState("loading");
     setErr("");
     try {
-      const [healthRes, tenantRes] = await Promise.all([
+      const [meRes, healthRes, tenantRes] = await Promise.all([
+        fetch("/api/auth/me"),
         fetch("/api/health"),
-        fetch("/api/tenant/public"),
+        fetch("/api/tenant/config"),
       ]);
+      if (meRes.ok) {
+        const me = await meRes.json();
+        const next = me?.user?.role;
+        if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
+      }
       if (healthRes.status === 401 || healthRes.status === 403) {
         setLoadState("unauthorized");
         setErr("Your session expired or you are not signed in. Sign out and sign back in.");
         return;
       }
-      if (!healthRes.ok) {
+      if (tenantRes.status === 401 || tenantRes.status === 403) {
+        setLoadState("unauthorized");
+        setErr("Your session expired or you are not signed in. Sign out and sign back in.");
+        return;
+      }
+      if (!healthRes.ok || !tenantRes.ok) {
         setLoadState("error");
         setErr("Could not load settings status. Try again in a moment.");
         return;
       }
       const healthJson = (await healthRes.json()) as Health;
       setHealth(healthJson);
-      if (tenantRes.ok) {
-        setTenant((await tenantRes.json()) as TenantPublic);
-      }
+      setTenant((await tenantRes.json()) as TenantConfig);
       setLoadState("ready");
     } catch {
       setLoadState("error");
@@ -61,6 +73,7 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
+  const isOwner = role ? canAccessOwnerSettings(role) : false;
   const connected = Boolean(health?.ghl?.connected);
   const crmTone = connected ? "ok" : health?.ghl?.error ? "warn" : "neutral";
   const crmLabel =
@@ -102,26 +115,36 @@ export default function SettingsPage() {
             title="Editing business hours is not available yet"
           />
           <p className="muted" style={{ marginTop: "0.6rem" }}>
-            Profile details are managed by Fortune & Automations for{" "}
-            {tenant?.platform?.productName || BRAND.product}.
+            Profile details are managed by Fortune & Automations for your Business Dashboard.
           </p>
         </Card>
 
-        <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
-          <p>
-            {connected
-              ? "Your CRM connection is active."
-              : loadState === "loading"
-                ? "Checking connection status…"
-                : "Your CRM connection is not active yet."}
-            {health?.ghl?.locationName ? (
-              <span className="muted"> Location label: {health.ghl.locationName}</span>
+        {isOwner ? (
+          <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
+            <p>
+              {connected
+                ? "Your CRM connection is active."
+                : loadState === "loading"
+                  ? "Checking connection status…"
+                  : "Your CRM connection is not active yet."}
+              {health?.ghl?.locationName ? (
+                <span className="muted"> Location label: {health.ghl.locationName}</span>
+              ) : null}
+            </p>
+            {tenant?.owner?.pipelineName ? (
+              <p className="muted">Pipeline: {tenant.owner.pipelineName}</p>
             ) : null}
-          </p>
-          <p className="muted">
-            Lists and metrics update when connected workflows send activity into this dashboard.
-          </p>
-        </Card>
+            <p className="muted">
+              Lists and metrics update when connected workflows send activity into this dashboard.
+            </p>
+          </Card>
+        ) : (
+          <Card title="Account">
+            <p className="muted" style={{ marginTop: 0 }}>
+              Integration and owner configuration are managed by your account owner.
+            </p>
+          </Card>
+        )}
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1.1rem" }}>

@@ -50,6 +50,7 @@ const PROTECTED_API_PREFIXES = [
   "/api/events",
   "/api/sync/health",
   "/api/onboarding/readiness",
+  "/api/tenant/config",
 ];
 
 function isPublicPath(pathname: string): boolean {
@@ -155,5 +156,6 @@ export const config = {
     "/api/events",
     "/api/sync/health",
     "/api/onboarding/readiness",
+    "/api/tenant/config",
   ],
 };

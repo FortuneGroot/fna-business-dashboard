@@ -21,7 +21,12 @@ export default function SupportPage() {
     setLoadState("loading");
     setErrorMessage("");
     try {
-      const res = await fetch("/api/tenant/public");
+      const res = await fetch("/api/tenant/config");
+      if (res.status === 401 || res.status === 403) {
+        setLoadState("error");
+        setErrorMessage("Your session expired or you are not signed in.");
+        return;
+      }
       if (!res.ok) {
         setLoadState("error");
         setErrorMessage("Could not load support contact details.");
