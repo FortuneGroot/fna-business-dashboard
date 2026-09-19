@@ -42,8 +42,27 @@ export default async function PipelinePage() {
           ? PLACEHOLDER_CONFIG_STAGES
           : waiting
             ? syncBannerWaiting("opportunities")
-            : `${pipelineName} (synced). Won is not cash until reconciled in Payments.`}
+            : `${pipelineName} · ${opps.length} open item(s) across ${stages.length} stage(s). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
+
+      {!waiting && !stagesBlocked ? (
+        <div className="grid grid-4" style={{ marginTop: "1.1rem" }}>
+          {stages.slice(0, 4).map((stage) => {
+            const items = byStage(stage);
+            const value = items.reduce((s, o) => s + (Number(o.monetaryValue) || 0), 0);
+            return (
+              <Card key={`sum-${stage}`} title={stage}>
+                <p style={{ margin: 0, fontSize: "1.4rem", fontFamily: "Libre Baskerville, Georgia, serif" }}>
+                  {items.length}
+                </p>
+                <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                  ${value.toLocaleString()} combined
+                </p>
+              </Card>
+            );
+          })}
+        </div>
+      ) : null}
 
       {waiting ? (
         <div style={{ marginTop: "1.1rem" }}>

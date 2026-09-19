@@ -40,7 +40,7 @@ export async function requirePageRole(minimum: AuthRole): Promise<SessionPayload
   const session = token ? await verifySessionToken(token, secret) : null;
   if (!session) redirect("/login");
   if (!roleSatisfies(session.role, minimum)) {
-    redirect("/dashboard");
+    redirect("/dashboard?denied=1");
   }
   return session;
 }

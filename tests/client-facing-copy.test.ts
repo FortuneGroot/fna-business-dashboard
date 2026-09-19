@@ -138,4 +138,21 @@ describe("client-facing copy hygiene", () => {
     }
     assert.deepEqual(missing, [], missing.join("\n"));
   });
+
+  it("protected UI sources contain no preview hosts or NEXT_PUBLIC privileged env", () => {
+    const files = [
+      ...walk(join(ROOT, "app", "(protected)")),
+      ...walk(join(ROOT, "components")),
+      join(ROOT, "app", "login", "page.tsx"),
+    ];
+    for (const file of files) {
+      const text = stripComments(readFileSync(file, "utf8"));
+      assert.equal(/vercel\.app/i.test(text), false, `preview host in ${relative(ROOT, file)}`);
+      assert.equal(
+        /NEXT_PUBLIC_(SUPABASE|AUTH|GHL|SERVICE)/i.test(text),
+        false,
+        `public privileged env in ${relative(ROOT, file)}`
+      );
+    }
+  });
 });

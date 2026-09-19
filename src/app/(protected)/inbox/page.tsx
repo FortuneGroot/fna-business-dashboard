@@ -66,8 +66,19 @@ export default function InboxPage() {
     active === "All"
       ? rows
       : active === "Unread"
-        ? rows.filter((r) => r.direction === "inbound")
-        : rows.filter((r) => r.direction === "inbound");
+        ? rows.filter(
+            (r) =>
+              r.direction === "inbound" ||
+              /inbound|reply/i.test(r.eventType || "")
+          )
+        : rows.filter((r) => {
+            // Awaiting reply: inbound that asks for human help / handoff.
+            const et = `${r.eventType || ""} ${r.summary || ""}`;
+            return (
+              (r.direction === "inbound" || /inbound|reply/i.test(r.eventType || "")) &&
+              /handoff|human|escalat|await/i.test(et)
+            );
+          });
 
   const tableRows = filtered.map((r) => [
     r.contactId || "—",

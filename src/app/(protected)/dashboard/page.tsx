@@ -18,7 +18,12 @@ export default async function DashboardPage() {
   const store = getSyncStore();
   const summary = await store.summary();
   const events = await store.listAuditEvents(8);
+  const conversations = await store.listConversationEvents(40);
+  const reviews = await store.listReviewEvents(20);
   const waiting = summary.waitingForSync;
+  const needsAttention = conversations.filter((c) =>
+    /handoff|human|escalat/i.test(`${c.eventType || ""} ${c.summary || ""}`)
+  );
 
   const metrics = [
     {
@@ -97,30 +102,45 @@ export default async function DashboardPage() {
         <Card
           title="Needs Attention"
           action={
-            <Link href="/contacts" className="btn secondary sm">
-              Contacts
+            <Link href="/inbox" className="btn secondary sm">
+              Conversations
             </Link>
           }
         >
           {waiting ? (
             <WaitingForSync entity="leads" />
-          ) : (
+          ) : needsAttention.length === 0 ? (
             <EmptyState
               title={`${summary.contactsCount} contact(s) synced`}
-              note="Use Contacts and Opportunities for detail. Unassigned follow-ups will surface here as workflows send richer events."
+              note="No handoff or escalation events right now. Use Contacts and Opportunities for detail."
             />
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+              {needsAttention.slice(0, 6).map((c) => (
+                <li key={c.id} className="muted">
+                  {c.summary || c.eventType}
+                  {c.timestamp ? ` · ${c.timestamp.slice(0, 16).replace("T", " ")}` : ""}
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
-        <Card title="Reviews">
-          <EmptyState
-            title="Review events via sync"
-            note="Review request and feedback updates appear when reputation workflows send events."
-            action={
-              <Link href="/reviews" className="btn secondary sm">
-                Open Reputation
-              </Link>
-            }
-          />
+        <Card
+          title="Reviews"
+          action={
+            <Link href="/reviews" className="btn secondary sm">
+              Open Reputation
+            </Link>
+          }
+        >
+          {waiting ? (
+            <WaitingForSync entity="review events" />
+          ) : (
+            <EmptyState
+              title={`${reviews.length} review event(s)`}
+              note="Review request and feedback updates appear when reputation workflows send events."
+            />
+          )}
         </Card>
       </div>
 

@@ -67,7 +67,11 @@ export default async function ReportingPage() {
           ) : (
             <EmptyState
               title="Totals only for now"
-              note="Detailed trend charts are not available yet. Current totals reflect synced activity."
+              note={`Last successful sync event: ${
+                summary.lastEventAt
+                  ? summary.lastEventAt.slice(0, 19).replace("T", " ")
+                  : "none yet"
+              }. Detailed trend charts are not available yet.`}
             />
           )}
         </Card>

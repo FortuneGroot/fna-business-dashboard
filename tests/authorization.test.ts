@@ -192,4 +192,10 @@ describe("tenant exposure split + role API gates", () => {
     assert.ok(body.owner);
     assert.equal(typeof body.owner.locationConfigured, "boolean");
   });
+
+  it("anonymous tenant/public never includes location or pipeline IDs", async () => {
+    const res = await getTenantPublic();
+    const text = JSON.stringify(await res.json());
+    assert.equal(/locationId|pipelineId|NQwD3zdWCuBSVpOuzybj|pit-/i.test(text), false);
+  });
 });

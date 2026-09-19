@@ -4,7 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { Card, Badge, EmptyState, PageHead } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
 import type { AuthRole } from "@/lib/auth/types";
-import { canAccessOwnerSettings } from "@/lib/auth/types";
+import { canAccessOwnerSettings, canAccessSyncHealth } from "@/lib/auth/types";
 import { useCallback, useEffect, useState } from "react";
 
 type Health = {
@@ -21,9 +21,19 @@ type TenantConfig = {
   owner?: { pipelineName?: string; locationConfigured?: boolean };
 };
 
+type SyncHealth = {
+  ok?: boolean;
+  lastEventAt?: string | null;
+  contactsCount?: number;
+  opportunitiesCount?: number;
+  appointmentsCount?: number;
+  storageMode?: string;
+};
+
 export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
   const [tenant, setTenant] = useState<TenantConfig | null>(null);
+  const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
   const [err, setErr] = useState("");
   const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthorized" | "error">(
@@ -34,10 +44,11 @@ export default function SettingsPage() {
     setLoadState("loading");
     setErr("");
     try {
-      const [meRes, healthRes, tenantRes] = await Promise.all([
+      const [meRes, healthRes, tenantRes, syncRes] = await Promise.all([
         fetch("/api/auth/me"),
         fetch("/api/health"),
         fetch("/api/tenant/config"),
+        fetch("/api/sync/health"),
       ]);
       if (meRes.ok) {
         const me = await meRes.json();
@@ -62,6 +73,11 @@ export default function SettingsPage() {
       const healthJson = (await healthRes.json()) as Health;
       setHealth(healthJson);
       setTenant((await tenantRes.json()) as TenantConfig);
+      if (syncRes.ok) {
+        setSyncHealth((await syncRes.json()) as SyncHealth);
+      } else if (syncRes.status === 403) {
+        setSyncHealth(null);
+      }
       setLoadState("ready");
     } catch {
       setLoadState("error");
@@ -74,6 +90,7 @@ export default function SettingsPage() {
   }, [load]);
 
   const isOwner = role ? canAccessOwnerSettings(role) : false;
+  const canSeeSystem = role ? canAccessSyncHealth(role) : false;
   const connected = Boolean(health?.ghl?.connected);
   const crmTone = connected ? "ok" : health?.ghl?.error ? "warn" : "neutral";
   const crmLabel =
@@ -152,26 +169,51 @@ export default function SettingsPage() {
           <EmptyState title="No team members yet" note="Invited staff accounts will appear here." />
         </Card>
 
-        <Card title="Notifications">
-          <p className="muted" style={{ marginTop: 0 }}>
-            Notification preferences are not available yet.
-          </p>
-          <fieldset disabled aria-disabled="true" className="disabled-controls">
-            <legend className="sr-only">Notification preferences (unavailable)</legend>
-            <label className="check">
-              <input type="checkbox" disabled tabIndex={-1} />
-              <span>New lead alerts (coming soon)</span>
-            </label>
-            <label className="check">
-              <input type="checkbox" disabled tabIndex={-1} />
-              <span>Daily activity summary (coming soon)</span>
-            </label>
-            <label className="check">
-              <input type="checkbox" disabled tabIndex={-1} />
-              <span>Overdue follow-up reminders (coming soon)</span>
-            </label>
-          </fieldset>
-        </Card>
+        {canSeeSystem ? (
+          <Card title="System status">
+            {syncHealth ? (
+              <>
+                <p style={{ marginTop: 0 }}>
+                  Last sync event:{" "}
+                  {syncHealth.lastEventAt
+                    ? syncHealth.lastEventAt.slice(0, 19).replace("T", " ")
+                    : "none yet"}
+                </p>
+                <p className="muted">
+                  Contacts {syncHealth.contactsCount ?? 0} · Opportunities{" "}
+                  {syncHealth.opportunitiesCount ?? 0} · Appointments{" "}
+                  {syncHealth.appointmentsCount ?? 0}
+                </p>
+                <p className="muted">Storage: {syncHealth.storageMode || "—"}</p>
+              </>
+            ) : (
+              <p className="muted" style={{ marginTop: 0 }}>
+                System status is available to owners and admins after sign-in.
+              </p>
+            )}
+          </Card>
+        ) : (
+          <Card title="Notifications">
+            <p className="muted" style={{ marginTop: 0 }}>
+              Notification preferences are not available yet.
+            </p>
+            <fieldset disabled aria-disabled="true" className="disabled-controls">
+              <legend className="sr-only">Notification preferences (unavailable)</legend>
+              <label className="check">
+                <input type="checkbox" disabled tabIndex={-1} />
+                <span>New lead alerts (coming soon)</span>
+              </label>
+              <label className="check">
+                <input type="checkbox" disabled tabIndex={-1} />
+                <span>Daily activity summary (coming soon)</span>
+              </label>
+              <label className="check">
+                <input type="checkbox" disabled tabIndex={-1} />
+                <span>Overdue follow-up reminders (coming soon)</span>
+              </label>
+            </fieldset>
+          </Card>
+        )}
       </div>
     </AppShell>
   );

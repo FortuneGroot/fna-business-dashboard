@@ -21,6 +21,14 @@ export default async function CalendarPage() {
   const waiting = appointments.length === 0;
   const calendars = configuredCalendars();
   const calendarsBlocked = looksLikePlaceholderCalendars();
+  const statusCounts = appointments.reduce<Record<string, number>>((acc, a) => {
+    const key = (a.status || "booked").toLowerCase();
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const statusSummary = Object.entries(statusCounts)
+    .map(([k, n]) => `${n} ${k}`)
+    .join(" · ");
 
   return (
     <AppShell>
@@ -34,7 +42,7 @@ export default async function CalendarPage() {
           ? PLACEHOLDER_CONFIG_CALENDARS
           : waiting
             ? syncBannerWaiting("appointments")
-            : `${appointments.length} appointment(s) synced.`}
+            : `${appointments.length} appointment(s) synced${statusSummary ? ` — ${statusSummary}` : ""}.`}
       </StatusBanner>
 
       {waiting ? (

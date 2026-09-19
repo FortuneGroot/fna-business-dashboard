@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 
 import { BRAND } from "@/lib/brand";
 import type { AuthRole } from "@/lib/auth/types";
-import { canAccessLibrary } from "@/lib/auth/types";
+import { canAccessLibrary, canAccessOwnerSettings, roleSatisfies } from "@/lib/auth/types";
 
 type TenantChrome = {
   client?: { businessName?: string };
@@ -67,6 +67,7 @@ type NavItem = { href: string; label: string; icon: string; minRole?: AuthRole }
 
 const SECONDARY: NavItem[] = [
   { href: "/settings", label: "Settings", icon: "settings" },
+  { href: "/onboarding", label: "Setup", icon: "automations", minRole: "OWNER" },
   { href: "/help", label: "Help & Support", icon: "help" },
   { href: "/library", label: "Resources", icon: "resources", minRole: "ADMIN" },
 ];
@@ -80,8 +81,9 @@ function isActivePath(path: string, href: string): boolean {
 function navVisibleForRole(item: NavItem, role: AuthRole | null): boolean {
   if (!item.minRole) return true;
   if (!role) return false;
+  if (item.minRole === "OWNER") return canAccessOwnerSettings(role);
   if (item.minRole === "ADMIN") return canAccessLibrary(role);
-  return false;
+  return roleSatisfies(role, item.minRole);
 }
 
 export function SidebarLinks({
