@@ -38,22 +38,33 @@ function encodeFilters(eq?: DbFilter): string {
     .join("&");
 }
 
+export function isValidSupabaseUrl(url: string): boolean {
+  const trimmed = String(url || "").trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function isSupabaseConfigured(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
   const url = (env.SUPABASE_URL || "").trim();
   const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  return Boolean(url && key && url.startsWith("http"));
+  return Boolean(url && key && isValidSupabaseUrl(url));
 }
 
 export function createSupabaseRestClient(
   env: NodeJS.ProcessEnv = process.env
 ): SyncDb {
-  const base = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
-  const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (!base || !key) {
+  if (!isSupabaseConfigured(env)) {
     throw new Error("Supabase credentials not configured");
   }
+  const base = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
+  const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
   const headers = (): HeadersInit => ({
     ...supabaseRestAuthHeaders(key),

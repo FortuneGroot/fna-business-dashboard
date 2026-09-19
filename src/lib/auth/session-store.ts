@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { AuthRole, SessionUser } from "./types";
 import { SESSION_TTL_SECONDS } from "./types";
-import { isSupabaseConfigured } from "@/lib/sync/db-client";
+import { isSupabaseConfigured, isValidSupabaseUrl } from "@/lib/sync/db-client";
 import { supabaseRestAuthHeaders } from "@/lib/sync/supabase-rest-auth";
 
 export type StoredSession = {
@@ -47,9 +47,10 @@ export function allowMemorySessionFallback(
 }
 
 function supabaseRestConfig(env: NodeJS.ProcessEnv): { url: string; key: string } | null {
+  if (!isSupabaseConfigured(env)) return null;
   const url = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
   const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (!url || !key || !url.startsWith("http")) return null;
+  if (!url || !key || !isValidSupabaseUrl(url)) return null;
   return { url, key };
 }
 

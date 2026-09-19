@@ -16,6 +16,7 @@ export {
   createMockSyncDb,
   createSupabaseRestClient,
   isSupabaseConfigured,
+  isValidSupabaseUrl,
 } from "./db-client";
 export {
   isLegacyJwtServiceRoleKey,

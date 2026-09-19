@@ -412,6 +412,8 @@ describe("auth env name contracts", () => {
     assert.equal(isSupabaseConfigured({ SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
     assert.equal(isSupabaseConfigured({ SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "" }), false);
     assert.equal(isSupabaseConfigured({ SUPABASE_URL: "not-a-url", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "httpfoo", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "ftp://x.example", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
     assert.equal(
       isSupabaseConfigured({
         SUPABASE_URL: "https://x.supabase.co",
@@ -419,6 +421,90 @@ describe("auth env name contracts", () => {
       }),
       true
     );
+  });
+
+  it("Preview/Production session create fails closed without Supabase", async () => {
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+    assert.ok(user, "owner credentials must resolve");
+    await assert.rejects(
+      () => createSessionToken(user!, SECRET),
+      /Session store unavailable/
+    );
+    process.env.VERCEL_ENV = "preview";
+    await assert.rejects(
+      () => createSessionToken(user!, SECRET),
+      /Session store unavailable/
+    );
+    delete process.env.VERCEL_ENV;
+  });
+
+  it("durable confirmation failure rejects session creation", async () => {
+    const originalFetch = globalThis.fetch;
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_secret_test_placeholder";
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify([{ id: "ok" }]), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+      assert.ok(user, "owner credentials must resolve");
+      await assert.rejects(
+        () => createSessionToken(user!, SECRET),
+        /could not be confirmed/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
+  });
+
+  it("durable revocation failure surfaces a safe error", async () => {
+    const originalFetch = globalThis.fetch;
+    const { revokeStoredSession } = await import("../src/lib/auth/session-store");
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.AUTH_ALLOW_MEMORY_SESSIONS = "true";
+    delete process.env.VERCEL_ENV;
+    const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+    assert.ok(user, "owner credentials must resolve");
+    const token = await createSessionToken(user!, SECRET);
+    const session = await verifySessionToken(token, SECRET);
+    assert.ok(session?.sid);
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.sig";
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ message: "forced revoke failure" }), { status: 500 });
+    try {
+      await assert.rejects(
+        () => revokeStoredSession(session!.sid!),
+        /Durable session revoke failed/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
   });
 
   it("memory fallback never enabled when Supabase is configured", () => {
