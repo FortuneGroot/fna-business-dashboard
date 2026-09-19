@@ -56,7 +56,13 @@ export async function POST(req: NextRequest) {
   let token: string;
   try {
     token = await createSessionToken(user, getAuthSecret());
-  } catch {
+  } catch (error) {
+    // Safe diagnostic only: createSessionToken errors contain no credentials,
+    // secret values, cookies, or session IDs.
+    console.error(
+      "[auth/login] durable session creation failed",
+      error instanceof Error ? error.message : "unknown error"
+    );
     return NextResponse.json(
       {
         ok: false,
@@ -65,7 +71,6 @@ export async function POST(req: NextRequest) {
       { status: 503 }
     );
   }
-
   const res = NextResponse.json({
     ok: true,
     user: { email: user.email, role: user.role, name: user.name },
