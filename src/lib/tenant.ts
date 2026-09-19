@@ -4,19 +4,25 @@
  * Client business identity/location/pipeline/calendars resolve here.
  *
  * Default (no CLIENT_CONFIG_PATH): F&A LIVE Preview values.
- * Absolute: Master NQwD3zdWCuBSVpOuzybj is never allowed — not overridable.
+ * Absolute: protected Master location is never allowed — not overridable.
  */
+import "server-only";
 import { BRAND } from "@/lib/brand";
 import type { ClientConfig } from "@/lib/onboarding/types";
 import { emptyClientConfig, parseClientConfig } from "@/lib/onboarding";
+import {
+  FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
+  PROTECTED_MASTER_LOCATION_ID,
+} from "@/lib/master-guard";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-/** Hard-coded; never read from env for the block itself. */
-export const PROTECTED_MASTER_LOCATION_ID = "NQwD3zdWCuBSVpOuzybj" as const;
-
-export const FA_LIVE_LOCATION_ID = "kIXDnRuhkj6HLR1g6V6V" as const;
-export const FA_LIVE_PIPELINE_ID = "6XevPh4T3rX0qAYRfuta" as const;
+export {
+  FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
+  PROTECTED_MASTER_LOCATION_ID,
+} from "@/lib/master-guard";
 
 const FA_STAGE_ORDER = [
   "New Lead",

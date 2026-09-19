@@ -1,8 +1,14 @@
 /** Website form → Vercel → CRM field map. IDs from recovered Sept 11–12 LIVE checkpoint only. */
+import "server-only";
+import {
+  FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
+  PROTECTED_MASTER_LOCATION_ID,
+} from "@/lib/master-guard";
 
-export const LIVE_LOCATION_ID = "kIXDnRuhkj6HLR1g6V6V";
-export const LIVE_PIPELINE_ID = "6XevPh4T3rX0qAYRfuta";
-export const FORBIDDEN_MASTER_ID = "NQwD3zdWCuBSVpOuzybj";
+export const LIVE_LOCATION_ID = FA_LIVE_LOCATION_ID;
+export const LIVE_PIPELINE_ID = FA_LIVE_PIPELINE_ID;
+export const FORBIDDEN_MASTER_ID = PROTECTED_MASTER_LOCATION_ID;
 export const OLD_PIPELINE_ID = "iYIxeKOdg5jkoAfKNnYM";
 
 export const FIELD_MAP = {

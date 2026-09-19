@@ -1,12 +1,12 @@
-import { BRAND } from "@/lib/brand";
 import type {
   ClientConfig,
   ReadinessCheckResult,
   ReadinessReport,
   ReadinessStatus,
 } from "./types";
+import { FORBIDDEN_MASTER_LOCATION_ID } from "@/lib/master-guard";
 
-export const FORBIDDEN_MASTER_LOCATION_ID = BRAND.forbiddenMasterId;
+export { FORBIDDEN_MASTER_LOCATION_ID };
 
 export const NOT_DEPENDENT_ON = [
   "$497 Agency Pro",

@@ -7,17 +7,19 @@
     "dev": "node ./node_modules/next/dist/bin/next dev",
     "build": "node ./node_modules/next/dist/bin/next build",
     "start": "node ./node_modules/next/dist/bin/next start",
-    "test": "node --import tsx --test tests/sync.test.ts tests/onboarding.test.ts tests/tenant.test.ts tests/auth.test.ts tests/client-facing-copy.test.ts tests/supabase-rest-auth.test.ts tests/authorization.test.ts tests/security-scan.test.ts",    "check:readiness": "node ./node_modules/tsx/dist/cli.mjs scripts/check-client-readiness.ts",
-    "client:prepare": "node ./node_modules/tsx/dist/cli.mjs scripts/client-prepare.ts",
-    "client:validate": "node ./node_modules/tsx/dist/cli.mjs scripts/validate-client-env.ts",
-    "client:generate": "node ./node_modules/tsx/dist/cli.mjs scripts/generate-client-deployment.ts",
+    "test": "node --require ./scripts/stub-server-only.cjs --import tsx --test tests/sync.test.ts tests/onboarding.test.ts tests/tenant.test.ts tests/auth.test.ts tests/client-facing-copy.test.ts tests/supabase-rest-auth.test.ts tests/authorization.test.ts tests/security-scan.test.ts",
+    "check:readiness": "node --require ./scripts/stub-server-only.cjs ./node_modules/tsx/dist/cli.mjs scripts/check-client-readiness.ts",
+    "client:prepare": "node --require ./scripts/stub-server-only.cjs ./node_modules/tsx/dist/cli.mjs scripts/client-prepare.ts",
+    "client:validate": "node --require ./scripts/stub-server-only.cjs ./node_modules/tsx/dist/cli.mjs scripts/validate-client-env.ts",
+    "client:generate": "node --require ./scripts/stub-server-only.cjs ./node_modules/tsx/dist/cli.mjs scripts/generate-client-deployment.ts",
     "qa": "python qa/run_static_audit.py",
     "verify:auth": "node scripts/verify-auth-runtime.mjs"
   },
   "dependencies": {
     "next": "^15.5.25",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@types/node": "20.16.10",

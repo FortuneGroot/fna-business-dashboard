@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
+import { PROTECTED_MASTER_LOCATION_ID } from "@/lib/master-guard";
 import { normalizeEventName } from "./events";
 import { getSyncStore } from "./factory";
 import type { SyncStore } from "./store";
@@ -169,7 +170,7 @@ export async function ingestSyncPayload(
       status: 400,
     };
   }
-  if (locationId === BRAND.forbiddenMasterId || locationId === env.forbiddenMasterId) {
+  if (locationId === PROTECTED_MASTER_LOCATION_ID || locationId === env.forbiddenMasterId) {
     return {
       ok: false,
       error: "Protected Master location refused",

@@ -47,7 +47,6 @@ export async function GET(req: NextRequest) {
     storageMode,
     databaseConfigured: isDatabaseConfigured(),
     masterGuard: {
-      forbiddenMasterId: PROTECTED_MASTER_LOCATION_ID,
       masterBlocked: true,
       locationIsMaster: env.locationId === PROTECTED_MASTER_LOCATION_ID,
       overridable: false,

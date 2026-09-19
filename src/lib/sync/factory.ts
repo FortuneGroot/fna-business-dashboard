@@ -1,5 +1,5 @@
-import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
+import { FA_LIVE_LOCATION_ID } from "@/lib/master-guard";
 import {
   PROTECTED_MASTER_LOCATION_ID,
   configuredLocationId,
@@ -47,10 +47,10 @@ export function createSyncStore(opts?: {
       try {
         locationId = configuredLocationId();
       } catch {
-        locationId = BRAND.liveLocationId;
+        locationId = FA_LIVE_LOCATION_ID;
       }
     }
-    if (locationId === PROTECTED_MASTER_LOCATION_ID || locationId === BRAND.forbiddenMasterId) {
+    if (locationId === PROTECTED_MASTER_LOCATION_ID) {
       throw new Error("Protected Master location refused");
     }
     return createPostgresStore(db, locationId);
@@ -92,8 +92,7 @@ export function assertDeploymentLocationSafe(): void {
   const env = loadEnv();
   if (
     env.locationId === PROTECTED_MASTER_LOCATION_ID ||
-    env.locationId === env.forbiddenMasterId ||
-    env.locationId === BRAND.forbiddenMasterId
+    env.locationId === env.forbiddenMasterId
   ) {
     throw new Error("Protected Master location refused");
   }

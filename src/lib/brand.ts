@@ -1,3 +1,9 @@
+/**
+ * Client-safe Fortune & Automations brand tokens.
+ * NEVER put Master location IDs, live location IDs, pipeline IDs, tokens,
+ * or secrets in this module — it is imported by client components.
+ */
+
 export const BRAND = {
   name: "Fortune & Automations",
   product: "Fortune & Automations Business Dashboard",
@@ -20,9 +26,7 @@ export const BRAND = {
     cream: "#F3EFE9",
     white: "#FFFFFF",
   },
-  liveLocationId: "kIXDnRuhkj6HLR1g6V6V",
-  forbiddenMasterId: "NQwD3zdWCuBSVpOuzybj",
-  pipelineId: "6XevPh4T3rX0qAYRfuta",
+  /** Display label only — not a CRM pipeline UUID. */
   pipelineName: "Fortune & Automations Sales Pipeline",
   dashboards: {
     owner: "F&A | OWNER COMMAND CENTER",

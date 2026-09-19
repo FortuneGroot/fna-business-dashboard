@@ -5,7 +5,6 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
 
-import { BRAND } from "../src/lib/brand";
 import {
   assertAllowedLocationId,
   createMemoryStore,
@@ -25,12 +24,14 @@ import {
 } from "../src/lib/sync";
 import {
   FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
   faLiveDefaultClientConfig,
   resetTenantConfigForTests,
 } from "../src/lib/tenant";
+import { PROTECTED_MASTER_LOCATION_ID } from "../src/lib/master-guard";
 
 const LIVE = FA_LIVE_LOCATION_ID;
-const MASTER = BRAND.forbiddenMasterId;
+const MASTER = PROTECTED_MASTER_LOCATION_ID;
 
 function baseLead(over: Record<string, unknown> = {}) {
   return {
@@ -132,7 +133,7 @@ beforeEach(() => {
   process.env.FAKE_CONTACT_ONLY = "true";
   process.env.GHL_LOCATION_ID = LIVE;
   process.env.FORBIDDEN_MASTER_LOCATION_ID = MASTER;
-  process.env.GHL_PIPELINE_ID = BRAND.pipelineId;
+  process.env.GHL_PIPELINE_ID = FA_LIVE_PIPELINE_ID;
   delete process.env.GHL_WEBHOOK_SECRET;
   delete process.env.GHL_WEBHOOK_ENFORCE_SECRET;
   delete process.env.SUPABASE_URL;
@@ -227,7 +228,7 @@ describe("storage selection", () => {
     rebindSyncStoreFromEnv({
       GHL_LOCATION_ID: LIVE,
       FORBIDDEN_MASTER_LOCATION_ID: MASTER,
-      GHL_PIPELINE_ID: BRAND.pipelineId,
+      GHL_PIPELINE_ID: FA_LIVE_PIPELINE_ID,
     });
     assert.equal(getStorageMode(), "memory");
   });

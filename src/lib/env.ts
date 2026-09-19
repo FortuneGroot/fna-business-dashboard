@@ -1,7 +1,10 @@
-import { BRAND } from "./brand";
 import { OLD_PIPELINE_ID } from "./mapping";
 import {
+  FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
   PROTECTED_MASTER_LOCATION_ID,
+} from "./master-guard";
+import {
   configuredLocationId,
   configuredPipelineId,
   getTenantConfig,
@@ -26,8 +29,8 @@ export function loadEnv(): AppEnv {
     if (!locationId) locationId = configuredLocationId();
     if (!pipelineId) pipelineId = configuredPipelineId();
   } catch {
-    locationId = locationId || BRAND.liveLocationId;
-    pipelineId = pipelineId || BRAND.pipelineId;
+    locationId = locationId || FA_LIVE_LOCATION_ID;
+    pipelineId = pipelineId || FA_LIVE_PIPELINE_ID;
   }
 
   // Absolute Master id — never take "allowed master" from env override of the constant.
@@ -52,8 +55,7 @@ export function validateEnv(env: AppEnv): string[] {
   // Absolute Master block — not overridable by any env/config.
   if (
     env.locationId === PROTECTED_MASTER_LOCATION_ID ||
-    env.locationId === env.forbiddenMasterId ||
-    env.locationId === BRAND.forbiddenMasterId
+    env.locationId === env.forbiddenMasterId
   ) {
     errors.push("GHL_LOCATION_ID points at the protected Master. Refusing.");
   }

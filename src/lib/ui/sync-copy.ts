@@ -69,6 +69,5 @@ export const CLIENT_FORBIDDEN_RENDER_TERMS = [
   "vercel.app",
   "SUPABASE_SERVICE_ROLE",
   "GHL_WEBHOOK_SECRET",
-  "NQwD3zdWCuBSVpOuzybj",
   "pit-",
 ] as const;

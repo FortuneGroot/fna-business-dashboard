@@ -17,6 +17,7 @@ import { assertAllowedLocationId } from "../src/lib/sync/location-guard";
 import { ingestSyncPayload, createMemoryStore } from "../src/lib/sync";
 import {
   FA_LIVE_LOCATION_ID,
+  FA_LIVE_PIPELINE_ID,
   PROTECTED_MASTER_LOCATION_ID,
   clientBusinessName,
   configuredCalendars,
@@ -35,7 +36,7 @@ beforeEach(() => {
   process.env.GHL_DRY_RUN = "true";
   process.env.ALLOW_PRODUCTION_CONTACT_WRITES = "false";
   process.env.GHL_LOCATION_ID = FA_LIVE_LOCATION_ID;
-  process.env.GHL_PIPELINE_ID = BRAND.pipelineId;
+  process.env.GHL_PIPELINE_ID = FA_LIVE_PIPELINE_ID;
   process.env.FORBIDDEN_MASTER_LOCATION_ID = MASTER;
   delete process.env.CLIENT_CONFIG_PATH;
   resetTenantConfigForTests(faLiveDefaultClientConfig());
@@ -45,7 +46,7 @@ describe("tenant defaults (F&A LIVE)", () => {
   it("existing F&A config loads", () => {
     const cfg = faLiveDefaultClientConfig();
     assert.equal(cfg.ghl.locationId, FA_LIVE_LOCATION_ID);
-    assert.equal(cfg.ghl.pipelineId, BRAND.pipelineId);
+    assert.equal(cfg.ghl.pipelineId, FA_LIVE_PIPELINE_ID);
     assert.ok(Object.keys(cfg.ghl.stageIds).length >= 10);
     assert.ok(Object.keys(cfg.ghl.calendarIds).length >= 1);
     resetTenantConfigForTests(cfg);
