@@ -4,6 +4,8 @@
  * Never log the service role key.
  */
 
+import { supabaseRestAuthHeaders } from "./supabase-rest-auth";
+
 export type DbFilter = Record<string, string | number | boolean | null>;
 
 export type SelectOpts = {
@@ -54,8 +56,7 @@ export function createSupabaseRestClient(
   }
 
   const headers = (): HeadersInit => ({
-    apikey: key,
-    Authorization: `Bearer ${key}`,
+    ...supabaseRestAuthHeaders(key),
     "Content-Type": "application/json",
     Prefer: "return=representation",
   });
@@ -144,8 +145,7 @@ export function createSupabaseRestClient(
       const res = await fetch(`${base}/rest/v1/${table}?${parts.join("&")}`, {
         method: "HEAD",
         headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
+          ...supabaseRestAuthHeaders(key),
           Prefer: "count=exact",
         },
       });

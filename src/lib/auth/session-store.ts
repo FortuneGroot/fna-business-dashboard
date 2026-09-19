@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { AuthRole, SessionUser } from "./types";
 import { SESSION_TTL_SECONDS } from "./types";
 import { isSupabaseConfigured } from "@/lib/sync/db-client";
+import { supabaseRestAuthHeaders } from "@/lib/sync/supabase-rest-auth";
 
 export type StoredSession = {
   id: string;
@@ -69,8 +70,7 @@ async function supabaseUpsertConfirmed(
     {
       method: "POST",
       headers: {
-        apikey: cfg.key,
-        Authorization: `Bearer ${cfg.key}`,
+        ...supabaseRestAuthHeaders(cfg.key),
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=representation",
       },
@@ -107,8 +107,7 @@ async function supabaseGet(
     `${cfg.url}/rest/v1/auth_sessions?id=eq.${encodeURIComponent(id)}&select=id,email,role,name,created_at,expires_at,revoked&limit=1`,
     {
       headers: {
-        apikey: cfg.key,
-        Authorization: `Bearer ${cfg.key}`,
+        ...supabaseRestAuthHeaders(cfg.key),
         Accept: "application/json",
       },
       cache: "no-store",
@@ -137,8 +136,7 @@ async function supabaseRevoke(id: string, env: NodeJS.ProcessEnv): Promise<void>
     {
       method: "PATCH",
       headers: {
-        apikey: cfg.key,
-        Authorization: `Bearer ${cfg.key}`,
+        ...supabaseRestAuthHeaders(cfg.key),
         "Content-Type": "application/json",
         Prefer: "return=minimal",
       },

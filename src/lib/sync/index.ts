@@ -18,6 +18,11 @@ export {
   isSupabaseConfigured,
 } from "./db-client";
 export {
+  isLegacyJwtServiceRoleKey,
+  isSbSecretServiceRoleKey,
+  supabaseRestAuthHeaders,
+} from "./supabase-rest-auth";
+export {
   computeIdempotencyKey,
   ingestSyncPayload,
   resolveEventType,
