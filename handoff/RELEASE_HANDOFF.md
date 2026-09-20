@@ -6,7 +6,7 @@
 |---|---|
 | Branch | `feat/overnight-install-and-gates` |
 | Base / audited Production tip | `9c189f8e6a38de3f93933e437da79017d193e793` (`origin/release` at start of overnight work) |
-| Ending SHA | *(filled in CURSOR_FINAL.md after commit)* |
+| Ending SHA | `b88f8b04c3d6941f92af5556cc791c9b2b606c1b` |
 | Do not merge concurrently | Cursor does not merge `release` or deploy Production |
 
 ## What Claude should review
