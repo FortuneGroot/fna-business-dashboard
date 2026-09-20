@@ -1,0 +1,14 @@
+{
+  "event": "appointment.booked",
+  "locationId": "loc_synth_ready_001",
+  "appointmentId": "appt_fixture_1",
+  "contactId": "c_fixture_lead_1",
+  "calendarId": "cal_synth_discovery",
+  "calendarName": "Discovery Call",
+  "status": "confirmed",
+  "start": "2026-09-21T15:00:00.000Z",
+  "end": "2026-09-21T15:30:00.000Z",
+  "timezone": "US/Eastern",
+  "idempotencyKey": "fix-appt-booked-1",
+  "occurredAt": "2026-09-20T01:10:00.000Z"
+}

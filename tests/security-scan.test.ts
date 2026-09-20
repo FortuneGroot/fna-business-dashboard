@@ -45,6 +45,11 @@ describe("compiled client bundle secret scan", () => {
   it("browser static chunks do not embed secret values", () => {
     const staticRoot = join(process.cwd(), ".next", "static");
     if (!existsSync(staticRoot)) {
+      if (process.env.RELEASE_SECURITY_REQUIRE_BUILD === "1") {
+        assert.fail(
+          ".next/static missing — run npm run build or npm run release:security before this gate"
+        );
+      }
       assert.ok(true, "no .next/static — skip until production build");
       return;
     }
@@ -66,6 +71,11 @@ describe("compiled client bundle secret scan", () => {
   it("browser static chunks contain zero protected Master location ids", () => {
     const staticRoot = join(process.cwd(), ".next", "static");
     if (!existsSync(staticRoot)) {
+      if (process.env.RELEASE_SECURITY_REQUIRE_BUILD === "1") {
+        assert.fail(
+          ".next/static missing — Master-id chunk scan requires a production build"
+        );
+      }
       assert.ok(
         true,
         "no .next/static yet — Master-id chunk scan runs after production build"

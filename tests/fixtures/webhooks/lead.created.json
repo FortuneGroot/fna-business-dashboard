@@ -1,0 +1,11 @@
+{
+  "event": "lead.created",
+  "locationId": "loc_synth_ready_001",
+  "contactId": "c_fixture_lead_1",
+  "firstName": "Ada",
+  "lastName": "Fixture",
+  "email": "ada.fixture@example.invalid",
+  "source": "website",
+  "idempotencyKey": "fix-lead-created-1",
+  "occurredAt": "2026-09-20T01:00:00.000Z"
+}

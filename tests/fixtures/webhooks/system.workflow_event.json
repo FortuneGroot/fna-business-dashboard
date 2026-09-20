@@ -1,0 +1,8 @@
+{
+  "event": "system.workflow_event",
+  "locationId": "loc_synth_ready_001",
+  "workflowId": "wf_fixture_00_01",
+  "workflowName": "Global Do Not Automate",
+  "idempotencyKey": "fix-system-1",
+  "occurredAt": "2026-09-20T01:30:00.000Z"
+}

@@ -1,0 +1,7 @@
+{
+  "event": "review.requested",
+  "locationId": "loc_synth_ready_001",
+  "contactId": "c_fixture_lead_1",
+  "idempotencyKey": "fix-review-1",
+  "occurredAt": "2026-09-20T01:20:00.000Z"
+}

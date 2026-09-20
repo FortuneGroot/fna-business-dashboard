@@ -156,27 +156,44 @@ export async function verifySessionToken(
   };
 }
 
+export type RevokeSessionResult = {
+  /** True only when the durable/memory store marked the session revoked. */
+  durableRevoked: boolean;
+};
+
+/**
+ * Revoke a signed session token in the session store.
+ * Invalid/malformed tokens return durableRevoked=false without throwing.
+ * Durable store transport failures propagate so logout can report honesty.
+ */
 export async function revokeSessionToken(
   token: string,
   secret: string,
   env: NodeJS.ProcessEnv = process.env
-): Promise<void> {
+): Promise<RevokeSessionResult> {
   const parts = token.split(".");
-  if (parts.length !== 2) return;
+  if (parts.length !== 2) return { durableRevoked: false };
   const [body, sig] = parts;
-  if (!body || !sig) return;
+  if (!body || !sig) return { durableRevoked: false };
   const expected = signBody(body, secret);
   try {
-    if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return;
+    if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+      return { durableRevoked: false };
+    }
   } catch {
-    return;
+    return { durableRevoked: false };
   }
+  let sid = "";
   try {
     const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as TokenBody;
-    if (parsed.sid) await revokeStoredSession(parsed.sid, env);
+    sid = String(parsed.sid || "");
   } catch {
-    /* ignore */
+    return { durableRevoked: false };
   }
+  if (!sid) return { durableRevoked: false };
+  // Let durable-store errors propagate (logout catches and reports).
+  await revokeStoredSession(sid, env);
+  return { durableRevoked: true };
 }
 
 export async function readSessionFromCookieHeader(

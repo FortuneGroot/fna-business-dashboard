@@ -1,0 +1,10 @@
+{
+  "event": "conversation.inbound",
+  "locationId": "loc_synth_ready_001",
+  "contactId": "c_fixture_lead_1",
+  "direction": "inbound",
+  "channel": "sms",
+  "summary": "Customer asked about next steps",
+  "idempotencyKey": "fix-convo-in-1",
+  "occurredAt": "2026-09-20T01:15:00.000Z"
+}

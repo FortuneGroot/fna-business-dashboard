@@ -273,8 +273,35 @@ describe("auth sessions", () => {
     const user = authenticateCredentials("owner@example.invalid", "owner-pass")!;
     const token = await createSessionToken(user, SECRET);
     assert.ok(await verifySessionToken(token, SECRET));
-    await revokeSessionToken(token, SECRET);
+    const revoked = await revokeSessionToken(token, SECRET);
+    assert.equal(revoked.durableRevoked, true);
     assert.equal(await verifySessionToken(token, SECRET), null);
+  });
+
+  it("logout reports durableRevoked=false when durable revoke fails", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "PATCH") {
+        return new Response(JSON.stringify({ message: "permission denied" }), { status: 403 });
+      }
+      return new Response("[]", { status: 200 });
+    }) as typeof fetch;
+    try {
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      resetAuthSessionsForTests();
+      const user = authenticateCredentials("owner@example.invalid", "owner-pass")!;
+      const token = await createSessionToken(user, SECRET);
+      process.env.SUPABASE_URL = "https://db.example.invalid";
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
+      await assert.rejects(() => revokeSessionToken(token, SECRET), /Durable session revoke failed/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      resetAuthSessionsForTests();
+    }
   });
 
   it("isAuthEnforced follows AUTH_SECRET", () => {

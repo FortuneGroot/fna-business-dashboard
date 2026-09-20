@@ -1,0 +1,11 @@
+{
+  "event": "opportunity.stage_changed",
+  "locationId": "loc_synth_ready_001",
+  "opportunityId": "opp_fixture_1",
+  "contactId": "c_fixture_lead_1",
+  "pipelineId": "pipe_synth_ready_001",
+  "stageId": "stage_qualified",
+  "stageName": "Qualified",
+  "idempotencyKey": "fix-opp-stage-1",
+  "occurredAt": "2026-09-20T01:05:00.000Z"
+}

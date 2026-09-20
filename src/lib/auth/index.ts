@@ -23,6 +23,7 @@ export {
   sessionCookieOptions,
   verifySessionToken,
 } from "./session";
+export type { RevokeSessionResult } from "./session";
 export { safeNextPath } from "./safe-next";
 export { interpretAuthMeProbe } from "./auth-me-probe";
 export type { AuthMeProbeBody, AuthMeProbeResult } from "./auth-me-probe";
