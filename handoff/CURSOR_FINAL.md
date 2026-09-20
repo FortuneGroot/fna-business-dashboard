@@ -7,7 +7,7 @@
 | Isolated worktree | `c:\Users\gnass\Downloads\f&a ghl full build\fna-app-overnight` |
 | Branch | `feat/overnight-install-and-gates` |
 | **Starting SHA** | `9c189f8e6a38de3f93933e437da79017d193e793` |
-| **Ending SHA** | `b88f8b04c3d6941f92af5556cc791c9b2b606c1b` |
+| **Ending SHA** | `72d4d0471c866f52ce39aaec7249960d2a6e6b1e` |
 | Audited base / release at start | `9c189f8` (already contained prior candidate) |
 | Historical main | `19866377f9ba0a6b83fbedae3c0f294ee4cbf555` (untouched) |
 | Primary WIP preserved | `src/lib/onboarding/types.ts` still modified in primary worktree only |
@@ -57,7 +57,7 @@
 
 ## Files for Claude review
 
-Commit `b88f8b0` on `feat/overnight-install-and-gates`:
+Commit `72d4d04` on `feat/overnight-install-and-gates` (includes `b88f8b0` implementation + handoff docs):
 
 - `src/app/api/auth/logout/route.ts`, `src/lib/auth/session.ts`, `src/lib/auth/index.ts`
 - `scripts/release-security-gate.mjs`, `scripts/install-doctor.ts`, `scripts/verify-auth-runtime.mjs`
@@ -92,4 +92,5 @@ Commit `b88f8b0` on `feat/overnight-install-and-gates`:
 
 ## Push status
 
-Feature branch commit is local until an authorized non-production-triggering push. Prefer Claude/owner push of `feat/overnight-install-and-gates` after confirming Vercel Production branch remains `release` only.
+Feature branch pushed to `origin/feat/overnight-install-and-gates` @ `72d4d04`.  
+`origin/release` remains `9c189f8`. `origin/main` remains `1986637`. No Production deploy by Cursor.
