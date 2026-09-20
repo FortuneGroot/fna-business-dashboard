@@ -6,7 +6,7 @@
 |---|---|
 | Branch | `feat/overnight-install-and-gates` |
 | Base / audited Production tip | `9c189f8e6a38de3f93933e437da79017d193e793` (`origin/release` at start of overnight work) |
-| Ending SHA | `72d4d0471c866f52ce39aaec7249960d2a6e6b1e` |
+| Ending SHA | `9a0ed2988bbc083df7bcbfd013a24397b5aebd4e` |
 | Do not merge concurrently | Cursor does not merge `release` or deploy Production |
 
 ## What Claude should review
