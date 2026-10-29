@@ -1,4 +1,3 @@
-import { BRAND } from "./brand";
 import { loadEnv, validateEnv } from "./env";
 import { logEvent } from "./logging";
 import { PROTECTED_MASTER_LOCATION_ID, configuredLocationId, clientBusinessName } from "./tenant";
@@ -17,8 +16,7 @@ export function assertConfiguredLocation(locationId: string): void {
   const env = loadEnv();
   if (
     locationId === PROTECTED_MASTER_LOCATION_ID ||
-    locationId === env.forbiddenMasterId ||
-    locationId === BRAND.forbiddenMasterId
+    locationId === env.forbiddenMasterId
   ) {
     throw new GhlRefusedError("Refused: protected Master location.");
   }
@@ -114,7 +112,7 @@ export async function checkGhlConnection(): Promise<GhlHealth> {
     namePresent: Boolean(name),
   });
 
-  if (looksLikeMaster || id === PROTECTED_MASTER_LOCATION_ID || id === BRAND.forbiddenMasterId) {
+  if (looksLikeMaster || id === PROTECTED_MASTER_LOCATION_ID) {
     throw new GhlRefusedError("Health check returned protected Master. Aborting.");
   }
 

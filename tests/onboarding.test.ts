@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { BRAND } from "../src/lib/brand";
+import { PROTECTED_MASTER_LOCATION_ID } from "../src/lib/master-guard";
 import {
   emptyClientConfig,
   evaluateClientReadiness,
@@ -119,7 +119,7 @@ describe("evaluateClientReadiness", () => {
   it("Master location -> BLOCKED", () => {
     const report = evaluateClientReadiness(
       goodConfig({
-        ghl: { ...goodConfig().ghl, locationId: BRAND.forbiddenMasterId },
+        ghl: { ...goodConfig().ghl, locationId: PROTECTED_MASTER_LOCATION_ID },
       })
     );
     assert.equal(report.status, "BLOCKED");

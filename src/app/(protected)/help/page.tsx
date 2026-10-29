@@ -65,6 +65,9 @@ export default function HelpPage() {
             <Button variant="secondary" href="/training">
               Training
             </Button>
+            <Button variant="secondary" href="/onboarding">
+              Onboarding
+            </Button>
           </div>
         </Card>
       </div>

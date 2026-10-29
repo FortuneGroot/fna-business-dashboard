@@ -1,4 +1,15 @@
-export { AUTH_COOKIE, SESSION_TTL_SECONDS, isAuthRole, roleAllowsDashboard } from "./types";
+export {
+  AUTH_COOKIE,
+  SESSION_TTL_SECONDS,
+  isAuthRole,
+  roleAllowsDashboard,
+  roleRank,
+  roleSatisfies,
+  canAccessLibrary,
+  canAccessOwnerSettings,
+  canAccessSyncHealth,
+  canAccessOwnerApis,
+} from "./types";
 export type { AuthRole, SessionPayload, SessionUser } from "./types";
 export {
   authenticateCredentials,
@@ -13,6 +24,8 @@ export {
   verifySessionToken,
 } from "./session";
 export { safeNextPath } from "./safe-next";
+export { interpretAuthMeProbe } from "./auth-me-probe";
+export type { AuthMeProbeBody, AuthMeProbeResult } from "./auth-me-probe";
 export { passwordsMatch, consumeLoginAttempt, resetLoginRateLimitForTests } from "./password";
 export {
   createStoredSession,
@@ -22,4 +35,10 @@ export {
   allowMemorySessionFallback,
   createSessionId,
 } from "./session-store";
-export { requireApiSession, requirePageSession } from "./guards";
+export {
+  requireApiSession,
+  requireApiRole,
+  requirePageSession,
+  requirePageRole,
+  getApiSession,
+} from "./guards";

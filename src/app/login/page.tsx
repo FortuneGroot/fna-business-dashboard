@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BRAND } from "@/lib/brand";
+import { interpretAuthMeProbe } from "@/lib/auth/auth-me-probe";
 
 type TenantPublic = {
   client?: { businessName?: string };
@@ -42,6 +43,7 @@ function LoginForm() {
   const [busy, setBusy] = useState(false);
   const [tenant, setTenant] = useState<TenantPublic | null>(null);
   const [authReady, setAuthReady] = useState<boolean | null>(null);
+  const [probeMisconfigured, setProbeMisconfigured] = useState(false);
 
   useEffect(() => {
     fetch("/api/tenant/public")
@@ -51,10 +53,11 @@ function LoginForm() {
     fetch("/api/auth/me")
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
-        setAuthReady(Boolean(data.authEnforced));
-        if (data.authFailClosed && !data.authEnforced) {
-          setError("Authentication is required but AUTH_SECRET is not configured.");
-        }
+        // Runtime-only probe (never baked at build time).
+        const probe = interpretAuthMeProbe(r.status, data);
+        setAuthReady(probe.authReady);
+        setProbeMisconfigured(probe.misconfigured);
+        if (probe.misconfigured) setError(probe.message);
         if (r.ok && data.user) router.replace(nextPath);
       })
       .catch(() => setAuthReady(false));
@@ -86,12 +89,14 @@ function LoginForm() {
   const product = tenant?.platform?.productName || BRAND.product;
   const clientName = tenant?.client?.businessName || BRAND.name;
 
+  const showMisconfigured = misconfigured || probeMisconfigured;
+
   return (
     <div className="login-wrap">
       <div className="login-card">
         <div className="brand-lockup" style={{ justifyContent: "center" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="brand-logo" src="/fna-logo.jpg" alt="" width={42} height={42} />
+          <img className="brand-logo" src="/fna-logo.jpg" alt="Fortune & Automations" width={42} height={42} />
         </div>
         <h1 className="serif" style={{ textAlign: "center", fontSize: "1.35rem" }}>
           {product}
@@ -100,22 +105,21 @@ function LoginForm() {
           Client: <strong style={{ color: "var(--primary)" }}>{clientName}</strong>
         </p>
 
-        {misconfigured || (authReady === false && error.includes("AUTH_SECRET")) ? (
+        {showMisconfigured ? (
           <div className="banner error">
-            This environment requires authentication but <code>AUTH_SECRET</code> is missing.
-            Production must never fail open.
+            Sign-in is not available for this environment yet. Contact Fortune & Automations for
+            help.
           </div>
         ) : null}
 
-        {authReady === false && !misconfigured ? (
+        {authReady === false && !showMisconfigured ? (
           <div className="banner">
-            Authentication is not enforced on this deployment yet. Set{" "}
-            <code>AUTH_SECRET</code> and owner credentials in the environment to enable login.
-            Preview may still use Vercel Deployment Protection.
+            Sign-in is not enabled for this deployment yet. Contact Fortune & Automations to finish
+            setup.
           </div>
         ) : null}
 
-        {error ? <div className="banner error">{error}</div> : null}
+        {error && !showMisconfigured ? <div className="banner error">{error}</div> : null}
 
         <form onSubmit={onSubmit}>
           <label htmlFor="email">Email</label>
@@ -148,7 +152,7 @@ function LoginForm() {
           </button>
         </form>
         <p className="muted" style={{ marginTop: "1rem", fontSize: "0.85rem" }}>
-          Roles: Owner / Admin / Client. Credentials are never stored in this repository.
+          Use the email and password provided by Fortune & Automations.
         </p>
       </div>
     </div>

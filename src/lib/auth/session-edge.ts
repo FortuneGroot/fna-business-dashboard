@@ -4,6 +4,8 @@
  * using the same id / revoked / expires_at columns as the Node session store.
  */
 import { AUTH_COOKIE } from "./types";
+import { supabaseRestAuthHeaders } from "@/lib/sync/supabase-rest-auth";
+import { isValidSupabaseUrl } from "@/lib/sync/db-client";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -36,7 +38,7 @@ function supabaseRestConfig(env: Record<string, string | undefined>): {
 } | null {
   const url = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
   const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (!url || !key || !url.startsWith("http")) return null;
+  if (!url || !key || !isValidSupabaseUrl(url)) return null;
   return { url, key };
 }
 
@@ -68,8 +70,7 @@ export async function isStoredSessionActiveEdge(
       `${cfg.url}/rest/v1/auth_sessions?id=eq.${encodeURIComponent(sid)}&select=id,expires_at,revoked&limit=1`,
       {
         headers: {
-          apikey: cfg.key,
-          Authorization: `Bearer ${cfg.key}`,
+          ...supabaseRestAuthHeaders(cfg.key),
           Accept: "application/json",
         },
         cache: "no-store",

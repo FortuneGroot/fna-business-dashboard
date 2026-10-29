@@ -7,6 +7,12 @@ import {
   configuredCalendars,
   looksLikePlaceholderCalendars,
 } from "@/lib/tenant-ui";
+import {
+  PLACEHOLDER_CONFIG_CALENDARS,
+  SYNC_SOURCE_SHORT,
+  syncBannerWaiting,
+  syncColumnEmpty,
+} from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -15,21 +21,35 @@ export default async function CalendarPage() {
   const waiting = appointments.length === 0;
   const calendars = configuredCalendars();
   const calendarsBlocked = looksLikePlaceholderCalendars();
+  const statusCounts = appointments.reduce<Record<string, number>>((acc, a) => {
+    const key = (a.status || "booked").toLowerCase();
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const statusSummary = Object.entries(statusCounts)
+    .map(([k, n]) => `${n} ${k}`)
+    .join(" · ");
 
   return (
     <AppShell>
       <PageHead
         title="Calendars"
-        description="Bookings synced from HighLevel appointment workflows. A website form preferred time is still a request, not a reserved slot."
+        description={`Bookings from connected appointment workflows. A website form preferred time is still a request, not a reserved slot. ${SYNC_SOURCE_SHORT}`}
       />
 
       <StatusBanner>
         {calendarsBlocked
-          ? "Calendar IDs still contain placeholders — capture real GHL calendar IDs before go-live."
+          ? PLACEHOLDER_CONFIG_CALENDARS
           : waiting
-            ? "Waiting for HighLevel sync — no appointments received yet."
-            : `${appointments.length} appointment(s) synced from webhooks.`}
+            ? syncBannerWaiting("appointments")
+            : `${appointments.length} appointment(s) synced${statusSummary ? ` — ${statusSummary}` : ""}.`}
       </StatusBanner>
+
+      {waiting ? (
+        <div style={{ marginTop: "1.1rem" }}>
+          <WaitingForSync entity="appointments" />
+        </div>
+      ) : null}
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
         {calendars.map((cal) => {
@@ -46,12 +66,11 @@ export default async function CalendarPage() {
                 Duration: {cal.duration || "—"}
               </p>
               {waiting ? (
-                <WaitingForSync entity="appointments" />
+                <p className="muted" style={{ margin: 0 }}>
+                  {syncColumnEmpty()}
+                </p>
               ) : items.length === 0 && appointments.length === 0 ? (
-                <EmptyState
-                  title="No appointments scheduled"
-                  note="Bookings will appear here once appointment sync events arrive."
-                />
+                <EmptyState title="No appointments scheduled" />
               ) : (
                 <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
                   {(items.length ? items : appointments)

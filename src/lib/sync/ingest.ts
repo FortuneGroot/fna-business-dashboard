@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
+import { PROTECTED_MASTER_LOCATION_ID } from "@/lib/master-guard";
 import { normalizeEventName } from "./events";
 import { getSyncStore } from "./factory";
 import type { SyncStore } from "./store";
@@ -124,7 +125,8 @@ export function resolveEventType(payload: InboundSyncPayload): SyncEventType | n
  * Secret policy for $297 webhook ingestion:
  * - If GHL_WEBHOOK_SECRET is configured → always verify header.
  * - If GHL_WEBHOOK_ENFORCE_SECRET=true OR dryRun=false → require a valid secret.
- * - Otherwise (dev / dry-run without secret) → allow explicit development mode.
+ * - Callers must also set enforceFlag when VERCEL_ENV=production (route does this).
+ * - Otherwise (local dry-run without secret) → allow explicit development mode.
  */
 export function verifyWebhookSecret(opts: {
   signatureHeader: string;
@@ -168,7 +170,7 @@ export async function ingestSyncPayload(
       status: 400,
     };
   }
-  if (locationId === BRAND.forbiddenMasterId || locationId === env.forbiddenMasterId) {
+  if (locationId === PROTECTED_MASTER_LOCATION_ID || locationId === env.forbiddenMasterId) {
     return {
       ok: false,
       error: "Protected Master location refused",

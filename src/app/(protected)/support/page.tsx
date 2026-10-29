@@ -1,10 +1,9 @@
 "use client";
 
 import { AppShell } from "@/components/AppShell";
-import { PageHead, Button } from "@/components/ui";
+import { Card, PageHead, Button, LoadError } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
-import { getConsentCopy } from "@/lib/mapping";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type TenantContact = {
   businessName?: string;
@@ -14,117 +13,109 @@ type TenantContact = {
 };
 
 export default function SupportPage() {
-  const [status, setStatus] = useState<string>("");
-  const [error, setError] = useState<string>("");
   const [contact, setContact] = useState<TenantContact>({ businessName: BRAND.name });
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  useEffect(() => {
-    fetch("/api/tenant/public")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d?.client) {
-          setContact({
-            businessName: d.client.businessName || BRAND.name,
-            supportEmail: d.client.supportEmail || "",
-            phone: d.client.phone || "",
-            website: d.client.website || "",
-          });
-        }
-      })
-      .catch(() => undefined);
+  const load = useCallback(async () => {
+    setLoadState("loading");
+    setErrorMessage("");
+    try {
+      const res = await fetch("/api/tenant/config");
+      if (res.status === 401 || res.status === 403) {
+        setLoadState("error");
+        setErrorMessage("Your session expired or you are not signed in.");
+        return;
+      }
+      if (!res.ok) {
+        setLoadState("error");
+        setErrorMessage("Could not load support contact details.");
+        return;
+      }
+      const d = await res.json();
+      if (d?.client) {
+        setContact({
+          businessName: d.client.businessName || BRAND.name,
+          supportEmail: d.client.supportEmail || "",
+          phone: d.client.phone || "",
+          website: d.client.website || "",
+        });
+      }
+      setLoadState("ready");
+    } catch {
+      setLoadState("error");
+      setErrorMessage("Network error while loading support details.");
+    }
   }, []);
 
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   const bizName = contact.businessName || BRAND.name;
-  const consent = useMemo(() => getConsentCopy(bizName), [bizName]);
-
-  const contactBits = [
-    contact.supportEmail || null,
-    contact.phone || null,
-    contact.website ? contact.website.replace(/^https?:\/\//, "") : null,
-  ].filter(Boolean);
-
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
-    setStatus("Sending dry-run…");
-    const form = new FormData(e.currentTarget);
-    const payload = {
-      name: String(form.get("name") || ""),
-      email: String(form.get("email") || ""),
-      phone: String(form.get("phone") || ""),
-      service: String(form.get("service") || ""),
-      message: String(form.get("message") || ""),
-      preferredContactMethod: String(form.get("preferred") || ""),
-      smsServiceConsent: form.get("smsService") === "on",
-      smsMarketingConsent: form.get("smsMarketing") === "on",
-      source: "app-support",
-      page: "/support",
-    };
-    const res = await fetch("/api/leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus("");
-      setError((data.errors || [data.error || "Request failed"]).join(" "));
-      return;
-    }
-    setStatus(data.message || "Recorded in dry-run. No production contact was created.");
-  }
+  const email = contact.supportEmail || "";
+  const phone = contact.phone || "";
+  const website = contact.website || "";
+  const hasChannels = Boolean(email || phone || website);
 
   return (
     <AppShell>
       <PageHead
         title="Support / Contact"
-        description={
-          contactBits.length
-            ? `Contact ${bizName}: ${contactBits.join(" · ")}`
-            : `Contact ${bizName}. Support channels are not configured for this deployment yet.`
-        }
+        description={`Reach ${bizName} using the channels below.`}
       />
-      <p className="muted">
-        This form posts to a dry-run lead API. Use a fake email such as{" "}
-        <code>qa.lead@example.invalid</code> and a 555 phone. No production contact write.
-      </p>
-      <form className="card" onSubmit={onSubmit}>
-        <label htmlFor="name">Full name</label>
-        <input id="name" name="name" required placeholder="QA Test Lead" />
-        <label htmlFor="email">Email</label>
-        <input id="email" name="email" type="email" placeholder="qa.lead@example.invalid" />
-        <label htmlFor="phone">Phone</label>
-        <input id="phone" name="phone" placeholder="555-010-0199" />
-        <label htmlFor="service">Service interested in</label>
-        <select id="service" name="service" defaultValue="">
-          <option value="">Select…</option>
-          <option>Automation</option>
-          <option>Websites</option>
-          <option>Branding</option>
-          <option>Systems</option>
-        </select>
-        <label htmlFor="preferred">Preferred contact method</label>
-        <select id="preferred" name="preferred" defaultValue="Email">
-          <option>Email</option>
-          <option>SMS</option>
-          <option>Phone</option>
-        </select>
-        <label htmlFor="message">Message</label>
-        <textarea id="message" name="message" placeholder="How can we help?" />
-        <label className="check">
-          <input type="checkbox" name="smsService" />
-          <span>{consent.smsService}</span>
-        </label>
-        <label className="check">
-          <input type="checkbox" name="smsMarketing" />
-          <span>{consent.smsMarketing}</span>
-        </label>
-        <div style={{ marginTop: "1rem" }}>
-          <Button type="submit">Send my request (dry-run)</Button>
-        </div>
-        {status ? <p className="banner">{status}</p> : null}
-        {error ? <p className="banner error">{error}</p> : null}
-      </form>
+
+      {loadState === "error" ? <LoadError message={errorMessage} onRetry={load} /> : null}
+
+      <div className="grid grid-2">
+        <Card title="Contact channels">
+          {loadState === "loading" ? (
+            <p className="muted" role="status">
+              Loading contact details…
+            </p>
+          ) : hasChannels ? (
+            <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+              {email ? (
+                <li>
+                  Email:{" "}
+                  <a href={`mailto:${email}`}>{email}</a>
+                </li>
+              ) : null}
+              {phone ? <li>Phone: {phone}</li> : null}
+              {website ? (
+                <li>
+                  Website:{" "}
+                  <a href={website.startsWith("http") ? website : `https://${website}`} rel="noreferrer" target="_blank">
+                    {website.replace(/^https?:\/\//, "")}
+                  </a>
+                </li>
+              ) : null}
+            </ul>
+          ) : (
+            <p className="muted">
+              Support channels are not configured for this client yet. Contact Fortune & Automations
+              if you need help.
+            </p>
+          )}
+        </Card>
+
+        <Card title="Request help">
+          <p>
+            There is no in-app request form on this page yet. Use the contact channels on the left,
+            or open Help for training and resources.
+          </p>
+          <div className="quick-actions" style={{ marginTop: "0.8rem" }}>
+            <Button variant="secondary" href="/help">
+              Help &amp; Support
+            </Button>
+            {email ? (
+              <Button variant="primary" href={`mailto:${email}`}>
+                Email support
+              </Button>
+            ) : null}
+          </div>
+        </Card>
+      </div>
     </AppShell>
   );
 }

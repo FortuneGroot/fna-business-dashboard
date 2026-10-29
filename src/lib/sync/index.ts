@@ -16,7 +16,13 @@ export {
   createMockSyncDb,
   createSupabaseRestClient,
   isSupabaseConfigured,
+  isValidSupabaseUrl,
 } from "./db-client";
+export {
+  isLegacyJwtServiceRoleKey,
+  isSbSecretServiceRoleKey,
+  supabaseRestAuthHeaders,
+} from "./supabase-rest-auth";
 export {
   computeIdempotencyKey,
   ingestSyncPayload,

@@ -4,6 +4,8 @@
  * Never log the service role key.
  */
 
+import { supabaseRestAuthHeaders } from "./supabase-rest-auth";
+
 export type DbFilter = Record<string, string | number | boolean | null>;
 
 export type SelectOpts = {
@@ -36,26 +38,36 @@ function encodeFilters(eq?: DbFilter): string {
     .join("&");
 }
 
+export function isValidSupabaseUrl(url: string): boolean {
+  const trimmed = String(url || "").trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function isSupabaseConfigured(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
   const url = (env.SUPABASE_URL || "").trim();
   const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  return Boolean(url && key && url.startsWith("http"));
+  return Boolean(url && key && isValidSupabaseUrl(url));
 }
 
 export function createSupabaseRestClient(
   env: NodeJS.ProcessEnv = process.env
 ): SyncDb {
-  const base = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
-  const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (!base || !key) {
+  if (!isSupabaseConfigured(env)) {
     throw new Error("Supabase credentials not configured");
   }
+  const base = (env.SUPABASE_URL || "").trim().replace(/\/$/, "");
+  const key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
   const headers = (): HeadersInit => ({
-    apikey: key,
-    Authorization: `Bearer ${key}`,
+    ...supabaseRestAuthHeaders(key),
     "Content-Type": "application/json",
     Prefer: "return=representation",
   });
@@ -144,8 +156,7 @@ export function createSupabaseRestClient(
       const res = await fetch(`${base}/rest/v1/${table}?${parts.join("&")}`, {
         method: "HEAD",
         headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
+          ...supabaseRestAuthHeaders(key),
           Prefer: "count=exact",
         },
       });

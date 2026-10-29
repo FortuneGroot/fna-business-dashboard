@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { BRAND } from "@/lib/brand";
 
 type TenantChrome = {
-  client?: { businessName?: string; legalBusinessName?: string };
+  client?: { businessName?: string };
   platform?: { brandName?: string; productName?: string; legal?: string };
 };
 
@@ -17,11 +18,8 @@ export function Footer() {
       .catch(() => undefined);
   }, []);
 
-  const platform = tenant?.platform?.brandName || "Fortune & Automations";
-  const clientLegal =
-    tenant?.client?.legalBusinessName ||
-    tenant?.platform?.legal ||
-    "Fortune&Finance LLC";
+  const platform = tenant?.platform?.brandName || BRAND.name;
+  const clientLegal = tenant?.platform?.legal || BRAND.legal;
 
   return (
     <footer className="app-footer">
@@ -29,7 +27,7 @@ export function Footer() {
         <div>
           {platform} · {clientLegal}
           <div className="muted">
-            Product: {tenant?.platform?.productName || "Fortune & Automations Business Dashboard"}
+            Product: {tenant?.platform?.productName || BRAND.product}
           </div>
         </div>
         <div>

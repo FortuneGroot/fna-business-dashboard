@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
+import { PageHead, Button } from "@/components/ui";
 import Link from "next/link";
 
 export function PlaceholderSurface({
@@ -13,15 +14,20 @@ export function PlaceholderSurface({
 }) {
   return (
     <AppShell>
-      <h1>{title}</h1>
-      <p>{purpose}</p>
+      <PageHead title={title} description={purpose} />
       <StatusBanner>
-        This area is recovered from client training / white-label specs. It is a shell only — live
-        customer data is not connected here.
+        This area is a prepared shell from your training materials. Live customer data is not
+        connected here yet.
       </StatusBanner>
-      <div className="empty">{later}</div>
-      <p>
-        <Link href="/dashboard">Back to dashboard</Link>
+      <div className="empty" role="status">
+        <strong>Coming next</strong>
+        <span>{later}</span>
+        <Button variant="secondary" href="/dashboard">
+          Back to dashboard
+        </Button>
+      </div>
+      <p className="muted">
+        Need help? <Link href="/help">Help &amp; Support</Link>
       </p>
     </AppShell>
   );

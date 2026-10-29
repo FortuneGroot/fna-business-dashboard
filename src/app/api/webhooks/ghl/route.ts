@@ -27,8 +27,11 @@ export async function POST(req: NextRequest) {
 
   const signature =
     req.headers.get("x-ghl-signature") || req.headers.get("x-webhook-secret") || "";
+  const vercelEnv = (process.env.VERCEL_ENV || "").trim().toLowerCase();
+  // Production always requires a configured webhook secret (never open ingest).
   const enforceFlag =
-    (process.env.GHL_WEBHOOK_ENFORCE_SECRET || "").toLowerCase() === "true";
+    (process.env.GHL_WEBHOOK_ENFORCE_SECRET || "").toLowerCase() === "true" ||
+    vercelEnv === "production";
   const secretCheck = verifyWebhookSecret({
     signatureHeader: signature,
     dryRun: env.dryRun,

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "packageName": "fna-client-app",
+  "packageVersion": "0.1.0",
+  "projectPath": "C:\\Users\\gnass\\Documents\\Codex\\2026-10-09\\realtime-voice-chat\\work\\full-library-validation\\fa-dashboard",
+  "completedAt": "2026-10-09T17:56:11.6246983-04:00",
+  "passed": true,
+  "results": [
+    {
+      "name": "npm-ci",
+      "arguments": [
+        "ci",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "exitCode": 0,
+      "passed": true,
+      "durationSeconds": 13.78
+    },
+    {
+      "name": "test",
+      "arguments": [
+        "run",
+        "test"
+      ],
+      "exitCode": 0,
+      "passed": true,
+      "durationSeconds": 0.96
+    },
+    {
+      "name": "build",
+      "arguments": [
+        "run",
+        "build"
+      ],
+      "exitCode": 0,
+      "passed": true,
+      "durationSeconds": 20.89
+    }
+  ]
+}

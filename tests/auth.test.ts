@@ -4,6 +4,7 @@ import {
   AUTH_COOKIE,
   authenticateCredentials,
   createSessionToken,
+  getAuthSecret,
   isAuthEnforced,
   isAuthFailClosed,
   mustProtectRoutes,
@@ -15,8 +16,11 @@ import {
   consumeLoginAttempt,
   resetLoginRateLimitForTests,
   passwordsMatch,
+  allowMemorySessionFallback,
+  interpretAuthMeProbe,
 } from "../src/lib/auth";
 import { isStoredSessionActiveEdge, verifySessionTokenEdge } from "../src/lib/auth/session-edge";
+import { isSupabaseConfigured } from "../src/lib/sync/db-client";
 import { verifyWebhookSecret } from "../src/lib/sync";
 import {
   PROTECTED_MASTER_LOCATION_ID,
@@ -323,6 +327,196 @@ describe("private API protection helpers", () => {
     const body = { ok: false, error: "Unauthorized" };
     assert.equal(body.ok, false);
   });
+
+  it("interpretAuthMeProbe: enforced session required → ready", () => {
+    const r = interpretAuthMeProbe(401, { ok: false, authEnforced: true, user: null });
+    assert.equal(r.authReady, true);
+    assert.equal(r.misconfigured, false);
+  });
+
+  it("interpretAuthMeProbe: fail-open 200 → not ready (banner text)", () => {
+    const r = interpretAuthMeProbe(200, {
+      ok: true,
+      authEnforced: false,
+      authFailClosed: false,
+      user: null,
+    });
+    assert.equal(r.authReady, false);
+    assert.equal(r.misconfigured, false);
+    assert.match(r.message, /Authentication is not enforced/);
+  });
+
+  it("interpretAuthMeProbe: production fail-closed without secret → misconfigured", () => {
+    const r = interpretAuthMeProbe(503, {
+      ok: false,
+      authEnforced: false,
+      authFailClosed: true,
+      user: null,
+    });
+    assert.equal(r.authReady, false);
+    assert.equal(r.misconfigured, true);
+    assert.match(r.message, /AUTH_SECRET/);
+  });
+
+  it("interpretAuthMeProbe: bare 401 without authEnforced still ready", () => {
+    const r = interpretAuthMeProbe(401, { ok: false, error: "Unauthorized" });
+    assert.equal(r.authReady, true);
+  });
+});
+
+describe("auth env name contracts", () => {
+  it("exact Production variable names are the ones the code reads", () => {
+    const names = [
+      "AUTH_SECRET",
+      "AUTH_OWNER_EMAIL",
+      "AUTH_OWNER_PASSWORD",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_KEY",
+    ];
+    for (const n of names) assert.equal(typeof n, "string");
+    assert.equal(getAuthSecret({ AUTH_SECRET: "  abc  " }), "abc");
+    assert.equal(getAuthSecret({ AUTH_SECRET: "   " }), "");
+    assert.equal(getAuthSecret({ AUTH_SECRET: "" }), "");
+    assert.equal(getAuthSecret({}), "");
+  });
+
+  it("blank and whitespace AUTH_SECRET are not enforced", () => {
+    assert.equal(isAuthEnforced({ AUTH_SECRET: "" }), false);
+    assert.equal(isAuthEnforced({ AUTH_SECRET: "  \t  " }), false);
+    assert.equal(isAuthEnforced({ AUTH_SECRET: "real-secret" }), true);
+  });
+
+  it("AUTH_SECRET signing key is separate from AUTH_OWNER_PASSWORD", async () => {
+    const env = {
+      AUTH_SECRET: "signing-secret-not-password",
+      AUTH_OWNER_EMAIL: "owner@example.invalid",
+      AUTH_OWNER_PASSWORD: "owner-login-password",
+    };
+    assert.equal(getAuthSecret(env), "signing-secret-not-password");
+    const user = authenticateCredentials("owner@example.invalid", "owner-login-password", env);
+    assert.ok(user);
+    assert.equal(authenticateCredentials("owner@example.invalid", "signing-secret-not-password", env), null);
+  });
+
+  it("production without AUTH_SECRET fail-closes; Preview without secret stays open unless AUTH_FAIL_CLOSED", () => {
+    assert.equal(isAuthFailClosed({ VERCEL_ENV: "production" }), true);
+    assert.equal(mustProtectRoutes({ VERCEL_ENV: "production" }), true);
+    assert.equal(isAuthEnforced({ VERCEL_ENV: "production" }), false);
+    assert.equal(isAuthFailClosed({ VERCEL_ENV: "preview" }), false);
+    assert.equal(mustProtectRoutes({ VERCEL_ENV: "preview" }), false);
+    assert.equal(mustProtectRoutes({ VERCEL_ENV: "preview", AUTH_FAIL_CLOSED: "true" }), true);
+  });
+
+  it("isSupabaseConfigured rejects missing, blank, and non-http URLs", () => {
+    assert.equal(isSupabaseConfigured({}), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "not-a-url", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "httpfoo", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(isSupabaseConfigured({ SUPABASE_URL: "ftp://x.example", SUPABASE_SERVICE_ROLE_KEY: "k" }), false);
+    assert.equal(
+      isSupabaseConfigured({
+        SUPABASE_URL: "https://x.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY: "service-role",
+      }),
+      true
+    );
+  });
+
+  it("Preview/Production session create fails closed without Supabase", async () => {
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+    assert.ok(user, "owner credentials must resolve");
+    await assert.rejects(
+      () => createSessionToken(user!, SECRET),
+      /Session store unavailable/
+    );
+    process.env.VERCEL_ENV = "preview";
+    await assert.rejects(
+      () => createSessionToken(user!, SECRET),
+      /Session store unavailable/
+    );
+    delete process.env.VERCEL_ENV;
+  });
+
+  it("durable confirmation failure rejects session creation", async () => {
+    const originalFetch = globalThis.fetch;
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_secret_test_placeholder";
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify([{ id: "ok" }]), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+      assert.ok(user, "owner credentials must resolve");
+      await assert.rejects(
+        () => createSessionToken(user!, SECRET),
+        /could not be confirmed/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
+  });
+
+  it("durable revocation failure surfaces a safe error", async () => {
+    const originalFetch = globalThis.fetch;
+    const { revokeStoredSession } = await import("../src/lib/auth/session-store");
+    process.env.AUTH_OWNER_EMAIL = "owner@example.invalid";
+    process.env.AUTH_OWNER_PASSWORD = "owner-pass";
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.AUTH_ALLOW_MEMORY_SESSIONS = "true";
+    delete process.env.VERCEL_ENV;
+    const user = authenticateCredentials("owner@example.invalid", "owner-pass");
+    assert.ok(user, "owner credentials must resolve");
+    const token = await createSessionToken(user!, SECRET);
+    const session = await verifySessionToken(token, SECRET);
+    assert.ok(session?.sid);
+    process.env.SUPABASE_URL = "https://db.example.invalid";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.sig";
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ message: "forced revoke failure" }), { status: 500 });
+    try {
+      await assert.rejects(
+        () => revokeStoredSession(session!.sid!),
+        /Durable session revoke failed/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
+  });
+
+  it("memory fallback never enabled when Supabase is configured", () => {
+    const env = {
+      SUPABASE_URL: "https://x.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "k",
+      VERCEL_ENV: "production",
+    };
+    assert.equal(allowMemorySessionFallback(env), false);
+    assert.equal(allowMemorySessionFallback({ VERCEL_ENV: "preview" }), false);
+    assert.equal(allowMemorySessionFallback({ VERCEL_ENV: "production" }), false);
+  });
 });
 
 describe("webhook machine access", () => {
@@ -335,6 +529,22 @@ describe("webhook machine access", () => {
       enforceFlag: true,
     });
     assert.deepEqual(ok, { ok: true });
+  });
+
+  it("Production-style enforceFlag requires secret even when dryRun", () => {
+    const r = verifyWebhookSecret({
+      signatureHeader: "",
+      dryRun: true,
+      secretConfigured: false,
+      secretValue: "",
+      enforceFlag: true, // VERCEL_ENV=production path
+    });
+    assert.deepEqual(r, { ok: false, code: "secret_required" });
+  });
+
+  it("webhook never uses login redirect semantics", () => {
+    // Machine ingest must stay JSON 401, not HTML login — covered by public middleware path.
+    assert.equal("/api/webhooks/ghl".startsWith("/api/webhooks"), true);
   });
 });
 

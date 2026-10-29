@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
-import { Card, PageHead, DataTable, Button } from "@/components/ui";
+import { Card, PageHead, DataTable, Button, LoadError } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
+import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
 
 const FILTERS = ["All", "Unread", "Awaiting Reply"] as const;
 
@@ -18,42 +19,66 @@ type ConvoRow = {
   summary: string;
 };
 
+type LoadState = "loading" | "ready" | "unauthorized" | "error";
+
 export default function InboxPage() {
   const [active, setActive] = useState<(typeof FILTERS)[number]>("All");
   const [rows, setRows] = useState<ConvoRow[]>([]);
   const [waiting, setWaiting] = useState(true);
-  const [loaded, setLoaded] = useState(false);
+  const [state, setState] = useState<LoadState>("loading");
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const load = useCallback(async () => {
+    setState("loading");
+    setErrorMessage("");
+    try {
+      const res = await fetch("/api/dashboard/conversations");
+      if (res.status === 401 || res.status === 403) {
+        setRows([]);
+        setWaiting(true);
+        setState("unauthorized");
+        setErrorMessage("Your session expired or you are not signed in. Sign out and sign back in.");
+        return;
+      }
+      if (!res.ok) {
+        setState("error");
+        setErrorMessage("The conversations API returned an unexpected response.");
+        return;
+      }
+      const data = await res.json();
+      const list = Array.isArray(data.conversations) ? data.conversations : [];
+      setRows(list);
+      setWaiting(Boolean(data.waitingForSync) || list.length === 0);
+      setState("ready");
+    } catch {
+      setRows([]);
+      setWaiting(true);
+      setState("error");
+      setErrorMessage("Network error while loading conversations.");
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/dashboard/conversations");
-        const data = await res.json();
-        if (cancelled) return;
-        const list = Array.isArray(data.conversations) ? data.conversations : [];
-        setRows(list);
-        setWaiting(Boolean(data.waitingForSync) || list.length === 0);
-      } catch {
-        if (!cancelled) {
-          setRows([]);
-          setWaiting(true);
-        }
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void load();
+  }, [load]);
 
   const filtered =
     active === "All"
       ? rows
       : active === "Unread"
-        ? rows.filter((r) => r.direction === "inbound")
-        : rows.filter((r) => r.direction === "inbound");
+        ? rows.filter(
+            (r) =>
+              r.direction === "inbound" ||
+              /inbound|reply/i.test(r.eventType || "")
+          )
+        : rows.filter((r) => {
+            // Awaiting reply: inbound that asks for human help / handoff.
+            const et = `${r.eventType || ""} ${r.summary || ""}`;
+            return (
+              (r.direction === "inbound" || /inbound|reply/i.test(r.eventType || "")) &&
+              /handoff|human|escalat|await/i.test(et)
+            );
+          });
 
   const tableRows = filtered.map((r) => [
     r.contactId || "—",
@@ -66,16 +91,20 @@ export default function InboxPage() {
     <AppShell>
       <PageHead
         title="Conversations"
-        description="Conversation events synced from HighLevel (summary only — full message history is not replicated on the $297 plan)."
+        description={`${SYNC_SOURCE_SHORT} Full message history is not replicated in this plan.`}
       />
 
-      <StatusBanner>
-        {!loaded
-          ? "Loading sync state…"
-          : waiting
-            ? "Waiting for HighLevel sync — no conversation events yet."
-            : "Showing synced conversation events. Do not send from this view until messaging channels are live."}
-      </StatusBanner>
+      {state === "unauthorized" || state === "error" ? (
+        <LoadError message={errorMessage} onRetry={load} />
+      ) : (
+        <StatusBanner>
+          {state === "loading"
+            ? "Loading sync state…"
+            : waiting
+              ? syncBannerWaiting("conversation events")
+              : "Showing synced conversation events. Do not send from this view until messaging channels are live."}
+        </StatusBanner>
+      )}
 
       <div className="quick-actions" style={{ margin: "1.1rem 0" }} role="tablist" aria-label="Conversation filters">
         {FILTERS.map((f) => (
@@ -83,6 +112,7 @@ export default function InboxPage() {
             key={f}
             size="sm"
             variant={active === f ? "primary" : "secondary"}
+            aria-pressed={active === f}
             onClick={() => setActive(f)}
           >
             {f}
@@ -91,7 +121,9 @@ export default function InboxPage() {
       </div>
 
       <Card title="Conversation Threads">
-        {waiting ? (
+        {state === "loading" ? (
+          <EmptyLoading />
+        ) : waiting || state !== "ready" ? (
           <WaitingForSync entity="conversations" />
         ) : (
           <DataTable
@@ -103,5 +135,14 @@ export default function InboxPage() {
         )}
       </Card>
     </AppShell>
+  );
+}
+
+function EmptyLoading() {
+  return (
+    <div className="empty" role="status" aria-live="polite">
+      <strong>Loading conversations…</strong>
+      <span>Fetching the latest synced events.</span>
+    </div>
   );
 }

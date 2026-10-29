@@ -1,4 +1,5 @@
 import { EmptyState } from "@/components/ui";
+import { SYNC_WAITING_TITLE, syncWaitingNote } from "@/lib/ui/sync-copy";
 
 /** Shared empty state when webhook sync has not populated the store yet. */
 export function WaitingForSync({
@@ -6,10 +7,5 @@ export function WaitingForSync({
 }: {
   entity?: string;
 }) {
-  return (
-    <EmptyState
-      title="Waiting for HighLevel sync"
-      note={`No ${entity} has been received yet. HighLevel workflows should POST normalized events to /api/webhooks/ghl. This dashboard does not read CRM lists directly on the $297 plan.`}
-    />
-  );
+  return <EmptyState title={SYNC_WAITING_TITLE} note={syncWaitingNote(entity)} />;
 }

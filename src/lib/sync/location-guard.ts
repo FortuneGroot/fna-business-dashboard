@@ -1,4 +1,3 @@
-import { BRAND } from "@/lib/brand";
 import { loadEnv } from "@/lib/env";
 import { PROTECTED_MASTER_LOCATION_ID, configuredLocationId } from "@/lib/tenant";
 
@@ -10,11 +9,7 @@ export function assertAllowedLocationId(locationId: string): string {
   const env = loadEnv();
   const id = String(locationId || "").trim();
   if (!id) throw new Error("location_id required");
-  if (
-    id === PROTECTED_MASTER_LOCATION_ID ||
-    id === BRAND.forbiddenMasterId ||
-    id === env.forbiddenMasterId
-  ) {
+  if (id === PROTECTED_MASTER_LOCATION_ID || id === env.forbiddenMasterId) {
     throw new Error("Protected Master location refused");
   }
   const configured = configuredLocationId();
