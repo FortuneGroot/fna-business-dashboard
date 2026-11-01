@@ -1,6 +1,8 @@
 /* Browser helpers for the native §7.4 APIs (AUTH_PROVIDER=supabase). Requests carry the session
  * cookie; the server takes the workspace from the session, never from the client. */
 
+import { markWorkspaceStale, workspaceHeaders } from "./workspace-pin";
+
 export type ApiBody = { ok?: boolean; error?: string; code?: string; fields?: Record<string, string> } & Record<string, unknown>;
 
 export async function api(path: string, init?: RequestInit): Promise<{ status: number; body: ApiBody }> {
@@ -8,9 +10,11 @@ export async function api(path: string, init?: RequestInit): Promise<{ status: n
     const res = await fetch(path, {
       ...init,
       cache: "no-store",
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...workspaceHeaders() },
     });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as ApiBody };
+    const body = (await res.json().catch(() => ({}))) as ApiBody;
+    if (res.status === 409 && body.code === "workspace_changed") markWorkspaceStale();
+    return { status: res.status, body };
   } catch {
     return { status: 0, body: { error: "Network error. Try again." } };
   }

@@ -103,7 +103,34 @@ export async function requireApiContext(req: NextRequest, requirement: ContextRe
     return { ctx: null, supabase, pending, error: applyPendingCookies(unavailableResponse(), pending) };
   }
   const denial = evaluateContext(ctx, requirement);
-  return { ctx, supabase, pending, error: denial ? applyPendingCookies(denialResponse(denial), pending) : null };
+  if (denial) return { ctx, supabase, pending, error: applyPendingCookies(denialResponse(denial), pending) };
+  if (!requirement.allowNoWorkspace && workspaceChanged(req, ctx)) {
+    return { ctx, supabase, pending, error: applyPendingCookies(workspaceChangedResponse(), pending) };
+  }
+  return { ctx, supabase, pending, error: null };
+}
+
+/**
+ * Header naming the workspace a browser page was rendered for. It is a precondition only: the
+ * workspace always comes from the session, and a mismatch is refused so a tab left open on another
+ * business can neither show nor change the newly active one's records.
+ */
+export const EXPECTED_WORKSPACE_HEADER = "x-fna-workspace";
+
+function workspaceChanged(req: NextRequest, ctx: RequestContext | null): boolean {
+  const expected = req.headers.get(EXPECTED_WORKSPACE_HEADER)?.trim().toLowerCase();
+  return Boolean(expected && ctx?.workspace && ctx.workspace.id.toLowerCase() !== expected);
+}
+
+function workspaceChangedResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "You switched to a different business in another tab. Reload this page to continue.",
+      code: "workspace_changed",
+    },
+    { status: 409, headers: { "Cache-Control": "private, no-store" } }
+  );
 }
 
 /**

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { BRAND } from "@/lib/brand";
 import type { AuthRole } from "@/lib/auth/types";
 import { canAccessLibrary, canAccessOwnerSettings, roleSatisfies } from "@/lib/auth/types";
+import { markWorkspaceStale, pinnedWorkspace } from "@/lib/ui/workspace-pin";
 
 type TenantChrome = {
   client?: { businessName?: string };
@@ -141,6 +142,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
         if (Array.isArray(d?.permissions)) setPermissions(d.permissions);
         if (typeof d?.workspace?.name === "string" && d.workspace.name) setWorkspaceName(d.workspace.name);
+        const pinned = pinnedWorkspace();
+        if (pinned && typeof d?.workspace?.id === "string" && d.workspace.id !== pinned) markWorkspaceStale();
       })
       .catch(() => undefined);
   }, []);

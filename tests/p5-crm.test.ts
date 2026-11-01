@@ -65,8 +65,8 @@ const ctxFor = (u: FakeUser, role: string, permissions: string[], ws = WS_A) => 
 type Handler = (req: NextRequest, ctx: { params: Promise<any> }) => Promise<Response>;
 const params = (p: Record<string, string> = {}) => ({ params: Promise.resolve(p) });
 
-function req(path: string, init: { cookie?: string; method?: string; body?: unknown; contentType?: string | null } = {}) {
-  const headers = new Headers();
+function req(path: string, init: { cookie?: string; method?: string; body?: unknown; contentType?: string | null; headers?: Record<string, string> } = {}) {
+  const headers = new Headers(init.headers);
   if (init.cookie) headers.set("cookie", init.cookie);
   const contentType = init.contentType === undefined ? "application/json" : init.contentType;
   if (init.body !== undefined && contentType !== null) headers.set("content-type", contentType);
@@ -248,9 +248,9 @@ const ROUTES: [string, string, Handler, Record<string, string>, unknown?][] = [
   ["GET", "/api/reports/summary", reportRoute as Handler, {}],
 ];
 
-const call = (route: (typeof ROUTES)[number], cookie?: string, override?: { path?: string; body?: unknown }) => {
+const call = (route: (typeof ROUTES)[number], cookie?: string, override?: { path?: string; body?: unknown; headers?: Record<string, string> }) => {
   const [method, path, handler, p, body] = route;
-  return handler(req(override?.path ?? path, { method, cookie, body: override && "body" in override ? override.body : body }), params(p));
+  return handler(req(override?.path ?? path, { method, cookie, body: override && "body" in override ? override.body : body, headers: override?.headers }), params(p));
 };
 
 describe("P5 routes (AUTH_PROVIDER=supabase, fake Supabase)", () => {
@@ -313,6 +313,20 @@ describe("P5 routes (AUTH_PROVIDER=supabase, fake Supabase)", () => {
       assert.equal(fake.rpcCalls(name).length, 0, `${name} must not be called`);
     }
     assert.equal(fake.calls.some((x) => x.method !== "GET" && x.method !== "HEAD" && !x.path.startsWith("/rest/v1/rpc/request_context")), false);
+  });
+
+  test("a tab pinned to another workspace is refused on every route (409 workspace_changed) before any write", async () => {
+    const c = cookie(owner);
+    for (const route of ROUTES) {
+      const r = await json(await call(route, c, { headers: { "x-fna-workspace": WS_B } }));
+      assert.deepEqual([r.status, r.body.code], [409, "workspace_changed"], `${route[0]} ${route[1]}`);
+    }
+    assert.equal(fake.calls.some((x) => x.method !== "GET" && x.method !== "HEAD" && !x.path.startsWith("/rest/v1/rpc/request_context")), false,
+      "no write reached the database");
+    for (const pin of [WS_A, WS_A.toUpperCase(), ""]) {
+      const r = await json(await call(ROUTES.find((x) => x[0] === "GET" && x[1] === "/api/contacts")!, c, { headers: pin ? { "x-fna-workspace": pin } : {} }));
+      assert.equal(r.status, 200, `pin "${pin}" matching the session (or absent) passes`);
+    }
   });
 
   test("a read-only grant cannot write anything (403 on every write)", async () => {
@@ -455,6 +469,16 @@ describe("P5 static guards", () => {
       assert.equal(/supabase\/admin|SERVICE_ROLE|serviceRole/.test(src), false, `${rel(f)}: no service role`);
       assert.equal(/input\.workspace|query\.workspace|body\.workspace/i.test(src), false, `${rel(f)}: no client workspace id`);
     }
+  });
+
+  test("the workspace pin is only a precondition header; a workspace id is posted only to the switch route", () => {
+    const src = readFileSync(join(ROOT, "src", "lib", "ui", "workspace-pin.ts"), "utf8");
+    assert.deepEqual(src.match(/"X-FNA-Workspace"/g), ['"X-FNA-Workspace"'], "the pin leaves the browser only as the precondition header");
+    assert.deepEqual(src.match(/fetch\("[^"]+"/g), ['fetch("/api/workspaces/active"'], "the only request it makes is the switch");
+    assert.deepEqual(src.match(/workspaceId:/g), ["workspaceId:"], "the switch body is the only workspace id it sends");
+    const ctx = readFileSync(join(ROOT, "src", "lib", "authz", "context.ts"), "utf8");
+    assert.match(ctx, /EXPECTED_WORKSPACE_HEADER = "x-fna-workspace"/);
+    assert.equal((ctx.match(/EXPECTED_WORKSPACE_HEADER/g) ?? []).length, 2, "the server reads the header in one place, only to compare");
   });
 
   test("browser components never send a workspace id and never message anyone", () => {

@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { failure } from "@/lib/ui/native-api";
+import { switchWorkspace } from "@/lib/ui/workspace-pin";
 
 export type WorkspaceChoice = { id: string; name: string };
 
@@ -31,18 +33,9 @@ export function AccessNotice({
   async function choose(id: string) {
     setBusy(true);
     setError("");
-    const res = await fetch("/api/workspaces/active", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId: id }),
-    }).catch(() => null);
-    if (res?.ok) {
-      router.replace("/dashboard");
-      router.refresh();
-      return;
-    }
-    const data = res ? await res.json().catch(() => ({})) : {};
-    setError(data.error || "That workspace is not available.");
+    const { status, body } = await switchWorkspace(id);
+    if (status === 200) return;
+    setError(failure(body, "That workspace is not available."));
     setBusy(false);
   }
 

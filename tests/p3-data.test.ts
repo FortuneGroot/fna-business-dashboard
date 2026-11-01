@@ -513,7 +513,7 @@ describe("P3 static checks", () => {
     assert.match(onboarding, /native\s*\?\s*"Owner-only setup status for this workspace\./, "native onboarding description");
     const settings = readFileSync(join(ROOT, "src", "app", "(protected)", "settings", "page.tsx"), "utf8");
     assert.match(settings, /me\?\.legacyRole/, "settings reads the native membership's legacy role");
-    assert.match(settings, /fetch\("\/api\/dashboard\/summary"\)/, "settings reads system status from the dashboard summary");
+    assert.match(settings, /fetch\("\/api\/dashboard\/summary"[,)]/, "settings reads system status from the dashboard summary");
     assert.equal(settings.includes("/api/sync/health"), false, "settings never calls the retired sync endpoint");
     assert.equal(settings.includes("/api/health"), false, "settings does not fetch a health body it never reads (left the page loading in Chromium)");
     const nativeSettings = readFileSync(join(ROOT, "src", "components", "settings", "NativeSettings.tsx"), "utf8");

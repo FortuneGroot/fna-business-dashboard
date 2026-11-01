@@ -14,6 +14,7 @@ import {
   NativeTeam,
   useTeam,
 } from "@/components/settings/NativeSettings";
+import { markWorkspaceStale, workspaceHeaders } from "@/lib/ui/workspace-pin";
 
 type TenantConfig = {
   client?: { businessName?: string; timezone?: string };
@@ -45,7 +46,10 @@ export default function SettingsPage() {
     setLoadState("loading");
     setErr("");
     try {
-      const [meRes, tenantRes] = await Promise.all([fetch("/api/auth/me"), fetch("/api/tenant/config")]);
+      const [meRes, tenantRes] = await Promise.all([
+        fetch("/api/auth/me"),
+        fetch("/api/tenant/config", { headers: workspaceHeaders() }),
+      ]);
       let isNative = false;
       if (meRes.ok) {
         const me = await meRes.json();
@@ -58,10 +62,16 @@ export default function SettingsPage() {
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
       }
       setNative(isNative);
-      const syncRes = await fetch("/api/dashboard/summary");
+      const syncRes = await fetch("/api/dashboard/summary", { headers: workspaceHeaders() });
       if (tenantRes.status === 401 || tenantRes.status === 403) {
         setLoadState("unauthorized");
         setErr("Your session expired or you are not signed in. Sign out and sign back in.");
+        return;
+      }
+      if (tenantRes.status === 409) {
+        markWorkspaceStale();
+        setLoadState("error");
+        setErr("You switched to a different business in another tab. Reload this page to continue.");
         return;
       }
       if (!tenantRes.ok) {

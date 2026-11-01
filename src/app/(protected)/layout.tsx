@@ -1,6 +1,7 @@
 import { requirePageSession } from "@/lib/auth/guards";
 import { authProvider } from "@/lib/auth/provider";
 import { SupportAccessProvider, type SupportAccessInfo } from "@/components/SupportAccess";
+import { WorkspacePin } from "@/components/WorkspaceSwitcher";
 
 export const dynamic = "force-dynamic";
 
@@ -11,9 +12,11 @@ export default async function ProtectedLayout({
 }) {
   await requirePageSession();
   let support: SupportAccessInfo | null = null;
+  let workspaceId: string | null = null;
   if (authProvider() === "supabase") {
     const { getRequestContext } = await import("@/lib/authz/context");
     const ctx = await getRequestContext();
+    workspaceId = ctx?.workspace?.id ?? null;
     if (ctx?.grant && ctx.workspace) {
       support = {
         grantId: ctx.grant.id,
@@ -24,5 +27,10 @@ export default async function ProtectedLayout({
       };
     }
   }
-  return <SupportAccessProvider value={support}>{children}</SupportAccessProvider>;
+  return (
+    <SupportAccessProvider value={support}>
+      <WorkspacePin workspaceId={workspaceId} />
+      {children}
+    </SupportAccessProvider>
+  );
 }

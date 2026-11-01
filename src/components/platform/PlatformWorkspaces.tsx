@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button, Card, DataTable, Modal, PageHead } from "@/components/ui";
 import { api, failure, when } from "@/lib/ui/native-api";
+import { switchWorkspace } from "@/lib/ui/workspace-pin";
 import { InviteLinkModal, ModeBadge, ReasonModal, StatusBadge, isLive, leftText, useNow, type WorkspaceStatus } from "./shared";
 
 export type WorkspaceRow = {
@@ -147,14 +148,11 @@ export function PlatformWorkspaces({ initial, grants: initialGrants }: { initial
   }, [q, status]);
 
   async function openGrant(g: GrantRow) {
-    const { status: code, body } = await api("/api/workspaces/active", { method: "POST", body: JSON.stringify({ workspaceId: g.workspaceId }) });
+    const { status: code, body } = await switchWorkspace(g.workspaceId);
     if (code !== 200) {
       setError(failure(body, "That support session is no longer available."));
       await reloadGrants();
-      return;
     }
-    router.push("/dashboard");
-    router.refresh();
   }
 
   const live = grants.filter((g) => isLive(g, now));

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { MobileMenuButton } from "./Sidebar";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -62,6 +63,7 @@ export function TopBar({
             aria-disabled="true"
           />
         </label>
+        <WorkspaceSwitcher />
         <button className="btn secondary topbar-signout" type="button" onClick={logout}>
           Sign out
         </button>

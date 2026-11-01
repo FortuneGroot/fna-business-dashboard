@@ -2,32 +2,13 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Badge, Card, DataTable, EmptyState, Modal } from "@/components/ui";
+import { api, failure } from "@/lib/ui/native-api";
 
 /* Native-workspace Settings sections (AUTH_PROVIDER=supabase). They reuse the page's existing
  * cards, form controls and table; every change goes through the §7.4 APIs with the user's session. */
 
 type Role = "owner" | "admin" | "employee";
 const ROLE_LABEL: Record<Role, string> = { owner: "Owner", admin: "Admin", employee: "Employee" };
-
-type ApiBody = { ok?: boolean; error?: string; fields?: Record<string, string> } & Record<string, unknown>;
-
-async function api(path: string, init?: RequestInit): Promise<{ status: number; body: ApiBody }> {
-  try {
-    const res = await fetch(path, {
-      ...init,
-      cache: "no-store",
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-    });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as ApiBody };
-  } catch {
-    return { status: 0, body: { error: "Network error. Try again." } };
-  }
-}
-
-function failure(body: ApiBody, fallback: string): string {
-  const field = body.fields ? Object.values(body.fields)[0] : "";
-  return field || body.error || fallback;
-}
 
 function when(iso: string | null | undefined): string {
   return iso ? iso.slice(0, 16).replace("T", " ") : "—";
