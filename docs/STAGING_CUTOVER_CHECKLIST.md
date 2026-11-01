@@ -9,12 +9,12 @@ require George's explicit approval (spec §9.2 P9, §11).
 
 | Decision | Evidence so far (local) | Who | Status |
 | --- | --- | --- | --- |
-| **Logout replay.** After logout, a copied session cookie still works until its access token expires. | Acceptance test 14 on a fresh disposable stack: read **200**, ordinary record write **200**, invitation (sensitive action) **401**. Stack tests AUTH-1 and "sensitive actions re-check the session" agree. Codex recommended immediate app-session revocation (session-row check in `request_context`) before real use (spec §16.5). | George | OPEN |
+| **Logout replay.** Previously a copied session cookie kept working until its access token expired. | **Implemented locally (M21, spec §5.1):** access requires the token's Auth session row; logout ends reads, writes, and direct Data API use at once. Acceptance test 14 and the product rehearsal (two browser tabs) now observe **401** for replayed reads, writes, sensitive actions, and the raw token at PostgREST; the refresh token is revoked; other sessions continue. | George (acknowledge) | DONE locally — verify on staging (the PostgREST pre-request setting must be present after `db push`) |
 | **Migration-history reconciliation.** The two legacy migrations were renamed from the shared version `20260917`; the remote history of any existing database is unknown. | `docs/MIGRATION_VERSION_MAPPING.md` lists the three possible findings and the exact `supabase migration repair` command for each. Nothing has been run against any remote database. | Operator, on staging first | OPEN |
-| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes). | Spec §20.4 item 4. | George | OPEN — accept the gap or require a second platform admin |
+| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes, by design). | Operator path implemented: `scripts/bootstrap-platform-admin.ts remove-mfa --reason …` deletes the factors (audited); the admin signs in and re-enrols (local stack test). The policy choice is not technical. | George | OPEN — decide who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin |
 | **Paid Supabase plan** before production (D5). | No purchase made. | George | OPEN |
 | **Per-client configuration owner check.** Whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`. | P7 removed runtime use of both (spec §21.4); the legacy snapshot reads only the bundled default. Not verifiable locally. | Owner of the Vercel project | OPEN |
-| **Platform-admin bootstrap.** The spec's A2 script does not exist. | All suites insert the `platform_admins` row directly as test setup. | George / developer | OPEN — write the script or approve the manual insert (§1, T2) |
+| **Platform-admin bootstrap.** | `scripts/bootstrap-platform-admin.ts` (A2) written: `grant`/`revoke`/`remove-mfa`/`list`, audited; `--env local` accepts only loopback URLs; `--env staging|production` needs https, an interactive terminal, and the typed phrase it shows. Unit tests plus a disposable-stack test; never run against a hosted project. | George / operator | DONE locally — first hosted use is T2 on staging |
 | **P7 deploy ordering.** A P7 build has no `/api/webhooks/ghl`; a deployment that still receives GHL webhooks will get 404s. | Spec §21.4; `docs/VERCEL_RELEASE_POLICY.md`. | George | OPEN — disable the GHL webhook before promoting a P7 build, or keep the pre-P7 build (`release` @ `9c189f8`) |
 
 ## 1. Staging rehearsal (P8 / T2–T4)
@@ -24,7 +24,8 @@ require George's explicit approval (spec §9.2 P9, §11).
 - [ ] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
 - [ ] `supabase db push` the required manifest (§5) to staging; `supabase migration list` shows local and remote identical. M15 is not part of it.
 - [ ] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
-- [ ] T2: create George's auth user, register him as platform admin, enrol MFA (D6). **Blocker:** `scripts/bootstrap-platform-admin.ts` (spec §6.4, A2) was never written; every test suite stands in for it with a direct `insert into public.platform_admins`. Either write and review the script (refuses non-local targets without `--env staging|production` plus a typed confirmation), or have the operator run that one-row insert in the staging SQL editor after confirming George's `auth.users` id, and record it.
+- [ ] T2: create George's auth user (sign up), then `SUPABASE_URL=<staging origin> SUPABASE_SERVICE_ROLE_KEY=<staging key> npx tsx scripts/bootstrap-platform-admin.ts grant --email <george> --env staging` from an interactive terminal, type the confirmation phrase, and enrol MFA at `/platform/mfa` (D6). Confirm with `… list --env staging`. The key is read from the environment only; never paste it into a file or command history.
+- [ ] Confirm M21 on staging: `select rolconfig from pg_roles where rolname = 'authenticator'` includes `pgrst.db_pre_request=public.check_request_session`; after logging out, the old cookie gets 401.
 - [ ] T3: provision the F&A workspace (`provisioning_key = 'fa-live'`); open the owner link (shown once, nothing is emailed) and accept it as George.
 - [ ] Set staging app env by name only: `AUTH_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `APP_ORIGIN`. No `GHL_*` variables.
 - [ ] T4: run the acceptance suite's journeys against staging with synthetic businesses (requires an allowlisted staging harness; the local harness refuses non-local hosts by design).
@@ -37,7 +38,7 @@ require George's explicit approval (spec §9.2 P9, §11).
 
 ## 2. Production cutover (P9 / T5) — requires George's explicit approval
 
-- [ ] Paid plan in place (D5). Logout-replay decision recorded and implemented if required.
+- [ ] Paid plan in place (D5). M21 logout revocation confirmed on staging.
 - [ ] Verified production backup; restore procedure tested on staging.
 - [ ] Disable the GHL webhook (or confirm nothing posts to it) before promoting a P7 build.
 - [ ] Reconcile production migration history exactly as rehearsed; then push the required manifest (§5), the same files staging received. Never M15.
@@ -72,7 +73,9 @@ require George's explicit approval (spec §9.2 P9, §11).
 | Cookie refresh | — | refreshed sessions reach the browser |
 | Expiry (token, invitation, grant) | 11 | ISO-F3 (expired cookies); INV-3/4; one-minute grant |
 | Failure recovery | — | AUTH-1 failed sign-ins (generic 401/429); unit tests map an unreachable Auth server to 503 |
-| Logout and replay | 14 (observed values pinned) | AUTH-1; sensitive actions re-check the session |
+| Logout and replay (M21) | 14; product rehearsal "logout across tabs" | AUTH-1; platform Storage endpoint; sensitive actions re-check the session |
+| Employee overrides, business hours, logos, full board | product rehearsal | permission overrides (PostgREST and Storage) |
+| Platform-admin bootstrap and MFA recovery | — | `tests/supabase-stack/bootstrap.test.ts` |
 | Legacy mode, no GHL | 15 | tenant config, public branding, health, and retired legacy endpoints |
 | No outbound requests | 15, 16 | NET-1 |
 | Navigation and design | 5 (sidebar) | UI-1 (all destinations, empty states); UI-2 visual run |

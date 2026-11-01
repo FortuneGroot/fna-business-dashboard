@@ -77,7 +77,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Review finding 3: refreshed/cleared session cookies applied on `/api/auth/me` and every other supabase-mode response, including denials.
 - [x] Review finding 4: JSON bodies must be objects with typed fields on all new endpoints (null, arrays, wrong types → 400/422).
 - [x] Review round 3: Storage audit outcomes are attributed to the server's own operation (secret per-operation token, `storage.objects` trigger; the Storage API commits member and server writes identically, so the token is the discriminator); member writes never count; recovery returns `409 operation_in_progress` and keeps the claim while the operation may run; after the 2-minute lease, recording the outcome fences any late write.
-- [ ] Decision (recommended by Codex before real use): make logout immediate for reads (session-row check in `request_context`). Today, per spec §5.1, a copied cookie of a logged-out session reads until its access token expires; sensitive mutations already refuse it.
+- [x] Logout is immediate (M21, spec §5.1): access requires the token's Auth session row (`private.active_workspace_id`, `private.is_platform_admin`, `request_context`, PostgREST pre-request check). Replayed cookie or raw token after logout: reads, writes, and sensitive actions 401; stale cookies expired; other sessions continue. PGlite 7 tests; stack AUTH-1 and platform Storage; acceptance 14 and the two-tab browser rehearsal.
 
 ## P3 read parity
 
@@ -104,7 +104,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Settings UI in the existing cards; invite landing page in the existing card design.
 - [x] Browser flow against the real local stack (invite → account → role change → removal → settings → revoked link).
 - [ ] Overrides editor in Settings (API exists).
-- [ ] Logout-replay decision (above) still open.
+- [x] Logout replay closed by M21 (above).
 
 ## P5 native records
 
@@ -122,6 +122,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 ## P6 platform console
 
 - [x] M20 (Codex review): `replace_availability` locks the calendar row first; real-PostgreSQL two-session regression (both orders) plus a control proving the unlocked version merges schedules.
+- [x] Settings: employee permission overrides editor (team card), editable business hours, workspace logo upload/remove with signed-URL display (§6.6, `/api/settings/logo`); pipeline board loads every opportunity of a stage beyond the first eight.
 - [x] M19: `platform_status`, search/detail/grants/audit pages, reason-bearing `platform_revoke_access(grant, reason)` (live grants only; one-argument form no longer client-callable); rollback block.
 - [x] Console outside the client sidebar (existing top bar, cards, tables, modals); legacy mode 404.
 - [x] Platform authority = `platform_admins` row + AAL2, independent of membership; members 403/404, listed AAL1 admins `mfa_required` and redirected to MFA; decided in middleware before rendering.
@@ -132,7 +133,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Support access: mode, duration (1–480 min), reason; banner with workspace, mode, expiry, minutes left; ending needs a reason; revocation and clock expiry apply on the next request; writes attributed to the grant.
 - [x] Audit view (all workspaces or one) with actor email and reason; credential-like metadata keys dropped; no tokens in any response except the one-time link.
 - [x] Browser flow against the real local stack (no-access → MFA enrolment → provision → detail → support access → banner → end → audit).
-- [ ] MFA device-loss recovery is not self-service (operator removes the factor); no recovery codes.
+- [x] MFA device-loss recovery: operator command `scripts/bootstrap-platform-admin.ts remove-mfa --reason …` (audited; admin re-enrols). Not self-service, no recovery codes (by design). Who may run it is George's policy decision.
 
 ## P7 GHL runtime retired
 
@@ -153,9 +154,9 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Defect fixed: JSON endpoints accepted valid JSON sent as `text/plain` (CORS-simple); `parseBody` and `readJsonObject` now require a JSON content type (422/400); unit regressions in `p5-crm` and `p2-auth`.
 - [x] Defect fixed: legacy-mode `/platform` answered 200 (streamed `notFound()`); middleware now returns 404 before rendering; unit regression in `p6-platform`.
 - [x] Staging/cutover checklist written without accessing staging or production (`docs/STAGING_CUTOVER_CHECKLIST.md`).
-- [ ] Logout-replay decision — observed: replayed cookie read 200, record write 200, invitation 401.
+- [x] Logout replay — now observed: replayed cookie read 401, record write 401, invitation 401, raw token at PostgREST 401 (M21).
 - [ ] Migration-history reconciliation on staging.
-- [ ] Platform-admin bootstrap script (spec §6.4 A2) not written; suites insert the row directly.
+- [x] Platform-admin bootstrap script (spec §6.4 A2) written with target guards; unit tests and a disposable-stack test (`tests/supabase-stack/bootstrap.test.ts`).
 
 ## Checks
 
@@ -188,7 +189,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 - [ ] Reconcile legacy migration history on the staging project before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
 - [ ] Staging Supabase project (D4) and paid plan (D5) — later, by instruction.
-- [ ] Logout-replay decision; platform-admin bootstrap script or approved manual step; MFA recovery; P7 deploy ordering — see `docs/STAGING_CUTOVER_CHECKLIST.md` §0.
+- [ ] MFA recovery policy (who may run `remove-mfa`); P7 deploy ordering; staging confirmation of M21 — see `docs/STAGING_CUTOVER_CHECKLIST.md` §0.
 
 ## Not done by instruction
 

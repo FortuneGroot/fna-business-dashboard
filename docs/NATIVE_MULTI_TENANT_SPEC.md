@@ -1792,3 +1792,40 @@ Local only. All of it ran on fresh disposable Supabase stacks and a built app, w
 | `npm run typecheck` / `npm run build` | Next.js 15.5.25 | PASS / PASS |
 | Browser bundle scan (`.next/static`, 112 files) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, or GHL terms |
 | Secret scan of every file changed in this run | — | no matches |
+
+## 24. Local completion record
+
+Local only, synthetic users, disposable stacks. Handoff, operators and remaining external actions: `docs/RELEASE_HANDOFF.md`.
+
+### 24.1 Completed in this round (commits on `feat/native-multi-tenant`)
+
+| Item | Commit |
+| --- | --- |
+| Codex review: availability replacement serialized per calendar (M20) with a two-session real-PostgreSQL regression; exact migration manifest (M1–M14, M16–M20 at that time; M15 excluded) | `a07650c` |
+| M21: logout ends native access at once for reads, writes and direct Data API calls (`session_id` checked against `auth.sessions`; PostgREST pre-request check answers 401); stale cookies are expired; refreshed tokens and other sessions keep working | `e2f406d` |
+| A2: platform-admin bootstrap and operator CLI (`grant`, `revoke`, `remove-mfa`, `list`); loopback-only for `--env local`; https, an interactive terminal and a typed phrase for any other target; keys from the environment only; last admin cannot be revoked; every change audited | `aa5c7f1` |
+| Per-employee permission overrides UI, weekly business hours, private business logo (§6.6), full stage lists on the board | `7bf31c6` |
+| Scale guard counts data statements without the per-request M21 check; suite minimums raised | `813367e` |
+
+### 24.2 Narrow decisions left open (not invented)
+
+- MFA recovery policy (who may run `remove-mfa`, how identity is confirmed). The mechanism exists; no self-service bypass or recovery codes were added.
+
+### 24.3 Results (2026-11-01, final code `813367e`)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| `npm run typecheck` / `npm run build` | Next.js 15.5.25 | PASS / PASS |
+| Unit suite | Node 24.20.0 | PASS 253/253 |
+| DB suite | PGlite + shim (includes `auth.sessions`) | PASS 225/225 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 31/31 |
+| Stack suite | Real Supabase local stack (disposable) + built app + Chromium | PASS 67/67 on rerun; the first run failed 1/67 (see 24.4) |
+| Acceptance rehearsals | Fresh disposable stacks + built app + Chromium (journeys, hardening, backup/restore, scale, product) | PASS 38/38 |
+| UI-2 visual harness | disposable stack + built app + Chromium | 20/20 routes 200; sidebar 0.00% on every page; settings 61.98% (business hours and logo added), onboarding 62.71% |
+| Browser bundle scan (`.next/static`, 113 files) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, GHL terms, or the operator CLI |
+| Secret scan of the 31 files changed after `a07650c` | — | no matches |
+
+### 24.4 Open items
+
+- Intermittent: in one of two stack runs the signed-out invitation page stayed on "Checking your invitation…" for 20 seconds (the other run, and every acceptance run, passed). Not reproduced; nothing on that path changed in this round.
+- Everything in §22.3 and §23.3 that is not listed as done above.
