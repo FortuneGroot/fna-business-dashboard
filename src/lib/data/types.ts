@@ -33,6 +33,12 @@ export type DashboardReader = {
 
 export type WorkspaceCalendar = { id: string; name: string; duration: string };
 
+/** A board column of the default pipeline. Opportunities belong to a column by `id`, never by name. */
+export type WorkspaceStage = { id: string; name: string; kind: string };
+
+/** Non-deleted opportunities per stage id, with values in cents (exact, not limited by list caps). */
+export type StageTotals = ReadonlyMap<string, { count: number; valueCents: number }>;
+
 /** Workspace identity and configuration shown by pages and /api/tenant/config. */
 export type WorkspaceView = {
   businessName: string;
@@ -46,6 +52,8 @@ export type WorkspaceView = {
   reviewUrl: string;
   pipelineName: string;
   stageNames: string[];
+  /** Native only (empty in legacy mode, whose config has names only). */
+  stages: WorkspaceStage[];
   stagesConfigured: boolean;
   calendars: WorkspaceCalendar[];
   calendarsConfigured: boolean;
@@ -55,6 +63,8 @@ export type DataSource = {
   readonly native: boolean;
   readonly reader: DashboardReader;
   workspace(): Promise<WorkspaceView>;
+  /** Native only: exact per-stage totals for the default pipeline. Legacy mode returns an empty map. */
+  stageTotals(): Promise<StageTotals>;
   /** Whether the caller holds `permission` (always false in legacy mode, which has no permissions). */
   can(permission: string): boolean;
 };

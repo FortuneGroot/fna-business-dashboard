@@ -3,6 +3,7 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Button } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getPageData } from "@/lib/data";
+import { calendarAppointments } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_CALENDARS, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
@@ -67,15 +68,10 @@ export default async function CalendarPage() {
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
         {calendars.map((cal) => {
-          const items = appointments.filter(
-            (a) =>
-              !a.calendarName ||
-              a.calendarName.toLowerCase() === cal.name.toLowerCase() ||
-              a.calendarId === cal.id ||
-              a.calendarName.toLowerCase().includes(cal.name.toLowerCase().split(" ")[0])
-          );
+          const shown = calendarAppointments(native, cal, appointments);
+          const visible = shown.filter((a) => a.status !== "cancelled");
           return (
-            <Card key={cal.name} title={cal.name}>
+            <Card key={native ? cal.id : cal.name} title={cal.name}>
               <p className="muted" style={{ marginTop: 0 }}>
                 Duration: {cal.duration || "—"}
               </p>
@@ -83,12 +79,11 @@ export default async function CalendarPage() {
                 <p className="muted" style={{ margin: 0 }}>
                   {syncColumnEmpty()}
                 </p>
-              ) : items.length === 0 && appointments.length === 0 ? (
+              ) : (native ? visible.length === 0 : shown.length === 0) ? (
                 <EmptyState title="No appointments scheduled" />
               ) : (
                 <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-                  {(items.length ? items : appointments)
-                    .filter((a) => a.status !== "cancelled")
+                  {visible
                     .slice(0, 5)
                     .map((a) => (
                       <li key={a.externalAppointmentId} className="muted">

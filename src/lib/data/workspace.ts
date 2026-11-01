@@ -39,6 +39,7 @@ export async function loadWorkspaceView(scope: DataScope): Promise<WorkspaceView
     reviewUrl: settings?.review_url || "",
     pipelineName: pipeline?.name || "Sales Pipeline",
     stageNames: pipeline?.stages.map((s) => s.name) ?? [],
+    stages: pipeline?.stages.map((s) => ({ id: s.id, name: s.name, kind: s.kind })) ?? [],
     stagesConfigured: Boolean(pipeline?.stages.length),
     calendars: calendars.map((c) => ({ id: c.id, name: c.name, duration: formatDuration(c.duration_minutes) })),
     calendarsConfigured: calendars.length > 0,

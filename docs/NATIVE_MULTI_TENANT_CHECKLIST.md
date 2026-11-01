@@ -89,6 +89,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] ISO through the app: workspace B never receives workspace A's ids, names, or workspace id from any API or page (real stack).
 - [x] UI-1: 19 routes 200 with no page errors for the owner, seeded data rendered; admin Setup redirect, Resources visible; native empty states.
 - [x] UI-2: local harness; sidebar identical on all 20 pages; differences are copy (§17.4).
+- [x] Review fix: calendar cards match bookings by calendar id with no fallback; pipeline columns match by stage id with exact per-stage totals (§17.5).
 - [ ] `/api/webhooks/ghl` and legacy service-role readers retire in P7.
 
 ## Checks

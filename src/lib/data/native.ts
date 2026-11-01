@@ -3,7 +3,7 @@ import { listActivity } from "./activity";
 import { listAppointments } from "./calendars";
 import { listContacts } from "./contacts";
 import { listConversationEvents } from "./conversations";
-import { listOpportunities } from "./pipeline";
+import { listOpportunities, stageTotals } from "./pipeline";
 import type { DataScope } from "./query";
 import { nativeSummary, nativeWaitingForSync } from "./reports";
 import { listReviewEvents } from "./reviews";
@@ -30,10 +30,12 @@ export function nativeReader(scope: DataScope): DashboardReader {
 
 export function nativeDataSource(scope: DataScope): DataSource {
   let view: Promise<WorkspaceView> | undefined;
+  const workspace = () => (view ??= loadWorkspaceView(scope));
   return {
     native: true,
     reader: nativeReader(scope),
-    workspace: () => (view ??= loadWorkspaceView(scope)),
+    workspace,
+    stageTotals: async () => stageTotals(scope, (await workspace()).stages.map((s) => s.id)),
     can: (permission) => scope.ctx.permissions.includes(permission),
   };
 }

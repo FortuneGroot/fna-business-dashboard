@@ -48,6 +48,7 @@ export function legacyWorkspaceView(): WorkspaceView {
     reviewUrl: clientReviewUrl(),
     pipelineName: configuredPipelineName(),
     stageNames: configuredStageNames(),
+    stages: [],
     stagesConfigured: !looksLikePlaceholderStages(),
     calendars: configuredCalendars().map((c) => ({ id: c.id, name: c.name, duration: c.duration || "—" })),
     calendarsConfigured: !looksLikePlaceholderCalendars(),
@@ -59,6 +60,7 @@ export function legacyDataSource(): DataSource {
     native: false,
     reader: legacyReader(),
     workspace: async () => legacyWorkspaceView(),
+    stageTotals: async () => new Map(),
     can: () => false,
   };
 }

@@ -3,6 +3,7 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { getPageData } from "@/lib/data";
+import { pipelineColumns } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_STAGES, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
@@ -11,17 +12,23 @@ export default async function PipelinePage() {
   const data = await getPageData();
   const { native } = data;
   const copy = dataCopy(native);
-  const [opps, workspace] = await Promise.all([data.reader.listOpportunities(), data.workspace()]);
-  const waiting = opps.length === 0;
-  const stages = workspace.stageNames;
+  const [opps, workspace, totals] = await Promise.all([
+    data.reader.listOpportunities(),
+    data.workspace(),
+    data.stageTotals(),
+  ]);
   const pipelineName = workspace.pipelineName;
   const stagesBlocked = !workspace.stagesConfigured;
 
-  const byStage = (stage: string) =>
-    opps.filter((o) => {
-      const name = (o.stageName || o.status || "").toLowerCase();
-      return name === stage.toLowerCase() || name.includes(stage.toLowerCase());
-    });
+  const columns = pipelineColumns({
+    native,
+    stages: workspace.stages,
+    stageNames: workspace.stageNames,
+    opportunities: opps,
+    totals,
+  });
+  const boardCount = native ? columns.reduce((s, c) => s + c.count, 0) : opps.length;
+  const waiting = boardCount === 0;
 
   return (
     <AppShell>
@@ -35,25 +42,23 @@ export default async function PipelinePage() {
           ? PLACEHOLDER_CONFIG_STAGES
           : waiting
             ? copy.bannerWaiting("opportunities")
-            : `${pipelineName} · ${opps.length} open item(s) across ${stages.length} stage(s). Won is not cash until reconciled in Payments.`}
+            : native
+              ? `${pipelineName} · ${boardCount} opportunit${boardCount === 1 ? "y" : "ies"} across ${columns.length} stage(s). Won is not cash until reconciled in Payments.`
+              : `${pipelineName} · ${opps.length} open item(s) across ${columns.length} stage(s). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
 
       {!waiting && !stagesBlocked ? (
         <div className="grid grid-4" style={{ marginTop: "1.1rem" }}>
-          {stages.slice(0, 4).map((stage) => {
-            const items = byStage(stage);
-            const value = items.reduce((s, o) => s + (Number(o.monetaryValue) || 0), 0);
-            return (
-              <Card key={`sum-${stage}`} title={stage}>
-                <p style={{ margin: 0, fontSize: "1.4rem", fontFamily: "Libre Baskerville, Georgia, serif" }}>
-                  {items.length}
-                </p>
-                <p className="muted" style={{ margin: "0.25rem 0 0" }}>
-                  ${value.toLocaleString()} combined
-                </p>
-              </Card>
-            );
-          })}
+          {columns.slice(0, 4).map((col) => (
+            <Card key={`sum-${col.key}`} title={col.title}>
+              <p style={{ margin: 0, fontSize: "1.4rem", fontFamily: "Libre Baskerville, Georgia, serif" }}>
+                {col.count}
+              </p>
+              <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                ${col.value.toLocaleString()} combined
+              </p>
+            </Card>
+          ))}
         </div>
       ) : null}
 
@@ -73,21 +78,19 @@ export default async function PipelinePage() {
           marginTop: "1.1rem",
         }}
       >
-        {stages.map((stage) => {
-          const items = byStage(stage);
-          const value = items.reduce((s, o) => s + (Number(o.monetaryValue) || 0), 0);
+        {columns.map((col) => {
           return (
-            <div key={stage} style={{ flex: "0 0 260px", minWidth: 0 }}>
-              <Card title={stage} action={<Badge tone="neutral">${value.toLocaleString()}</Badge>}>
+            <div key={col.key} style={{ flex: "0 0 260px", minWidth: 0 }}>
+              <Card title={col.title} action={<Badge tone="neutral">${col.value.toLocaleString()}</Badge>}>
                 {waiting ? (
                   <p className="muted" style={{ margin: 0 }}>
                     {syncColumnEmpty()}
                   </p>
-                ) : items.length === 0 ? (
+                ) : col.items.length === 0 ? (
                   <EmptyState title="No opportunities yet" />
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-                    {items.slice(0, 8).map((o) => (
+                    {col.items.slice(0, 8).map((o) => (
                       <li key={o.externalOpportunityId} className="muted">
                         Opportunity
                         {o.monetaryValue != null ? ` · $${o.monetaryValue}` : ""}

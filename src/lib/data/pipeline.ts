@@ -2,6 +2,7 @@ import "server-only";
 import type { OpportunityRecord } from "@/lib/sync/types";
 import { opportunityRecord, type NativeOpportunityRow, type NativeStageRow } from "./dashboard-adapters";
 import { displayNames, fromWorkspace, LIST_LIMIT, rows, type DataScope } from "./query";
+import type { StageTotals } from "./types";
 
 export type PipelineConfig = { name: string; stages: NativeStageRow[] } | null;
 
@@ -42,6 +43,34 @@ export async function listOpportunities(scope: DataScope): Promise<OpportunityRe
   const names = await displayNames(scope, data.map((o) => o.assigned_user_id));
   const byId = new Map(stages.map((s) => [s.id, s]));
   return data.map((o) => opportunityRecord(o, byId, names));
+}
+
+/**
+ * Count and value (cents) of non-deleted opportunities per stage id of the given stages. Pages through
+ * every row like `openValueCents`, so the totals are exact beyond list caps and the server's row cap.
+ */
+export async function stageTotals(scope: DataScope, stageIds: readonly string[]): Promise<StageTotals> {
+  const totals = new Map<string, { count: number; valueCents: number }>(stageIds.map((id) => [id, { count: 0, valueCents: 0 }]));
+  if (!stageIds.length) return totals;
+  for (let from = 0; ; ) {
+    const page = await rows<{ id: string; stage_id: string; value_cents: number | string }>(
+      fromWorkspace(scope, "opportunities", "id, stage_id, value_cents")
+        .in("stage_id", [...stageIds])
+        .is("deleted_at", null)
+        .order("id", { ascending: true })
+        .range(from, from + 999),
+      "opportunities"
+    );
+    if (!page.length) return totals;
+    for (const o of page) {
+      const t = totals.get(o.stage_id);
+      if (t) {
+        t.count += 1;
+        t.valueCents += Number(o.value_cents) || 0;
+      }
+    }
+    from += page.length;
+  }
 }
 
 /**

@@ -1130,6 +1130,123 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       });
     });
 
+    // P3 follow-up: pipeline columns and calendar cards are matched by id in the rendered pages.
+    // A workspace of its own, so stage renames cannot affect other tests.
+    describe("rendered pipeline and calendar pages match records by id (P3)", () => {
+      let owner: Identity;
+      let ws = "";
+      let cookie = "";
+      const stage: Record<number, string> = {};
+
+      /** Every card in document order: its title and its HTML (React's text-node separators removed). */
+      const cardsOf = (html: string) =>
+        [...html.replace(/<!-- -->/g, "").matchAll(/<article class="card[^"]*">([\s\S]*?)<\/article>/g)].map((m) => ({
+          title: m[1].match(/<h2 class="card-title">([\s\S]*?)<\/h2>/)?.[1] ?? "",
+          html: m[1],
+        }));
+      const listItems = (html: string) => (html.match(/<li /g) ?? []).length;
+      const boardOf = async () => {
+        const page = await appFetch(app, "/pipeline", { cookie });
+        assert.equal(page.status, 200);
+        const cards = cardsOf(page.text);
+        return { text: page.text, summary: cards.slice(0, 4), board: cards.slice(-12) };
+      };
+      const created = async (table: string, row: Record<string, unknown>) => {
+        const r = await rest(env, owner.token, "POST", table, row);
+        assert.equal(r.status, 201, `${table}: ${r.status} ${r.text}`);
+        return r.body[0].id as string;
+      };
+      const rename = async (position: number, name: string) => {
+        const r = await rest(env, owner.token, "PATCH", `pipeline_stages?id=eq.${stage[position]}`, { name });
+        assert.equal(r.status, 200, r.text);
+        assert.equal(r.body.length, 1);
+      };
+
+      before(async () => {
+        owner = await signUp(env, email("display-owner"), "Display Owner");
+        const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+          p_provisioning_key: `synthetic-display-${run}`, p_name: "Display (synthetic)",
+          p_slug: `display-synthetic-${run}`, p_owner_email: owner.email,
+        });
+        assert.equal(prov.status, 200, prov.text);
+        ws = prov.body.workspace_id;
+        assert.equal((await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token })).status, 200);
+        cookie = await appLogin(app, owner);
+        const stages = await rest(env, owner.token, "GET", "pipeline_stages?select=id,position,pipeline_id&order=position");
+        for (const s of stages.body) stage[s.position] = s.id;
+        const pipelineId = stages.body[0].pipeline_id;
+
+        // Overlapping ("New Lead" / "New Lead Follow-up") and duplicate ("Qualified" ×2) stage names.
+        await rename(3, "New Lead Follow-up");
+        await rename(8, "Qualified");
+        const contact = await created("contacts", { workspace_id: ws, first_name: "Display", last_name: "Contact" });
+        const opp = (position: number, title: string, value_cents: number) =>
+          created("opportunities", { workspace_id: ws, contact_id: contact, pipeline_id: pipelineId,
+            stage_id: stage[position], title, value_cents });
+        await opp(3, "follow-up", 20050);
+        await opp(8, "second qualified", 40000);
+        await opp(8, "second qualified b", 1);
+        await opp(10, "won", 99999);
+
+        const discovery = await created("calendars", { workspace_id: ws, name: "Discovery Call", slug: `discovery-${run}`,
+          duration_minutes: 30, is_primary: true });
+        await created("calendars", { workspace_id: ws, name: "Discovery Follow-up", slug: `discovery-follow-up-${run}`,
+          duration_minutes: 15 });
+        const site = await created("calendars", { workspace_id: ws, name: "Site Visit", slug: `site-visit-${run}`,
+          duration_minutes: 60 });
+        await created("appointments", { workspace_id: ws, calendar_id: discovery, contact_id: contact,
+          starts_at: "2031-05-06T14:00:00Z", ends_at: "2031-05-06T14:30:00Z" });
+        await created("appointments", { workspace_id: ws, calendar_id: site, contact_id: contact,
+          starts_at: "2031-05-07T16:00:00Z", ends_at: "2031-05-07T17:00:00Z" });
+      });
+
+      test("pipeline: duplicate and overlapping stage names never pull opportunities into the wrong column; counts and values are exact", async () => {
+        const { text, summary, board } = await boardOf();
+        assert.deepEqual(board.map((c) => c.title), ["New Lead", "Attempting Contact", "New Lead Follow-up", "Qualified",
+          "Appointment Booked", "Appointment Completed", "Estimate / Proposal Sent", "Qualified", "Decision Pending",
+          "Won", "Lost", "Long-Term Nurture"]);
+        const items = board.map((c) => listItems(c.html));
+        assert.deepEqual(items, [0, 0, 1, 0, 0, 0, 0, 2, 0, 1, 0, 0], "each opportunity rendered in exactly one column");
+        for (const i of [0, 3]) assert.ok(board[i].html.includes("No opportunities yet"), `${board[i].title} stays empty`);
+        assert.ok(board[2].html.includes("$200.5<"), "follow-up column value");
+        assert.ok(board[7].html.includes("$400.01<"), "second Qualified column value (40000 + 1 cents)");
+        assert.ok(board[9].html.includes("$999.99<"), "won column value");
+        assert.ok(board[0].html.includes("$0<") && board[3].html.includes("$0<"));
+        assert.deepEqual(summary.map((c) => [c.title, c.html.match(/>(\d+)<\/p>/)?.[1]]),
+          [["New Lead", "0"], ["Attempting Contact", "0"], ["New Lead Follow-up", "1"], ["Qualified", "0"]]);
+        assert.ok(summary[2].html.includes("$200.5 combined"));
+        assert.ok(text.includes("4 opportunities across 12 stage(s)"), "banner counts each opportunity once");
+      });
+
+      test("pipeline: renaming a stage keeps its opportunities in the same column under the new name", async () => {
+        await rename(8, "Second Look");
+        const { board } = await boardOf();
+        assert.equal(board[7].title, "Second Look");
+        assert.equal(listItems(board[7].html), 2);
+        assert.ok(board[7].html.includes("$400.01<"));
+        assert.equal(board.filter((c) => c.title === "Qualified").length, 1);
+        assert.ok(board[3].html.includes("No opportunities yet"));
+        const api = await appFetch(app, "/api/dashboard/opportunities", { cookie });
+        const names = (api.body.opportunities as { stageName: string }[]).map((o) => o.stageName).sort();
+        assert.deepEqual(names, ["New Lead Follow-up", "Second Look", "Second Look", "Won"]);
+      });
+
+      test("calendars: each card lists only its own bookings; an empty calendar with a similar name stays empty", async () => {
+        const page = await appFetch(app, "/calendar", { cookie });
+        assert.equal(page.status, 200);
+        const cards = new Map(cardsOf(page.text).map((c) => [c.title, c.html]));
+        const discovery = cards.get("Discovery Call")!;
+        const followUp = cards.get("Discovery Follow-up")!;
+        const site = cards.get("Site Visit")!;
+        assert.ok(discovery && followUp && site, [...cards.keys()].join(", "));
+        assert.ok(discovery.includes("2031-05-06 14:00") && !discovery.includes("2031-05-07"));
+        assert.ok(site.includes("2031-05-07 16:00") && !site.includes("2031-05-06"));
+        assert.ok(followUp.includes("No appointments scheduled"), "empty calendar shows its empty state");
+        assert.equal(listItems(followUp), 0, "no fallback to another calendar's bookings");
+        assert.ok(page.text.includes("2 appointment(s)"));
+      });
+    });
+
     // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit
     // these attempts in practice; the 429 → rate_limited mapping is proven in tests/p2-auth.test.ts.
     test("AUTH-1: repeated failed sign-ins only ever answer generic 401 or 429 rate_limited", async () => {
