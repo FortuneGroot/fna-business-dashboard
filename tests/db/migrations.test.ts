@@ -1,0 +1,122 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, test } from "node:test";
+import { freshDb, migrationFiles } from "./harness";
+
+const TENANT_TABLES = [
+  "workspace_members", "member_permission_overrides", "user_active_workspace", "workspace_invitations",
+  "platform_access_grants", "workspace_settings", "ai_receptionist_configs", "integrations",
+  "integration_secrets", "contacts", "contact_tags", "contact_notes", "pipelines", "pipeline_stages",
+  "opportunities", "calendars", "calendar_members", "availability_rules", "appointments",
+  "conversations", "messages", "tasks", "reviews", "activity_events", "workspace_audit_log",
+];
+const GLOBAL_TABLES = [
+  "profiles", "platform_admins", "workspaces", "role_permissions", "grant_mode_permissions", "platform_audit_log",
+];
+const LEGACY_TABLES = [
+  "auth_sessions", "sync_contacts", "sync_contact_tags", "sync_opportunities", "sync_appointments",
+  "sync_conversation_events", "sync_tasks", "sync_review_events", "sync_events", "sync_idempotency",
+];
+
+describe("migrations apply to a clean local database", () => {
+  test("all migrations apply in order", async () => {
+    const files = migrationFiles();
+    assert.ok(files.length >= 15, `expected legacy + 13 new migrations, found ${files.length}`);
+    const db = await freshDb();
+    await db.close();
+  });
+
+  test("legacy tables are preserved and new tables exist", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ table_name: string }>(
+      "select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'"
+    );
+    const names = new Set(res.rows.map((r) => r.table_name));
+    for (const t of [...TENANT_TABLES, ...GLOBAL_TABLES, ...LEGACY_TABLES]) {
+      assert.ok(names.has(t), `missing table ${t}`);
+    }
+    await db.close();
+  });
+
+  test("every new public table has RLS enabled and forced", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      `select c.relname, c.relrowsecurity, c.relforcerowsecurity
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relkind = 'r' and c.relname = any($1)`,
+      [[...TENANT_TABLES, ...GLOBAL_TABLES]]
+    );
+    assert.equal(res.rows.length, TENANT_TABLES.length + GLOBAL_TABLES.length);
+    for (const r of res.rows) {
+      assert.ok(r.relrowsecurity, `${r.relname} RLS not enabled`);
+      assert.ok(r.relforcerowsecurity, `${r.relname} RLS not forced`);
+    }
+    await db.close();
+  });
+
+  test("every tenant table except the active-workspace pointer requires workspace_id", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ table_name: string; is_nullable: string }>(
+      `select table_name, is_nullable from information_schema.columns
+       where table_schema = 'public' and column_name = 'workspace_id' and table_name = any($1)`,
+      [TENANT_TABLES]
+    );
+    assert.equal(res.rows.length, TENANT_TABLES.length);
+    for (const r of res.rows) assert.equal(r.is_nullable, "NO", `${r.table_name}.workspace_id is nullable`);
+    await db.close();
+  });
+
+  test("anon holds no privileges on any new table", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ table_name: string; privilege_type: string }>(
+      `select table_name, privilege_type from information_schema.role_table_grants
+       where grantee = 'anon' and table_schema = 'public' and table_name = any($1)`,
+      [[...TENANT_TABLES, ...GLOBAL_TABLES]]
+    );
+    assert.deepEqual(res.rows, []);
+    await db.close();
+  });
+
+  test("anon can execute only peek_invitation among new public functions", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ proname: string }>(
+      `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute')
+         and p.proname not like 'pg\\_%'`
+    );
+    assert.deepEqual(res.rows.map((r) => r.proname).sort(), ["peek_invitation"]);
+    await db.close();
+  });
+
+  test("the rollback script removes only native objects, and migrations re-apply cleanly afterwards", async () => {
+    const db = await freshDb();
+    const legacyBefore = await db.query<{ n: number }>("select count(*)::int n from public.auth_sessions");
+    await db.exec(readFileSync(join(__dirname, "..", "..", "supabase", "rollback", "20261101_native_multi_tenant.down.sql"), "utf8"));
+
+    const left = await db.query<{ table_name: string }>(
+      "select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE' order by 1");
+    assert.deepEqual(left.rows.map((r) => r.table_name).sort(), [...LEGACY_TABLES].sort());
+    const legacyAfter = await db.query<{ n: number }>("select count(*)::int n from public.auth_sessions");
+    assert.equal(legacyAfter.rows[0].n, legacyBefore.rows[0].n);
+
+    for (const file of migrationFiles().filter((f) => f.startsWith("20261101"))) {
+      await db.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
+    }
+    const back = await db.query<{ n: number }>(
+      "select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = any($1)",
+      [[...TENANT_TABLES, ...GLOBAL_TABLES]]);
+    assert.equal(back.rows[0].n, TENANT_TABLES.length + GLOBAL_TABLES.length);
+    await db.close();
+  });
+
+  test("no private helper is executable by anon or PUBLIC", async () => {
+    const db = await freshDb();
+    const res = await db.query<{ proname: string }>(
+      `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'private' and has_function_privilege('anon', p.oid, 'execute')`
+    );
+    assert.deepEqual(res.rows, []);
+    await db.close();
+  });
+});
