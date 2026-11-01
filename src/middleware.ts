@@ -125,6 +125,11 @@ function misconfigured(req: NextRequest, pathname: string): NextResponse {
 export async function middleware(req: NextRequest) {
   const provider = authProvider();
   if (provider === "supabase") return supabaseMiddleware(req);
+  // The root loading boundary streams pages, so the console's notFound() would arrive after a 200.
+  const { pathname: path } = req.nextUrl;
+  if (path === "/platform" || path.startsWith("/platform/")) {
+    return NextResponse.rewrite(new URL("/_platform-not-found", req.url), { status: 404 });
+  }
   if (provider === null) {
     const { pathname } = req.nextUrl;
     if (isPublicPath(pathname)) return NextResponse.next();

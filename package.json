@@ -14,7 +14,8 @@
     "verify:auth": "node scripts/verify-auth-runtime.mjs",
     "test:unit": "node scripts/run-tests.mjs --suite unit",
     "test:db:concurrency": "node scripts/run-tests.mjs --suite realpg",
-    "test:stack": "node scripts/run-tests.mjs --suite stack"
+    "test:stack": "node scripts/run-tests.mjs --suite stack",
+    "test:acceptance": "node scripts/run-tests.mjs --suite acceptance"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

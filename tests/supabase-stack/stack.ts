@@ -395,10 +395,16 @@ const redactKeys = (text: string, env: StackEnv) =>
  * the disposable stack. Legacy credentials are stripped from the child environment. Keys reach the
  * child only through its environment and are redacted from any reported output.
  */
-export async function startApp(env: StackEnv): Promise<App> {
+/**
+ * Builds (unless `build: false`) and starts the app. `mode: "legacy"` starts it with the default
+ * AUTH_PROVIDER and no Supabase, auth, or GHL settings at all; it never receives the stack's keys.
+ */
+export async function startApp(env: StackEnv, opts: { mode?: "supabase" | "legacy"; build?: boolean } = {}): Promise<App> {
   if (!isLocal(env.apiUrl)) throw new Error("The app may only be pointed at a local stack.");
-  const build = run(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "build"], 600_000);
-  if (build.status !== 0) throw new Error(`next build failed: ${redactKeys(tail(build, 15), env)}`);
+  if (opts.build !== false) {
+    const build = run(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "build"], 600_000);
+    if (build.status !== 0) throw new Error(`next build failed: ${redactKeys(tail(build, 15), env)}`);
+  }
 
   const childEnv: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -414,11 +420,15 @@ export async function startApp(env: StackEnv): Promise<App> {
     NET_GUARD_LOG: netLog,
     NEXT_TELEMETRY_DISABLED: "1",
     PORT: String(port),
-    AUTH_PROVIDER: "supabase",
-    SUPABASE_URL: env.apiUrl,
-    SUPABASE_ANON_KEY: env.anonKey,
-    SUPABASE_SERVICE_ROLE_KEY: env.serviceRoleKey,
   });
+  if (opts.mode !== "legacy") {
+    Object.assign(childEnv, {
+      AUTH_PROVIDER: "supabase",
+      SUPABASE_URL: env.apiUrl,
+      SUPABASE_ANON_KEY: env.anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: env.serviceRoleKey,
+    });
+  }
   const { spawn } = await import("node:child_process");
   const child = spawn(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(port), "-H", "127.0.0.1"], {
     cwd: ROOT, env: childEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],

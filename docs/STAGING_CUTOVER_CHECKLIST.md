@@ -1,0 +1,77 @@
+# Staging rehearsal and production cutover checklist
+
+Prepared from local evidence only. **No staging or production project was accessed, created, or
+changed** to write this. Every box below is open until someone records evidence next to it.
+Staging is the separate Supabase project from decision D4 (not yet created). Production steps
+require George's explicit approval (spec §9.2 P9, §11).
+
+## 0. Decisions that must be made first (open — not complete)
+
+| Decision | Evidence so far (local) | Who | Status |
+| --- | --- | --- | --- |
+| **Logout replay.** After logout, a copied session cookie still works until its access token expires. | Acceptance test 14 on a fresh disposable stack: read **200**, ordinary record write **200**, invitation (sensitive action) **401**. Stack tests AUTH-1 and "sensitive actions re-check the session" agree. Codex recommended immediate app-session revocation (session-row check in `request_context`) before real use (spec §16.5). | George | OPEN |
+| **Migration-history reconciliation.** The two legacy migrations were renamed from the shared version `20260917`; the remote history of any existing database is unknown. | `docs/MIGRATION_VERSION_MAPPING.md` lists the three possible findings and the exact `supabase migration repair` command for each. Nothing has been run against any remote database. | Operator, on staging first | OPEN |
+| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes). | Spec §20.4 item 4. | George | OPEN — accept the gap or require a second platform admin |
+| **Paid Supabase plan** before production (D5). | No purchase made. | George | OPEN |
+| **Per-client configuration owner check.** Whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`. | P7 removed runtime use of both (spec §21.4); the legacy snapshot reads only the bundled default. Not verifiable locally. | Owner of the Vercel project | OPEN |
+| **Platform-admin bootstrap.** The spec's A2 script does not exist. | All suites insert the `platform_admins` row directly as test setup. | George / developer | OPEN — write the script or approve the manual insert (§1, T2) |
+| **P7 deploy ordering.** A P7 build has no `/api/webhooks/ghl`; a deployment that still receives GHL webhooks will get 404s. | Spec §21.4; `docs/VERCEL_RELEASE_POLICY.md`. | George | OPEN — disable the GHL webhook before promoting a P7 build, or keep the pre-P7 build (`release` @ `9c189f8`) |
+
+## 1. Staging rehearsal (P8 / T2–T4)
+
+- [ ] Create the separate staging Supabase project (D4). Record its project ref in the runbook, never in the repository.
+- [ ] Back up staging (even if empty) and record where the backup lives.
+- [ ] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
+- [ ] `supabase db push` M1–M14 to staging; `supabase migration list` shows local and remote identical.
+- [ ] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
+- [ ] T2: create George's auth user, register him as platform admin, enrol MFA (D6). **Blocker:** `scripts/bootstrap-platform-admin.ts` (spec §6.4, A2) was never written; every test suite stands in for it with a direct `insert into public.platform_admins`. Either write and review the script (refuses non-local targets without `--env staging|production` plus a typed confirmation), or have the operator run that one-row insert in the staging SQL editor after confirming George's `auth.users` id, and record it.
+- [ ] T3: provision the F&A workspace (`provisioning_key = 'fa-live'`); open the owner link (shown once, nothing is emailed) and accept it as George.
+- [ ] Set staging app env by name only: `AUTH_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `APP_ORIGIN`. No `GHL_*` variables.
+- [ ] T4: run the acceptance suite's journeys against staging with synthetic businesses (requires an allowlisted staging harness; the local harness refuses non-local hosts by design).
+- [ ] UI-2 screenshot comparison against `docs/baseline/` on staging.
+- [ ] Bundle scan of the staging build: no service-role key, no `SUPABASE_SERVICE_ROLE_KEY` value, no GHL token.
+- [ ] Rollback rehearsal on staging: run `supabase/rollback/20261101_native_multi_tenant.down.sql`, confirm legacy tables and data untouched, then re-apply.
+- [ ] Restore-from-backup test on staging (required before T6/M15).
+- [ ] George signs off on staging.
+
+## 2. Production cutover (P9 / T5) — requires George's explicit approval
+
+- [ ] Paid plan in place (D5). Logout-replay decision recorded and implemented if required.
+- [ ] Verified production backup; restore procedure tested on staging.
+- [ ] Disable the GHL webhook (or confirm nothing posts to it) before promoting a P7 build.
+- [ ] Reconcile production migration history exactly as rehearsed; then push M1–M14.
+- [ ] Bootstrap George as platform admin, enrol MFA, provision F&A, accept the owner invitation.
+- [ ] Set `AUTH_PROVIDER=supabase`; promote the build. Keep the legacy `AUTH_*` credentials in place.
+- [ ] Smoke: login with MFA, dashboard, contacts, pipeline, calendar, tasks, inbox notes, settings/team, `/api/health` reports `authProvider: "supabase"`.
+- [ ] Rollback path ready: set `AUTH_PROVIDER=legacy` and promote `release` @ `9c189f8` (or the last legacy-compatible build). Export native tables first if real data was written (spec §11).
+
+## 3. After 14 stable days (T6, then M15) — separate approval
+
+- [ ] Remove legacy auth code, `AUTH_OWNER_*`/`AUTH_ADMIN_*`/`AUTH_CLIENT_*`, and `fna_session` handling; remove the legacy snapshot files listed in spec §21.3.
+- [ ] Verified backup, then write and apply M15 (drop `sync_*`, `auth_sessions`). **Not written in this program.**
+
+## 4. Local journey coverage (evidence for the rehearsal)
+
+| Journey | Acceptance test (fresh stack) | Real-stack suite test(s) |
+| --- | --- | --- |
+| Provisioning (idempotent, link shown once) | 2 | provisioning through the app; concurrent provisioning |
+| Invitation acceptance (new and existing account) | 3 | INV-1/2/6/7, INV public preview, INV-3/4 (expiry, revocation, mismatch, concurrency) |
+| Login and MFA | 1 | AUTH-1; MFA through the app; P6 denial |
+| Workspace switching | 7 | /api/workspaces …; workspace switching |
+| Settings and team management | 4 | ROLE-1..8; SET-1..7; browser team flow |
+| Contacts, opportunities, calendars/appointments, tasks, internal notes | 5 | CRUD-1..5; browser records flow |
+| Permission overrides | 6 | permission overrides …(PostgREST and Storage); CRUD-4 |
+| Suspension and reactivation | 12 | MEM-1 and SUSP-1; SUSP; suspension from the console |
+| Access removal | 13 | ROLE-7 and MEM-1/2/4; a removed member loses access immediately |
+| Platform support grants (read, write, end, expiry) | 11 | support grants; one-minute grant expiry; platform access requires a grant |
+| Isolation and audit accuracy | 5, 6, 12, 13, 16 | ISO; RLS isolates workspaces; forged actor attribution |
+| Malformed requests | 8 | JSON bodies must be objects…; unit "malformed ids, bodies, queries" |
+| Concurrency | 9 | concurrent provisioning…; CRUD-3 overlap under concurrency |
+| Pagination | 10 | CRUD-1 keyset pages; search and keyset paging |
+| Cookie refresh | — | refreshed sessions reach the browser |
+| Expiry (token, invitation, grant) | 11 | ISO-F3 (expired cookies); INV-3/4; one-minute grant |
+| Failure recovery | — | AUTH-1 failed sign-ins (generic 401/429); unit tests map an unreachable Auth server to 503 |
+| Logout and replay | 14 (observed values pinned) | AUTH-1; sensitive actions re-check the session |
+| Legacy mode, no GHL | 15 | tenant config, public branding, health, and retired legacy endpoints |
+| No outbound requests | 15, 16 | NET-1 |
+| Navigation and design | 5 (sidebar) | UI-1 (all destinations, empty states); UI-2 visual run |

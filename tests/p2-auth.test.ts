@@ -251,6 +251,10 @@ describe("P2: AUTH_PROVIDER=supabase routing without a session (no network)", ()
     assert.equal(empty.status, 400);
     const bad = await postLogin(req("/api/auth/login", { method: "POST", body: "{not json" }));
     assert.equal(bad.status, 400);
+    for (const contentType of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"]) {
+      const simple = await postLogin(req("/api/auth/login", { method: "POST", body: { email: "a@example.invalid", password: "x" }, contentType }));
+      assert.deepEqual([simple.status, (await simple.json()).code], [400, "validation_failed"], `${contentType} refused before Auth is contacted`);
+    }
     const down = await postLogin(req("/api/auth/login", { method: "POST", body: { email: "a@example.invalid", password: "x" } }));
     assert.equal(down.status, 503);
     assert.equal((await down.json()).code, "unavailable");

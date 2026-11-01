@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { authProvider } from "@/lib/auth/provider";
 import { DataUnavailableError, type DataScope } from "@/lib/data/query";
+import { isJsonRequest } from "@/lib/http/json-body";
 
 /** A §7.1 error: `{ ok: false, error, code[, fields] }` with its HTTP status. */
 export class ApiError extends Error {
@@ -88,9 +89,11 @@ function fieldsOf(error: z.ZodError): Record<string, string> {
 
 /**
  * Parses a JSON object body against a strict schema. Workspace keys are dropped first (ISO-F1: the
- * workspace always comes from the request context); any other unknown key is rejected.
+ * workspace always comes from the request context); any other unknown key is rejected. The body must
+ * be declared as JSON (`isJsonRequest`).
  */
 export async function parseBody<S extends z.ZodType>(req: Request, schema: S): Promise<z.infer<S>> {
+  if (!isJsonRequest(req)) throw invalid({ body: "Request body must be sent as application/json" });
   let value: unknown;
   try {
     value = await req.json();

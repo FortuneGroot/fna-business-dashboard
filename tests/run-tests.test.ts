@@ -71,7 +71,7 @@ describe("scripts/run-tests.mjs fails closed", () => {
     assert.match(pkg.scripts.test, /scripts\/run-tests\.mjs/);
     assert.doesNotMatch(pkg.scripts.test, /--suite/);
     const runner = readFileSync(RUNNER, "utf8");
-    for (const suite of ["unit:", "db:", "realpg:", "stack:"]) assert.ok(runner.includes(suite), `runner lacks ${suite}`);
+    for (const suite of ["unit:", "db:", "realpg:", "stack:", "acceptance:"]) assert.ok(runner.includes(suite), `runner lacks ${suite}`);
     assert.match(runner, /tests\/db"\)/);
     assert.match(runner, /tests\/db-real"\)/);
     assert.match(runner, /tests\/supabase-stack"\)/);

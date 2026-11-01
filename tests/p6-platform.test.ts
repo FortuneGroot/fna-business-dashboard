@@ -358,6 +358,13 @@ describe("P6 legacy mode is unchanged", () => {
       assert.equal((await handler(req(path, { method, body }), params())).status, 404, `${method} ${path}`);
     }
   });
+
+  test("console pages are 404 from middleware in legacy mode (the streamed page notFound() would arrive as a 200)", async () => {
+    for (const path of ["/platform", "/platform/audit", `/platform/workspaces/${WS}`, "/platform/mfa"]) {
+      const r = await middleware(req(path));
+      assert.deepEqual([r.status, r.headers.get("location")], [404, null], path);
+    }
+  });
 });
 
 describe("P6 static guards", () => {

@@ -65,10 +65,11 @@ const ctxFor = (u: FakeUser, role: string, permissions: string[], ws = WS_A) => 
 type Handler = (req: NextRequest, ctx: { params: Promise<any> }) => Promise<Response>;
 const params = (p: Record<string, string> = {}) => ({ params: Promise.resolve(p) });
 
-function req(path: string, init: { cookie?: string; method?: string; body?: unknown } = {}) {
+function req(path: string, init: { cookie?: string; method?: string; body?: unknown; contentType?: string | null } = {}) {
   const headers = new Headers();
   if (init.cookie) headers.set("cookie", init.cookie);
-  if (init.body !== undefined) headers.set("content-type", "application/json");
+  const contentType = init.contentType === undefined ? "application/json" : init.contentType;
+  if (init.body !== undefined && contentType !== null) headers.set("content-type", contentType);
   return new NextRequest(new URL(path, "http://localhost:3000"), {
     method: init.method ?? "GET",
     headers,
@@ -343,6 +344,14 @@ describe("P5 routes (AUTH_PROVIDER=supabase, fake Supabase)", () => {
       [await call(byPath("POST", "/api/tasks"), c, { body: { title: "T", status: "archived" } }), "status"],
       [await call(byPath("POST", `/api/conversations/${ID}/notes`), c, { body: { body: "x", direction: "outbound" } }), "direction"],
       [await call(byPath("GET", "/api/reports/summary"), c, { path: "/api/reports/summary?from=yesterday" }), "from"],
+      // Valid JSON under a CORS-simple or missing content type is refused (no preflight would guard it).
+      ...await Promise.all(([["text/plain", "POST"], ["application/x-www-form-urlencoded", "POST"], ["text/plain;charset=UTF-8", "PATCH"], [null, "POST"]] as const)
+        .map(async ([contentType, method]): Promise<[Response, string]> => [
+          method === "POST"
+            ? await (createContactRoute as Handler)(req("/api/contacts", { cookie: c, method, body: { firstName: "X" }, contentType }), params())
+            : await (patchContactRoute as Handler)(req(`/api/contacts/${ID}`, { cookie: c, method, body: { firstName: "X" }, contentType }), params({ id: ID })),
+          `${method} as ${contentType ?? "unset (fetch defaults a string body to text/plain)"}`,
+        ])),
     ];
     for (const [res, label] of cases) {
       const body = (await res.json()) as { code: string; fields?: Record<string, string> };

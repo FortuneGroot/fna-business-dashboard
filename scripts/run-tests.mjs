@@ -7,7 +7,7 @@
 // A suite that cannot run because the environment is missing something reports BLOCKED (never PASS),
 // but only if every root-cause failure is such a blocker; any real failure makes it FAIL.
 //
-// Usage: node scripts/run-tests.mjs [--suite unit|db|realpg|stack]... [--files a.ts,b.ts --min N --name X]
+// Usage: node scripts/run-tests.mjs [--suite unit|db|realpg|stack|acceptance]... [--files a.ts,b.ts --min N --name X]
 // Exit codes: 0 all passed, 1 any failure, 2 nothing failed but something was BLOCKED.
 
 import { spawnSync } from "node:child_process";
@@ -37,8 +37,8 @@ const SUITES = {
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts",
     ],
     timeoutMs: 60_000,
-    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20.
-    min: 240,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1.
+    min: 241,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
@@ -57,6 +57,12 @@ const SUITES = {
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
     min: 63,
+  },
+  acceptance: {
+    label: "local acceptance rehearsal (fresh disposable stack, two synthetic businesses, P1–P7 journeys)",
+    files: () => list("tests/acceptance"),
+    timeoutMs: 1_200_000,
+    min: 16,
   },
 };
 

@@ -1689,3 +1689,40 @@ These go at T6 (legacy auth retired) and M15 (legacy tables dropped), both gated
 
 Unit, DB, and concurrency results above are from the final source (rerun after the Settings fix).
 | Browser bundle scan (`.next/static`, 112 files) | — | 0 files contain `ghl`/`highlevel`/`leadconnector`, either partition id, `GHL_`, service-role names, `sb_secret_`, JWTs, or private keys; one names `AUTH_SECRET` in the existing legacy login message (no value) |
+
+## 22. Local acceptance rehearsal (P1–P7)
+
+Local only: fresh disposable Supabase stacks, synthetic businesses ("Harbor Plumbing (synthetic)", "Summit Roofing (synthetic)"), `example.invalid`-style addresses. No staging or production project was accessed. Suite: `tests/acceptance/acceptance.test.ts` (`npm run test:acceptance`, minimum 16), one stack per run, torn down afterwards. Setup inserts the platform-admin row directly (as every suite does; see 22.3).
+
+### 22.1 Journeys exercised (16 tests, in order, one shared world)
+
+MFA to AAL2; provisioning (idempotent, link once); invitation acceptance (new and existing account); team roles and settings; contacts, opportunities, calendars/appointments, tasks, and internal notes across owner/admin/employee with activity attribution and the original sidebar; permission override grant/deny audited to the acting admin; workspace switching by a member of both businesses; malformed requests (7 body kinds on every owner and platform mutating route, junk ids and queries; record counts unchanged; unknown API and page 404); concurrency (5 duplicate invitations → one 200 and four 409; simultaneous stage moves consistent); keyset pagination; support grants (read banner, read cannot write, ending needs a reason, write attributed to the grant, clock expiry); suspension and reactivation; access removal (open work unassigned, audited); logout replay measurement; legacy mode of the same build with no Supabase/auth/GHL settings; NET-1 and per-business audit isolation. Coverage of the remaining items (cookie refresh, invitation expiry, failure recovery) is mapped to stack tests in `docs/STAGING_CUTOVER_CHECKLIST.md` §4.
+
+### 22.2 Defects found and fixed
+
+1. **JSON endpoints accepted CORS-simple content types.** `POST /api/contacts` and `PATCH /api/contacts/{id}` wrote records from valid JSON sent as `text/plain`, a type a cross-site page can send without a preflight (SameSite=Lax cookies limit, but do not replace, this guard). `parseBody` (every native JSON route) now requires `application/json` or `application/*+json` and answers 422 `validation_failed` with `fields.body`; `readJsonObject` (login in both modes, workspace switch, logo endpoint JSON action) returns null, so those answer their existing 400/422. Every browser caller already sends `application/json`. Regression tests: unit `p5-crm` (text/plain, form, text/plain with charset, unset; nothing written) and `p2-auth` (login refuses text/plain, form, multipart before Auth is contacted). Legacy login is affected only for non-JSON requests, which its own page never sends.
+2. **Legacy `/platform` answered 200.** The root `loading.tsx` streams every page, so the console's `notFound()` arrived after a 200 status. Supabase mode already decided this in middleware (P6); legacy and misconfigured modes now rewrite `/platform*` to the 404 page in middleware too. Regression test: unit `p6-platform` (four console paths, 404 with no redirect).
+3. Test-side corrections (not product defects): the workspace-name check uses the authenticated `/api/tenant/config` (`/api/tenant/public` is generic by design, §7.3); the logout-replay test now pins the observed values instead of accepting a range.
+
+### 22.3 Open items (not complete; no evidence of completion)
+
+- **Logout replay** (decision open): after logout a replayed cookie read **200**, ordinary record write **200**, invitation **401** (fresh stack, acceptance test 14).
+- **Migration-history reconciliation** on staging before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
+- **Platform-admin bootstrap script** (§6.4 A2, `scripts/bootstrap-platform-admin.ts`) was never written; all suites insert the row directly. Needed (or an approved manual step) for T2.
+- MFA device-loss recovery; paid plan (D5); P7 deploy ordering and the `CLIENT_CONFIG_PATH`/`GHL_PIPELINE_ID` owner check; T6/M15 gates. All listed in `docs/STAGING_CUTOVER_CHECKLIST.md`.
+
+### 22.4 Results (2026-11-01, this machine, final source)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (240 + 1 new; 7 new assertions inside existing tests) | Node 24.20.0 | PASS 241/241 |
+| DB suite | PGlite + shim | PASS 217/217 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 |
+| Stack suite | Real Supabase local stack (disposable) + `next build`/`next start` + Chromium | PASS 63/63 |
+| Acceptance rehearsal | Fresh disposable Supabase stack + built app, two synthetic businesses; legacy-mode app on the same build | PASS 16/16, twice (direct and through `npm run test:acceptance`); first run 13/16 before the fixes above |
+| UI-2 visual harness | disposable stack + built app + Chromium | 20/20 routes 200; sidebar 0.00% on every page; figures identical to §21.5 |
+| `npm run typecheck` | — | PASS |
+| `npm run build` | Next.js 15.5.25, no `GHL_*` variables in the environment | PASS |
+| Browser bundle scan (`.next/static`) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, CRM terms, or `GHL_`; `AUTH_SECRET` named once in the existing legacy login message (no value) |
+| Secret scan of changed and new files | — | no secrets; matches are synthetic passwords for throwaway users on the disposable stack |
+| Cleanup | Docker / temp | 0 containers, volumes, networks, or temp projects left |

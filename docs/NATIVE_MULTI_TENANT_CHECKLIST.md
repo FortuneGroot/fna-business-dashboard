@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1–P7 Checklist
+# Native Multi-Tenant — P1–P7 Checklist and Local Acceptance
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record, §20 P6 record, §21 P7 record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record, §20 P6 record, §21 P7 record, §22 local acceptance). Staging/cutover steps: `docs/STAGING_CUTOVER_CHECKLIST.md`.
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P6. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. The platform console (P6) at `/platform` requires a listed platform admin with an AAL2 session (MFA through the app), provisions workspaces, replaces bootstrap owner invitations, suspends/reactivates, grants time-limited audited support access, and shows the audit log. P7 retired the GHL runtime: no webhook ingestion, CRM client, per-client configuration, or `GHL_*` settings remain on any native path; legacy mode (default) keeps its login and shows a read-only snapshot of the last synced activity. Next: full local acceptance rehearsal, then staging (P8) only with approval.**
+**Stop point: P1–P7 done and rehearsed locally (§22); waiting for independent review. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. The platform console (P6) at `/platform` requires a listed platform admin with an AAL2 session (MFA through the app), provisions workspaces, replaces bootstrap owner invitations, suspends/reactivates, grants time-limited audited support access, and shows the audit log. P7 retired the GHL runtime: no webhook ingestion, CRM client, per-client configuration, or `GHL_*` settings remain on any native path; legacy mode (default) keeps its login and shows a read-only snapshot of the last synced activity. The full local acceptance rehearsal passed (16 journeys, two synthetic businesses, fresh disposable stack). Next: staging (P8) only with approval, after the open decisions below.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -146,11 +146,21 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [ ] Remaining dependency until T6/M15: legacy snapshot modules, legacy migration `20260917121316_sync_store.sql`, legacy session store/edge. Not removable before the approved cutover gates.
 - [ ] Before promoting any P7 build: confirm production no longer expects live workflow webhooks, and that `CLIENT_CONFIG_PATH`/`GHL_PIPELINE_ID` are unused there (owner check; not accessed from here).
 
+## Local acceptance rehearsal (spec §22)
+
+- [x] Acceptance suite `tests/acceptance/` (`npm run test:acceptance`, minimum 16): provisioning, invitation acceptance, login/MFA, workspace switching, settings/team, all record types, overrides, malformed requests, concurrency, pagination, support grants, suspension, access removal, logout replay measurement, legacy mode, NET-1 and audit isolation — PASS 16/16 on a fresh disposable stack.
+- [x] Defect fixed: JSON endpoints accepted valid JSON sent as `text/plain` (CORS-simple); `parseBody` and `readJsonObject` now require a JSON content type (422/400); unit regressions in `p5-crm` and `p2-auth`.
+- [x] Defect fixed: legacy-mode `/platform` answered 200 (streamed `notFound()`); middleware now returns 404 before rendering; unit regression in `p6-platform`.
+- [x] Staging/cutover checklist written without accessing staging or production (`docs/STAGING_CUTOVER_CHECKLIST.md`).
+- [ ] Logout-replay decision — observed: replayed cookie read 200, record write 200, invitation 401.
+- [ ] Migration-history reconciliation on staging.
+- [ ] Platform-admin bootstrap script (spec §6.4 A2) not written; suites insert the row directly.
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 240, db 217, realpg 28, stack 63) | see §21.5 of the spec for the P7 run (unit 298 → 240: 78 tests deleted with retired code, 20 added) |
+| `npm test` | runner (minimums: unit 241, db 217, realpg 28, stack 63, acceptance 16) | [x] final run in spec §22.4: unit 241/241, db 217/217, realpg 28/28, stack 63/63, acceptance 16/16 |
 | `npm run test:db` | PGlite + Supabase shim | [x] PASS 217/217 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
 | `npm run typecheck` (`tsc` for the app, then `tsconfig.tests.json` for test files) | — | [x] PASS (test files were not type-clean before P6: 44 errors in P4/P5 tests and one in `auth.test.ts`, fixed without changing assertions) |
@@ -170,12 +180,14 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | P6 platform console: CON-1..9 (denial, MFA, provisioning, rotation, search, grants, clock expiry, suspension, logged-out session, browser flow) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
 | P7 retirement: retired routes 404 (incl. webhook POST), employee owner-API 403 via `/api/audit`, app started without `GHL_*` | real Supabase local stack | [x] PASS (in the 63) |
 | UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run after P7: all 20 routes 200; sidebar 0.00% on all 20 pages; other pages at their P3–P5 figures; Settings/Onboarding differ by P4 content (§21.5) |
+| Acceptance rehearsal (16 journeys, two synthetic businesses; legacy mode on the same build) | fresh disposable Supabase stack + built app | [x] PASS 16/16 (twice) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
 ## Remaining blockers / before staging
 
 - [ ] Reconcile legacy migration history on the staging project before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
 - [ ] Staging Supabase project (D4) and paid plan (D5) — later, by instruction.
+- [ ] Logout-replay decision; platform-admin bootstrap script or approved manual step; MFA recovery; P7 deploy ordering — see `docs/STAGING_CUTOVER_CHECKLIST.md` §0.
 
 ## Not done by instruction
 
