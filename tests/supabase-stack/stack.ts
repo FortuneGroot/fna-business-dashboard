@@ -267,6 +267,20 @@ export function totp(secret: string, now = Date.now()): string {
 
 /** Enrolls a TOTP factor and verifies it, returning an AAL2 access token. */
 export async function upgradeToAal2(env: StackEnv, user: Identity): Promise<string> {
+  return (await upgradeToAal2Session(env, user)).access_token;
+}
+
+export type GoTrueSession = {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  expires_at: number;
+  user: Record<string, unknown>;
+};
+
+/** Like upgradeToAal2, but returns the full GoTrue session (for building app session cookies). */
+export async function upgradeToAal2Session(env: StackEnv, user: Identity): Promise<GoTrueSession> {
   const auth = { apikey: env.anonKey, Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
   const enroll = await http(`${env.apiUrl}/auth/v1/factors`, {
     method: "POST", headers: auth, body: JSON.stringify({ factor_type: "totp", friendly_name: "stack-test" }),
@@ -280,7 +294,7 @@ export async function upgradeToAal2(env: StackEnv, user: Identity): Promise<stri
     method: "POST", headers: auth, body: JSON.stringify({ challenge_id: challenge.body.id, code: totp(secret) }),
   });
   if (verify.status !== 200 || !verify.body?.access_token) throw new Error(`MFA verify failed: ${verify.status} ${verify.text.slice(0, 200)}`);
-  return verify.body.access_token;
+  return verify.body as GoTrueSession;
 }
 
 /** PostgREST request with a user's own JWT (or no JWT for anon). */
@@ -334,6 +348,133 @@ export async function storage(
     },
     body: content,
   });
+}
+
+// ---------------------------------------------------------------------------
+// The real Next.js app (production build) running with AUTH_PROVIDER=supabase against the stack.
+// ---------------------------------------------------------------------------
+
+export type App = { url: string; stop: () => void };
+
+const redactKeys = (text: string, env: StackEnv) =>
+  [env.anonKey, env.serviceRoleKey, env.jwtSecret].reduce((t, k) => t.split(k).join("[redacted]"), text);
+
+/**
+ * Builds the app and starts `next start` on a free local port with AUTH_PROVIDER=supabase, pointed at
+ * the disposable stack. Legacy credentials are stripped from the child environment. Keys reach the
+ * child only through its environment and are redacted from any reported output.
+ */
+export async function startApp(env: StackEnv): Promise<App> {
+  if (!isLocal(env.apiUrl)) throw new Error("The app may only be pointed at a local stack.");
+  const build = run(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "build"], 600_000);
+  if (build.status !== 0) throw new Error(`next build failed: ${redactKeys(tail(build, 15), env)}`);
+
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (/^(AUTH_|SUPABASE_|GHL_|VERCEL)/.test(k)) continue;
+    childEnv[k] = v;
+  }
+  const port = 4300 + Math.floor(Math.random() * 500);
+  Object.assign(childEnv, {
+    NODE_ENV: "production",
+    PORT: String(port),
+    AUTH_PROVIDER: "supabase",
+    SUPABASE_URL: env.apiUrl,
+    SUPABASE_ANON_KEY: env.anonKey,
+    SUPABASE_SERVICE_ROLE_KEY: env.serviceRoleKey,
+  });
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(port), "-H", "127.0.0.1"], {
+    cwd: ROOT, env: childEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (d) => (output = (output + d).slice(-4000)));
+  child.stderr.on("data", (d) => (output = (output + d).slice(-4000)));
+  const stop = () => {
+    if (child.exitCode !== null || !child.pid) return;
+    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+    else child.kill("SIGTERM");
+  };
+  const url = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    try {
+      const r = await fetch(`${url}/api/health`);
+      if (r.status < 500) return { url, stop };
+    } catch {
+      /* not listening yet */
+    }
+    if (child.exitCode !== null || Date.now() > deadline) {
+      stop();
+      throw new Error(`next start did not become ready: ${redactKeys(output.trim().split(/\r?\n/).slice(-10).join(" | "), env)}`);
+    }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+export type AppResult = HttpResult & { location: string | null; setCookies: string[]; headers: Headers };
+
+/** Request to the app without following redirects. */
+export async function appFetch(
+  app: App,
+  path: string,
+  init: { method?: string; cookie?: string; json?: unknown; body?: BodyInit; contentType?: string } = {}
+): Promise<AppResult> {
+  const headers: Record<string, string> = {};
+  if (init.cookie) headers.cookie = init.cookie;
+  if (init.json !== undefined) headers["content-type"] = "application/json";
+  if (init.contentType) headers["content-type"] = init.contentType;
+  const res = await fetch(`${app.url}${path}`, {
+    method: init.method ?? "GET",
+    headers,
+    body: init.json !== undefined ? JSON.stringify(init.json) : init.body,
+    redirect: "manual",
+  });
+  const text = await res.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  return { status: res.status, body, text, location: res.headers.get("location"), setCookies: res.headers.getSetCookie(), headers: res.headers };
+}
+
+/** Cookie header value from Set-Cookie lines (ignores cookies being cleared). */
+export function cookieHeader(setCookies: string[]): string {
+  return setCookies
+    .map((c) => c.split(";")[0])
+    .filter((pair) => pair.split("=").slice(1).join("=") !== "")
+    .join("; ");
+}
+
+/** Signs in through the app's own /api/auth/login and returns the session Cookie header. */
+export async function appLogin(app: App, user: Identity): Promise<string> {
+  const r = await appFetch(app, "/api/auth/login", { method: "POST", json: { email: user.email, password: user.password } });
+  if (r.status !== 200) throw new Error(`app login failed for ${user.email}: ${r.status} ${r.text.slice(0, 200)}`);
+  return cookieHeader(r.setCookies);
+}
+
+const CHUNK = 3180;
+
+/** Encodes a session the way @supabase/ssr stores it (base64url, chunked) under `name`. */
+export function sessionCookie(name: string, session: object): string {
+  const value = `base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`;
+  if (value.length <= CHUNK) return `${name}=${value}`;
+  const parts: string[] = [];
+  for (let i = 0; i * CHUNK < value.length; i++) parts.push(`${name}.${i}=${value.slice(i * CHUNK, (i + 1) * CHUNK)}`);
+  return parts.join("; ");
+}
+
+/** Decodes an app session cookie header back into the cookie name and session object. */
+export function readSessionCookie(cookie: string): { name: string; session: GoTrueSession } {
+  const pairs = cookie.split("; ").map((p) => [p.slice(0, p.indexOf("=")), p.slice(p.indexOf("=") + 1)] as const)
+    .filter(([n]) => /^sb-.+-auth-token(\.\d+)?$/.test(n))
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  if (!pairs.length) throw new Error("no Supabase session cookie");
+  const name = pairs[0][0].replace(/\.\d+$/, "");
+  const raw = pairs.map(([, v]) => v).join("");
+  return { name, session: JSON.parse(Buffer.from(raw.replace(/^base64-/, ""), "base64url").toString("utf8")) };
 }
 
 /** HS256 JWT signed with the local stack's JWT secret (for expired/forged token checks). */

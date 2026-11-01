@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1 Checklist
+# Native Multi-Tenant — P1 / P2 Checklist
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 implementation record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record).
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P1. P2 (authentication) and UI work have not started.**
+**Stop point: end of P2. Supabase authentication is implemented behind `AUTH_PROVIDER` (default `legacy`); data layer (P3+) and UI work have not started.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -47,7 +47,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] R2-4 (P2): stack suite resets only an isolated, explicitly disposable project it started (guards unit-tested).
 - [x] Storage policies through the real Storage API — PASS.
 - [x] R2-3 through the real Storage API — reopened (the Storage API commits row writes as `service_role` without the caller's identity), then resolved by decision A: Storage writes require active membership plus `settings.write`; platform grants keep read access only.
-- [ ] Audited server endpoint for platform Storage changes — with P2 authentication.
+- [x] Audited server endpoint for platform Storage changes — delivered in P2 (`/api/platform/workspace-logo`, service-role allowlist A5, M16 RPCs).
 
 ## Second review coverage follow-up
 
@@ -58,12 +58,28 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Contact-write audit asserts the exact action, actor, and target (PGlite and stack suite).
 - [x] The same coverage through GoTrue/PostgREST/Storage — PASS, except the two Storage-audit tests (R2-3).
 
+## P2 authentication
+
+- [x] `AUTH_PROVIDER` flag: `legacy` (default, unchanged behaviour), `supabase`; any other value fails closed (503 / login error).
+- [x] Server-only Supabase config (`SUPABASE_URL`, `SUPABASE_ANON_KEY` or `SUPABASE_PUBLISHABLE_KEY`); no `NEXT_PUBLIC_*`; httpOnly, SameSite=Lax cookies (Secure in production).
+- [x] Middleware: `getClaims()` first; 307 to `/login?next=` for pages, 401 JSON for APIs; `fna_session` never read in supabase mode (ISO-F4).
+- [x] Middleware decides workspace access and §4.3 page permissions before rendering (fix for a page-content leak found by the first real-stack run; §16.2).
+- [x] Request context from `rpc request_context` with the user's own JWT; §7.1 error codes.
+- [x] Login/logout/me in supabase mode; generic invalid-credentials answer; 429 `rate_limited`; outages 503.
+- [x] `/api/workspaces` list and `/api/workspaces/active` switch (403 for workspaces you cannot use, 422 for invalid ids).
+- [x] `/no-access` and `/workspace-suspended` in the existing card design; Sidebar Setup/Resources by permission; design unchanged.
+- [x] Audited platform Storage endpoint (R2-3) with service-role allowlist entry A5; M16 migration and rollback.
+- [x] Static guards: SR-1 service-role allowlist, ISO-F1 (no client-supplied workspace id except the switch route), no cross-request client state, AAL1 override never enabled.
+- [ ] Wire pages and APIs to workspace data (P3/P4) — pages still read the legacy single-tenant data layer.
+- [ ] `/platform` console (P6); platform admins without a workspace see `/no-access` meanwhile.
+- [ ] Decision: make logout immediate for reads (session-row check in `request_context`). Today, per spec §5.1, a copied cookie of a logged-out session reads until its access token expires; sensitive mutations already refuse it.
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (unit 155, db 168, realpg 24, stack 17) | [x] all four suites PASS: unit 155, db 170, realpg 24, stack 17 |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 170/170 |
+| `npm test` | runner (minimums: unit 180, db 180, realpg 24, stack 26) | [x] all four suites PASS: unit 182, db 180, realpg 24, stack 26 |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 180/180 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 24/24 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
@@ -74,13 +90,14 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | Storage bucket + policies, PUT/upsert, overrides, clock expiry, concurrency | real Supabase local stack | [x] PASS |
 | Legacy tables closed to anon/authenticated over PostgREST | real Supabase local stack | [x] PASS |
 | Platform write grants refused for Storage upload, PUT, upsert, delete; GET allowed; nothing audited | real Supabase local stack | [x] PASS (R2-3, decision A) |
+| App (`next build` + `next start`, AUTH_PROVIDER=supabase) against real GoTrue: AUTH-1, logout replay (reads until token expiry; sensitive mutation refused), ISO-F3, ISO-F4, gates, MEM-1, SUSP-1, workspace switch, audited Storage endpoint | real Supabase local stack | [x] PASS (9 tests) |
+| Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
-## Remaining blockers / before P2
+## Remaining blockers / before staging
 
-- [ ] Build the audited platform Storage endpoint with P2 authentication (R2-3, decision A).
 - [ ] Reconcile legacy migration history on the staging project before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
 - [ ] Staging Supabase project (D4) and paid plan (D5) — later, by instruction.
 
 ## Not done by instruction
 
-No production access, deployment, push, real invitations, outbound communications, purchases, authentication changes, or UI changes.
+No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication changes are local and off by default (`AUTH_PROVIDER=legacy`); the only UI additions are the two access pages in the existing design.

@@ -1,10 +1,15 @@
--- Rollback for migrations 20261101000100 … 20261101001300 (native multi-tenant, P1).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M16 (P2)
+drop function if exists public.list_my_workspaces();
+drop function if exists public.platform_storage_change_requested(text, text);
+drop function if exists public.platform_storage_change_finished(bigint, boolean);
 
 -- M13
 do $$

@@ -1,6 +1,6 @@
 # Native Multi-Tenant Migration — Technical Specification
 
-Status: **P0 + P1 (database schema and isolation tests) implemented locally on `feat/native-multi-tenant`, committed locally (not pushed), never applied to any hosted Supabase project. P1 security-review findings 1–8 resolved (§15). Real local Supabase stack suite passes 17/17 on a disposable stack (§15.4). P2 (authentication) and all UI work not started.**
+Status: **P0 + P1 (database schema and isolation tests) and P2 (Supabase authentication behind `AUTH_PROVIDER`, default `legacy`) implemented locally on `feat/native-multi-tenant`, committed locally (not pushed), never applied to any hosted Supabase project or deployment. P1 findings resolved (§15); P2 record in §16. Real local Supabase stack suite, including the production build of the app signing in through real GoTrue, passes 26/26 on a disposable stack (§16.4). Data layer (P3+) and UI work not started; the existing design is unchanged.**
 Branch: `feat/native-multi-tenant` (created from `release` @ `9c189f8`).
 Scope: convert the single-tenant, GHL-fed dashboard into a native multi-tenant SaaS on Supabase while preserving every sidebar item, route, layout, and style, and the existing theme and navigation.
 
@@ -778,6 +778,9 @@ create policy contacts_update on public.contacts for update to authenticated
 | A2 | `scripts/bootstrap-platform-admin.ts` | Writes `platform_admins` | CLI only; refuses non-local targets unless `--env staging\|production` and a typed confirmation are given |
 | A3 | `readIntegrationSecret(workspaceId, provider)` / `writeIntegrationSecret(...)` | `integration_secrets` has no user grants | Callers must first pass `requireContext({ permission: 'integrations.manage' })`; the workspaceId comes from the context |
 | A4 | Test harness (`tests/integration/_harness.ts`) | Creates test users locally | Refuses unless the URL host is `127.0.0.1`/`localhost` or the project ref is in `TEST_SUPABASE_PROJECT_REFS` |
+| A5 (P2) | `platformWriteWorkspaceLogo(workspaceId, ext, bytes, contentType)` / `platformDeleteWorkspaceLogo(workspaceId, ext)` — only caller `src/app/api/platform/workspace-logo/route.ts` | Storage writes require membership (R2-3 decision A); a platform write grant cannot write through RLS | Route requires AUTH_PROVIDER=supabase, an AAL2 platform admin with no membership and a live `write` grant, a fresh `getUser()`; the workspace comes from the request context; the path is fixed to `<ws>/logo.(png\|jpg\|webp)`; `rpc platform_storage_change_requested` (re-checks admin, grant mode, path) records the request before the write and `platform_storage_change_finished` records succeeded/failed after it |
+
+As implemented in P2 the static check is `tests/p2-auth.test.ts` (SR-1): only `src/lib/supabase/admin.ts` may read `SUPABASE_SERVICE_ROLE_KEY` among new code, only the workspace-logo route imports it, and the pre-existing legacy readers (`src/lib/sync/db-client.ts`, `src/lib/sync/supabase-rest-auth.ts`, `src/lib/auth/session-store.ts`, `src/lib/auth/session-edge.ts`, `src/lib/deployment/validate.ts`, `scripts/generate-client-deployment.ts`) are tolerated until P7 retires them.
 
 A static test (`tests/unit/service-role-allowlist.test.ts`) fails if any file outside `src/lib/supabase/admin.ts`, `scripts/bootstrap-platform-admin.ts`, and `tests/integration/_harness.ts` imports the admin client or reads `SUPABASE_SERVICE_ROLE_KEY`.
 
@@ -1310,7 +1313,52 @@ Grant expiry is evaluated with `now()`, i.e. at transaction start; a single Post
 
 ### 15.5 Remaining blockers before P2 / staging
 
-1. **Audited platform Storage endpoint** (R2-3, decision A): until it exists with P2 authentication, platform grants are read-only for Storage.
+1. ~~**Audited platform Storage endpoint** (R2-3, decision A)~~ — delivered in P2 (§16.2).
 2. **Legacy migration history reconciliation** (cutover prerequisite): files renamed to unique versions (`docs/MIGRATION_VERSION_MAPPING.md`); history of any existing database is unknown and must be reconciled with `supabase migration list` on staging before any push. No remote repair was performed.
 3. **Staging project (D4) and paid plan (D5)** not created/purchased — by instruction.
 4. Phone number change (D7) and all theme/navigation-preserving UI work wait for the UI phase.
+
+## 16. P2 implementation record (authentication)
+
+Local only: nothing pushed, deployed, or applied to a hosted project; no invitations or outbound messages. `AUTH_PROVIDER` defaults to `legacy`, so existing deployments behave exactly as before.
+
+### 16.1 Files
+
+| Area | Files |
+| --- | --- |
+| Provider and config (edge-safe) | `src/lib/auth/provider.ts` — `authProvider()` (`legacy` default, `supabase`, anything else = misconfigured → fail closed 503), `supabaseAuthConfig()` (server-only `SUPABASE_URL` + `SUPABASE_ANON_KEY`/`SUPABASE_PUBLISHABLE_KEY`; no `NEXT_PUBLIC_*`), httpOnly/SameSite=Lax cookie options (Secure in production) |
+| Clients | `src/lib/supabase/server.ts` (per-request clients, pending cookies applied to responses), `src/lib/supabase/admin.ts` (A5 only) |
+| Request context | `src/lib/authz/evaluate.ts` (pure, edge-safe: context shape, §7.1 denial order, page permissions, denial redirects), `src/lib/authz/context.ts` (getClaims → `rpc request_context` with the user's JWT; API and page variants; `getUser()` re-check for sensitive mutations) |
+| Middleware and guards | `src/middleware.ts` (provider dispatch; legacy body unchanged), `src/lib/auth/guards.ts` (provider dispatch; legacy bodies unchanged; workspace role → legacy role mapping owner→OWNER, admin→ADMIN, employee→CLIENT) |
+| Routes | `/api/auth/login`, `/api/auth/logout`, `/api/auth/me` (supabase branches), `/api/workspaces` (GET), `/api/workspaces/active` (POST), `/api/platform/workspace-logo` (PUT/DELETE) |
+| Pages and UI | `/no-access`, `/workspace-suspended` (`src/components/AccessNotice.tsx`, same card layout as the login page); Sidebar Setup/Resources use `onboarding.read`/`library.read` when permissions are present (labels, order, icons unchanged) |
+| Database | `supabase/migrations/20261101001500_auth_session_platform_storage.sql` (M16): `list_my_workspaces()`, `platform_storage_change_requested()`, `platform_storage_change_finished()`; rollback drops them first |
+| Tests | `tests/p2-auth.test.ts` (unit, 27), `tests/db/p2-auth-rpcs.test.ts` (PGlite, 10), `tests/supabase-stack/stack.test.ts` nested "the app with AUTH_PROVIDER=supabase (P2)" (9), helpers in `tests/supabase-stack/stack.ts` (`startApp` builds and starts the app on a local port against the disposable stack with a scrubbed environment; `appFetch`, `appLogin`, `sessionCookie`) |
+
+### 16.2 Behaviour
+
+- **Middleware (supabase mode):** `getClaims()` first (verifies and refreshes the session), never reads `fna_session` (ISO-F4). Signed out: protected pages 307 → `/login?next=…`, protected APIs 401 `{code:"unauthenticated"}`. Signed in, protected pages: `rpc request_context` is evaluated **before rendering** — no workspace → 307 `/no-access`, suspended (no read grant) → 307 `/workspace-suspended`, missing `onboarding.read`/`library.read` → 307 `/dashboard?denied=1`, database unavailable → 503. Layout and page guards repeat the check.
+- **Why the middleware page check exists:** the first real-stack run showed that a layout `redirect()` streams as HTTP 200 (root `loading.tsx`) while Next renders the page in parallel, so `/dashboard` content was sent to an outsider and to a just-removed member. Pages with their own guard (`/onboarding`, `/library`) did not leak. Deciding access in middleware fixed it; the stack test now requires a real 307 and asserts no page content is sent.
+- **Error codes (§7.1):** 401 `unauthenticated`, 403 `forbidden`, 403 `no_active_workspace`, 423 `workspace_suspended`, 503 `auth_misconfigured`/`unavailable`, 429 `rate_limited`, 422 `validation_failed`.
+- **Login:** generic 401 "Invalid credentials" for wrong password and unknown email; Auth 429 → 429 `rate_limited`; Auth unreachable or 5xx → 503 (not reported as bad credentials); `Cache-Control: private, no-store`.
+- **Logout:** `signOut({scope:"local"})`, clears every `sb-*-auth-token(.N)` cookie; other sessions of the same user continue. Per §5.1, a copied cookie of the logged-out session still passes reads until its access token expires (local default 1 hour; observed on the real stack), because `getClaims()` and PostgREST verify the JWT, not the session row. Sensitive mutations call `getUser()` and refuse it (observed: logged-out AAL2 session → 401 on the platform Storage endpoint, nothing recorded). Open decision for review: a session-row check in `request_context` would make logout immediate for every app request.
+- **Platform Storage endpoint (R2-3, decision A):** `PUT/DELETE /api/platform/workspace-logo` for an AAL2 platform admin who is not a member and holds a live `write` grant; fresh `getUser()`; workspace from the context only; path fixed to `<ws>/logo.(png|jpg|webp)`, PNG/JPEG/WebP up to 2 MB. `platform_storage_change_requested` writes a `requested` audit row (re-checking admin, grant mode, path) before the service-role write; `platform_storage_change_finished` writes exactly one `succeeded`/`failed` row (same actor, within 15 minutes, still recordable after revocation). Read grants, members, AAL1 sessions, and revoked grants are refused.
+
+### 16.3 Deviations from the spec text
+
+1. Platform admins without a workspace go to `/no-access`; the `/platform` console is P6.
+2. The pre-existing legacy service-role readers (sync store, legacy session store, deployment validation) remain until P7; the SR-1 static test lists them explicitly and fails on any new reader.
+3. The migration is M16 because M15 is reserved for retiring legacy tables.
+4. The local Auth server did not rate-limit 40 rapid failed sign-ins, so the real-stack test asserts every answer is the generic 401 or `rate_limited` 429; the 429 mapping is proven against a fake Auth server in the unit suite.
+5. Pages still read the legacy single-tenant data layer until P3/P4; P2 only decides who may reach them.
+
+### 16.4 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (155 previous + 27 P2: provider/config, denial matrix, middleware/guards/routes in supabase mode against a dead Auth URL, misconfiguration 503, ISO-F1/F4, SR-1 allowlist, page gates, Auth status mapping) | Node 24.20.0 | PASS 182/182 |
+| DB suite (170 previous + 10 P2 RPC tests) | PGlite + shim | PASS 180/180 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 24/24 (unchanged by P2) |
+| Stack suite (17 previous + 9 app tests: AUTH-1 contracts, logout replay (reads until expiry; sensitive mutation refused), signed-out behaviour, ISO-F3 forged/tampered/expired/unsigned/foreign-key cookies, ISO-F4, employee/outsider/§4.3 gates, MEM-1, SUSP-1, workspace list/switch, audited platform Storage endpoint, failed-sign-in answers) | Real Supabase local stack (disposable) + `next build`/`next start` | PASS 26/26; no app process, containers, or volumes left behind |
+| `tsc --noEmit -p .` | — | PASS (except the pre-existing `NODE_ENV` assignments in `tests/auth.test.ts` and `tests/sync.test.ts`) |
+| `npm run build` | Next.js 15.5.25 | PASS |

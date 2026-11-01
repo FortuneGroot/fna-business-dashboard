@@ -5,10 +5,39 @@ import {
   revokeSessionToken,
   sessionCookieOptions,
 } from "@/lib/auth";
+import { authProvider, supabaseAuthConfig } from "@/lib/auth/provider";
+import { applyPendingCookies, supabaseForRequest } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
+/** AUTH_PROVIDER=supabase: signOut({ scope: 'local' }) ends this session and clears its cookies. */
+async function supabaseLogout(req: NextRequest): Promise<NextResponse> {
+  const res = NextResponse.json({ ok: true });
+  res.headers.set("Cache-Control", "private, no-store");
+  const config = supabaseAuthConfig();
+  if (!config) return res;
+  const { supabase, pending } = supabaseForRequest(req.headers.get("cookie"), config);
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch (error) {
+    console.error(
+      "[auth/logout] Supabase sign-out failed",
+      error instanceof Error ? error.message : "unknown error"
+    );
+  }
+  applyPendingCookies(res, pending);
+  // Clear every Supabase auth cookie even if the sign-out call failed.
+  for (const c of req.cookies.getAll()) {
+    if (/^sb-.+-auth-token(\.\d+)?$/.test(c.name) && !pending.cookies.some((p) => p.name === c.name)) {
+      res.cookies.set(c.name, "", { path: "/", maxAge: 0 });
+    }
+  }
+  return res;
+}
+
 export async function POST(req: NextRequest) {
+  if (authProvider() === "supabase") return supabaseLogout(req);
+
   const secret = getAuthSecret();
   const cookie = req.cookies.get(AUTH_COOKIE)?.value;
   const res = NextResponse.json({ ok: true, loggedOut: true });

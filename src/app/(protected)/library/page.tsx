@@ -19,7 +19,7 @@ function clientFacingTitle(name: string | undefined, fallback: string): string {
 }
 
 export default async function LibraryPage() {
-  await requirePageRole("ADMIN");
+  await requirePageRole("ADMIN", "library.read");
   const biz = clientBusinessName();
   const resolvedSnippets = snippets.map((s) => ({
     ...s,

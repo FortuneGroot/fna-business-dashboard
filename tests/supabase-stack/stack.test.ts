@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { after, afterEach, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
-  adminDb, jwtPayload, rest, rpc, serviceRest, signJwt, signUp, startStack, storage, upgradeToAal2,
-  type HttpResult, type Identity, type Stack, type StackEnv,
+  adminDb, appFetch, appLogin, cookieHeader, jwtPayload, readSessionCookie, rest, rpc, serviceRest, sessionCookie,
+  signJwt, signUp, startApp, startStack, storage, upgradeToAal2, upgradeToAal2Session,
+  type App, type HttpResult, type Identity, type Stack, type StackEnv,
 } from "./stack";
 
 const MIGRATIONS_DIR = join(__dirname, "..", "..", "supabase", "migrations");
@@ -482,5 +483,323 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       assert.equal(r.anon_any, false, `${r.relname} anon privileges`);
       assert.equal(r.auth_any, false, `${r.relname} authenticated privileges`);
     }
+  });
+
+  // P2: the production build of the app with AUTH_PROVIDER=supabase, signing in through its own
+  // /api/auth/login against real GoTrue. Pages and APIs are requested without following redirects.
+  describe("the app with AUTH_PROVIDER=supabase (P2)", () => {
+    let app: App;
+    let ownerCookie = "";
+
+    // Page denials must be decided by middleware (a real 307 before rendering). A redirect() from the
+    // layout alone streams as HTTP 200 while Next renders the page in parallel, which leaked page
+    // content in the first P2 run; the markers prove none of the gated page is sent.
+    const pageRedirect = (r: Awaited<ReturnType<typeof appFetch>>, label: string, gatedMarkers: string[]) => {
+      assert.equal(r.status, 307, `${label}: status ${r.status}`);
+      assert.ok(r.location, `${label}: no Location`);
+      for (const m of gatedMarkers) assert.equal(r.text.includes(m), false, `${label}: gated content "${m}" was sent`);
+      return new URL(r.location!, app.url);
+    };
+    const DASHBOARD = ["Needs Attention", "Recent Activity", "Quick Actions"];
+
+    before(async () => {
+      app = await startApp(env);
+    });
+
+    after(() => {
+      app?.stop();
+    });
+
+    test("AUTH-1: login, me, and logout follow the §7.2 contracts with httpOnly Supabase cookies", async () => {
+      const wrong = await appFetch(app, "/api/auth/login", { method: "POST", json: { email: ownerA.email, password: "wrong-password" } });
+      assert.equal(wrong.status, 401);
+      assert.deepEqual(wrong.body, { ok: false, error: "Invalid credentials", code: "unauthenticated" });
+      const unknown = await appFetch(app, "/api/auth/login", { method: "POST", json: { email: email("nobody"), password: "x" } });
+      assert.deepEqual([unknown.status, unknown.body], [401, wrong.body], "unknown accounts get the same generic answer");
+
+      const login = await appFetch(app, "/api/auth/login", { method: "POST", json: { email: ownerA.email, password: ownerA.password } });
+      assert.equal(login.status, 200, login.text);
+      assert.deepEqual(login.body, { ok: true, user: { id: ownerA.id, email: ownerA.email, name: "Owner A" } });
+      const auth = login.setCookies.filter((c) => /^sb-.+-auth-token/.test(c));
+      assert.ok(auth.length >= 1, "a Supabase session cookie is set");
+      for (const c of auth) {
+        assert.match(c, /HttpOnly/i);
+        assert.match(c, /SameSite=Lax/i);
+        assert.match(c, /Path=\//);
+      }
+      assert.match(login.headers.get("cache-control") ?? "", /no-store/);
+      assert.equal(login.setCookies.some((c) => c.startsWith("fna_session=")), false);
+      ownerCookie = cookieHeader(login.setCookies);
+
+      const me = await appFetch(app, "/api/auth/me", { cookie: ownerCookie });
+      assert.equal(me.status, 200, me.text);
+      assert.deepEqual(
+        { ...me.body, permissions: undefined },
+        { ok: true, authEnforced: true, user: { id: ownerA.id, email: ownerA.email, name: "Owner A" }, role: "owner",
+          legacyRole: "OWNER", permissions: undefined, isPlatformAdmin: false, grant: null,
+          workspace: { id: wsA, name: "TJ Towing (synthetic)", slug: `tj-towing-synthetic-${run}`, status: "active" } });
+      for (const p of ["dashboard.read", "onboarding.read", "settings.write", "team.invite_owner"]) {
+        assert.ok(me.body.permissions.includes(p), p);
+      }
+
+      assert.equal((await appFetch(app, "/dashboard", { cookie: ownerCookie })).status, 200);
+      assert.equal((await appFetch(app, "/onboarding", { cookie: ownerCookie })).status, 200);
+      assert.equal((await appFetch(app, "/library", { cookie: ownerCookie })).status, 200);
+      const root = await appFetch(app, "/", { cookie: ownerCookie });
+      assert.equal(root.status, 307);
+      assert.equal(new URL(root.location!, app.url).pathname, "/dashboard");
+
+      const throwaway = await appLogin(app, ownerA);
+      const logout = await appFetch(app, "/api/auth/logout", { method: "POST", cookie: throwaway });
+      assert.equal(logout.status, 200);
+      assert.deepEqual(logout.body, { ok: true });
+      const cleared = logout.setCookies.filter((c) => /^sb-.+-auth-token/.test(c));
+      assert.ok(cleared.length >= 1, "logout clears the session cookie");
+      for (const c of cleared) assert.match(c, /Max-Age=0|Expires=Thu, 01 Jan 1970/i);
+      const signedOut = await appFetch(app, "/api/auth/me");
+      assert.equal(signedOut.body.user, null);
+      // Spec §5.1: reads trust the verified access token until it expires, so a replayed cookie of a
+      // logged-out session still reads (observed). Sensitive mutations re-check with getUser() and
+      // refuse it (platform Storage endpoint test). Update §16 if this ever changes.
+      const replayApi = await appFetch(app, "/api/tenant/config", { cookie: throwaway });
+      assert.equal(replayApi.status, 200, `replayed cookie after logout: ${replayApi.status}`);
+      // Logging out one session does not end the owner's other session (scope: local).
+      assert.equal((await appFetch(app, "/api/auth/me", { cookie: ownerCookie })).body.user?.id, ownerA.id);
+    });
+
+    test("signed-out requests: protected pages 307 to /login?next=…, protected APIs 401 JSON", async () => {
+      const page = await appFetch(app, "/contacts");
+      assert.equal(page.status, 307);
+      const loc = new URL(page.location!, app.url);
+      assert.deepEqual([loc.pathname, loc.searchParams.get("next")], ["/login", "/contacts"]);
+      for (const path of ["/api/dashboard/summary", "/api/tenant/config", "/api/workspaces", "/api/events"]) {
+        const r = await appFetch(app, path);
+        assert.equal(r.status, 401, path);
+        assert.equal(r.body.code, "unauthenticated", path);
+      }
+      assert.equal((await appFetch(app, "/login")).status, 200);
+    });
+
+    test("ISO-F3: forged, tampered, expired, unsigned, and foreign-key session cookies are refused", async () => {
+      const { name, session } = readSessionCookie(ownerCookie);
+      const claims = jwtPayload(session.access_token);
+      const [h, p] = session.access_token.split(".");
+      const now = Math.floor(Date.now() / 1000);
+      const variants: Record<string, object> = {
+        "tampered signature": { ...session, access_token: `${h}.${p}.${Buffer.from("forged").toString("base64url")}` },
+        "expired, bad refresh token": { ...session, access_token: signJwt(env.jwtSecret, { ...claims, iat: now - 7200, exp: now - 3600 }),
+          refresh_token: "not-a-refresh-token", expires_at: now - 3600 },
+        "unsigned (alg none)": { ...session,
+          access_token: `${Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url")}.${p}.` },
+        "signed by another key": { ...session, access_token: signJwt("y".repeat(40), { ...claims, role: "authenticated" }) },
+        "another user's id in a forged token": { ...session,
+          access_token: signJwt("z".repeat(40), { ...claims, sub: ownerB.id, email: ownerB.email }) },
+      };
+      for (const [label, forged] of Object.entries(variants)) {
+        const cookie = sessionCookie(name, forged);
+        const api = await appFetch(app, "/api/tenant/config", { cookie });
+        assert.equal(api.status, 401, `${label}: API ${api.status} ${api.text.slice(0, 120)}`);
+        const page = await appFetch(app, "/dashboard", { cookie });
+        assert.equal(page.status, 307, `${label}: page ${page.status}`);
+        assert.equal(new URL(page.location!, app.url).pathname, "/login", label);
+        const me = await appFetch(app, "/api/auth/me", { cookie });
+        assert.equal(me.body?.user ?? null, null, `${label}: /api/auth/me must not report a user`);
+      }
+    });
+
+    test("ISO-F4: a legacy fna_session cookie is ignored", async () => {
+      const r = await appFetch(app, "/api/tenant/config", { cookie: "fna_session=legacy.session-token" });
+      assert.equal(r.status, 401);
+      const page = await appFetch(app, "/dashboard", { cookie: "fna_session=legacy.session-token" });
+      assert.equal(new URL(page.location!, app.url).pathname, "/login");
+    });
+
+    test("permissions gate pages and APIs: employees, outsiders, and §4.3 Setup/Resources", async () => {
+      const emp = await signUp(env, email("app-employee"), "App Employee");
+      const inv = await rpc(env, ownerA.token, "create_invitation", { p_email: emp.email, p_role: "employee", p_ttl_hours: 72 });
+      assert.equal(inv.status, 200, inv.text);
+      assert.equal((await rpc(env, emp.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+      const cookie = await appLogin(app, emp);
+
+      const me = await appFetch(app, "/api/auth/me", { cookie });
+      assert.deepEqual([me.body.role, me.body.legacyRole, me.body.workspace.id], ["employee", "CLIENT", wsA]);
+      assert.equal(me.body.permissions.includes("onboarding.read"), false);
+      assert.equal(me.body.permissions.includes("library.read"), false);
+      assert.equal((await appFetch(app, "/dashboard", { cookie })).status, 200);
+      for (const [path, markers] of [["/onboarding", ["Configuration readiness", "Onboarding / Setup Checklist"]],
+        ["/library", ["Email drafts", "Text drafts"]]] as const) {
+        const loc = pageRedirect(await appFetch(app, path, { cookie }), path, [...markers]);
+        assert.deepEqual([loc.pathname, loc.searchParams.get("denied")], ["/dashboard", "1"], path);
+      }
+      const owner = await appFetch(app, "/api/events", { cookie });
+      assert.deepEqual([owner.status, owner.body.code], [403, "forbidden"]);
+      const config = await appFetch(app, "/api/tenant/config", { cookie });
+      assert.equal(config.status, 200, config.text);
+      assert.equal(config.body.owner, undefined, "only owners receive the owner block");
+
+      const outsiderCookie = await appLogin(app, outsider);
+      const page = await appFetch(app, "/dashboard", { cookie: outsiderCookie });
+      assert.equal(pageRedirect(page, "outsider /dashboard", DASHBOARD).pathname, "/no-access");
+      const api = await appFetch(app, "/api/tenant/config", { cookie: outsiderCookie });
+      assert.deepEqual([api.status, api.body.code], [403, "no_active_workspace"]);
+      assert.equal((await appFetch(app, "/no-access", { cookie: outsiderCookie })).status, 200);
+      const outsiderMe = await appFetch(app, "/api/auth/me", { cookie: outsiderCookie });
+      assert.deepEqual([outsiderMe.body.user.id, outsiderMe.body.workspace, outsiderMe.body.permissions], [outsider.id, null, []]);
+    });
+
+    test("MEM-1 and SUSP-1 through the app: removal and suspension apply on the next request with the same session", async () => {
+      const member = await signUp(env, email("app-member-b"), "App Member B");
+      const inv = await rpc(env, ownerB.token, "create_invitation", { p_email: member.email, p_role: "employee", p_ttl_hours: 72 });
+      assert.equal(inv.status, 200, inv.text);
+      assert.equal((await rpc(env, member.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+      const memberCookie = await appLogin(app, member);
+      const ownerBCookie = await appLogin(app, ownerB);
+      assert.equal((await appFetch(app, "/api/tenant/config", { cookie: memberCookie })).status, 200);
+
+      await voidRpc(ownerB.token, "remove_member", { p_user_id: member.id });
+      const removed = await appFetch(app, "/api/tenant/config", { cookie: memberCookie });
+      assert.deepEqual([removed.status, removed.body.code], [403, "no_active_workspace"]);
+      const removedPage = await appFetch(app, "/dashboard", { cookie: memberCookie });
+      assert.equal(pageRedirect(removedPage, "removed member /dashboard", DASHBOARD).pathname, "/no-access");
+
+      await voidRpc(platformAal2, "platform_suspend_workspace", { p_workspace_id: wsB, p_reason: "app suspension test" });
+      let reactivated = false;
+      try {
+        const api = await appFetch(app, "/api/tenant/config", { cookie: ownerBCookie });
+        assert.deepEqual([api.status, api.body.code], [423, "workspace_suspended"]);
+        const page = await appFetch(app, "/dashboard", { cookie: ownerBCookie });
+        assert.equal(pageRedirect(page, "suspended /dashboard", DASHBOARD).pathname, "/workspace-suspended");
+        assert.equal((await appFetch(app, "/workspace-suspended", { cookie: ownerBCookie })).status, 200);
+        await voidRpc(platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "app reactivation test" });
+        reactivated = true;
+        assert.equal((await appFetch(app, "/api/tenant/config", { cookie: ownerBCookie })).status, 200);
+      } finally {
+        if (!reactivated) {
+          await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "app cleanup reactivation" });
+        }
+      }
+    });
+
+    test("/api/workspaces lists memberships and /api/workspaces/active switches only to allowed workspaces", async () => {
+      const dual = await signUp(env, email("app-dual"), "App Dual");
+      for (const [owner, ws] of [[ownerA, wsA], [ownerB, wsB]] as const) {
+        const inv = await rpc(env, owner.token, "create_invitation", { p_email: dual.email, p_role: "employee", p_ttl_hours: 72 });
+        assert.equal(inv.status, 200, `${ws}: ${inv.text}`);
+        assert.equal((await rpc(env, dual.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+      }
+      const cookie = await appLogin(app, dual);
+      const listed = await appFetch(app, "/api/workspaces", { cookie });
+      assert.equal(listed.status, 200, listed.text);
+      assert.deepEqual(listed.body.workspaces.map((x: any) => [x.id, x.role, x.grantMode]).sort(),
+        [[wsA, "employee", null], [wsB, "employee", null]].sort());
+
+      const toA = await appFetch(app, "/api/workspaces/active", { method: "POST", cookie, json: { workspaceId: wsA } });
+      assert.equal(toA.status, 200, toA.text);
+      assert.equal(toA.body.workspace.id, wsA);
+      assert.equal((await appFetch(app, "/api/auth/me", { cookie })).body.workspace.id, wsA);
+
+      const foreign = await appFetch(app, "/api/workspaces/active", { method: "POST", cookie, json: { workspaceId: "00000000-0000-4000-8000-000000000123" } });
+      assert.deepEqual([foreign.status, foreign.body.code], [403, "forbidden"]);
+      const invalid = await appFetch(app, "/api/workspaces/active", { method: "POST", cookie, json: { workspaceId: "B" } });
+      assert.deepEqual([invalid.status, invalid.body.code], [422, "validation_failed"]);
+      assert.equal((await appFetch(app, "/api/auth/me", { cookie })).body.workspace.id, wsA, "refused switches change nothing");
+
+      const outsiderCookie = await appLogin(app, outsider);
+      const intruder = await appFetch(app, "/api/workspaces/active", { method: "POST", cookie: outsiderCookie, json: { workspaceId: wsB } });
+      assert.deepEqual([intruder.status, intruder.body.code], [403, "forbidden"]);
+    });
+
+    test("platform Storage endpoint: only a write grant can change the logo, every change is audited, members are refused", async () => {
+      const admin = await signUp(env, email("app-platform"), "App Platform Admin");
+      await db.query("insert into public.platform_admins (user_id) values ($1)", [admin.id]);
+      const aal2 = await upgradeToAal2Session(env, admin);
+      const { name } = readSessionCookie(ownerCookie);
+      const adminCookie = sessionCookie(name, aal2);
+      const logoPath = `${wsA}/logo.png`;
+      const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+      const put = (cookie: string, body: BodyInit = png, contentType = "image/png") =>
+        appFetch(app, "/api/platform/workspace-logo", { method: "PUT", cookie, body, contentType });
+      const storageAudit = async (grantId: string) =>
+        (await db.query<{ action: string; target: string; actor_id: string; actor_kind: string; metadata: any }>(
+          `select action, target, actor_id, actor_kind, metadata from public.workspace_audit_log
+           where grant_id = $1 and action like 'storage.%' order by id`, [grantId])).rows;
+      const grantAs = async (mode: "read" | "write") => {
+        const r = await rpc(env, aal2.access_token, "platform_grant_access", {
+          p_workspace_id: wsA, p_mode: mode, p_reason: `app storage endpoint ${mode} test`, p_minutes: 15 });
+        assert.equal(r.status, 200, r.text);
+        return r.body.id as string;
+      };
+      const revoke = (id: string) => voidRpc(aal2.access_token, "platform_revoke_access", { p_grant_id: id });
+
+      const noGrant = await put(adminCookie);
+      assert.deepEqual([noGrant.status, noGrant.body.code], [403, "no_active_workspace"]);
+      const member = await put(ownerCookie);
+      assert.deepEqual([member.status, member.body.code], [403, "forbidden"], "members use Storage directly");
+
+      const readGrant = await grantAs("read");
+      try {
+        const r = await put(adminCookie);
+        assert.deepEqual([r.status, r.body.code], [403, "forbidden"]);
+        assert.deepEqual(await storageAudit(readGrant), []);
+        assert.equal((await appFetch(app, "/dashboard", { cookie: adminCookie })).status, 200, "a read grant opens workspace pages");
+        assert.equal((await appFetch(app, "/onboarding", { cookie: adminCookie })).status, 200, "read grants include onboarding.read");
+      } finally {
+        await revoke(readGrant);
+      }
+
+      const writeGrant = await grantAs("write");
+      try {
+        const wrongType = await put(adminCookie, "not an image", "text/plain");
+        assert.deepEqual([wrongType.status, wrongType.body.code], [422, "validation_failed"]);
+        assert.deepEqual(await storageAudit(writeGrant), [], "rejected input writes no audit row");
+
+        const ok = await put(adminCookie);
+        assert.equal(ok.status, 200, ok.text);
+        assert.deepEqual(ok.body, { ok: true, objectPath: logoPath });
+        const stored = await storage(env, ownerA.token, "GET", `workspace-assets/${logoPath}`);
+        assert.equal(stored.status, 200, "the owner can read the logo the platform admin uploaded");
+        const del = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
+        assert.equal(del.status, 200, del.text);
+        const left = await db.query("select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and name = $1", [logoPath]);
+        assert.equal(left.rows[0].n, 0);
+
+        const audit = await storageAudit(writeGrant);
+        assert.deepEqual(audit.map((a) => [a.action, a.metadata.outcome, a.target, a.actor_id, a.actor_kind, a.metadata.via]), [
+          ["storage.object_upsert", "requested", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
+          ["storage.object_upsert", "succeeded", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
+          ["storage.object_delete", "requested", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
+          ["storage.object_delete", "succeeded", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
+        ]);
+
+        // A password (AAL1) session of the same platform admin is not a platform admin.
+        const aal1Cookie = await appLogin(app, admin);
+        const aal1 = await put(aal1Cookie);
+        assert.equal(aal1.status, 403, aal1.text);
+
+        // Sensitive mutations re-check the session with the Auth server (§5.1): once this AAL2
+        // session is logged out, its still-unexpired cookie is refused and nothing is recorded.
+        assert.equal((await appFetch(app, "/api/auth/logout", { method: "POST", cookie: adminCookie })).status, 200);
+        const loggedOut = await put(adminCookie);
+        assert.deepEqual([loggedOut.status, loggedOut.body.code], [401, "unauthenticated"], loggedOut.text);
+        assert.equal((await storageAudit(writeGrant)).length, 4, "a logged-out session records nothing");
+      } finally {
+        await revoke(writeGrant);
+      }
+      const afterRevoke = await put(adminCookie);
+      assert.equal(afterRevoke.status, 403, afterRevoke.text);
+      assert.equal((await storageAudit(writeGrant)).length, 4, "nothing is recorded after revocation");
+    });
+
+    // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit
+    // these attempts in practice; the 429 → rate_limited mapping is proven in tests/p2-auth.test.ts.
+    test("AUTH-1: repeated failed sign-ins only ever answer generic 401 or 429 rate_limited", async () => {
+      const generic = { ok: false, error: "Invalid credentials", code: "unauthenticated" };
+      const limited = { ok: false, error: "Too many attempts. Try again later.", code: "rate_limited" };
+      for (let i = 0; i < 40; i++) {
+        const r = await appFetch(app, "/api/auth/login", { method: "POST", json: { email: outsider.email, password: `wrong-${i}` } });
+        assert.ok(r.status === 401 || r.status === 429, `attempt ${i}: ${r.status} ${r.text.slice(0, 120)}`);
+        assert.deepEqual(r.body, r.status === 401 ? generic : limited);
+      }
+    });
   });
 });

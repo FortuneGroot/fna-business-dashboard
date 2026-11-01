@@ -63,13 +63,13 @@ const PRIMARY = [
   { href: "/reporting", label: "Reports", icon: "reports" },
 ];
 
-type NavItem = { href: string; label: string; icon: string; minRole?: AuthRole };
+type NavItem = { href: string; label: string; icon: string; minRole?: AuthRole; permission?: string };
 
 const SECONDARY: NavItem[] = [
   { href: "/settings", label: "Settings", icon: "settings" },
-  { href: "/onboarding", label: "Setup", icon: "automations", minRole: "OWNER" },
+  { href: "/onboarding", label: "Setup", icon: "automations", minRole: "OWNER", permission: "onboarding.read" },
   { href: "/help", label: "Help & Support", icon: "help" },
-  { href: "/library", label: "Resources", icon: "resources", minRole: "ADMIN" },
+  { href: "/library", label: "Resources", icon: "resources", minRole: "ADMIN", permission: "library.read" },
 ];
 
 function isActivePath(path: string, href: string): boolean {
@@ -78,7 +78,9 @@ function isActivePath(path: string, href: string): boolean {
   return path.startsWith(`${href}/`);
 }
 
-function navVisibleForRole(item: NavItem, role: AuthRole | null): boolean {
+/** With AUTH_PROVIDER=supabase, `permissions` comes from /api/auth/me and gates items (spec §4.3). */
+export function navVisibleForRole(item: NavItem, role: AuthRole | null, permissions?: string[] | null): boolean {
+  if (permissions) return !item.permission || permissions.includes(item.permission);
   if (!item.minRole) return true;
   if (!role) return false;
   if (item.minRole === "OWNER") return canAccessOwnerSettings(role);
@@ -89,9 +91,11 @@ function navVisibleForRole(item: NavItem, role: AuthRole | null): boolean {
 export function SidebarLinks({
   onNavigate,
   role,
+  permissions,
 }: {
   onNavigate?: () => void;
   role?: AuthRole | null;
+  permissions?: string[] | null;
 }) {
   const path = usePathname();
   const renderLink = (l: NavItem) => (
@@ -106,7 +110,7 @@ export function SidebarLinks({
       {l.label}
     </Link>
   );
-  const secondary = SECONDARY.filter((l) => navVisibleForRole(l, role ?? null));
+  const secondary = SECONDARY.filter((l) => navVisibleForRole(l, role ?? null, permissions));
   return (
     <nav className="sidebar-nav" aria-label="Primary">
       {PRIMARY.map(renderLink)}
@@ -123,6 +127,7 @@ export function SidebarLinks({
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tenant, setTenant] = useState<TenantChrome | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
+  const [permissions, setPermissions] = useState<string[] | null>(null);
   useEffect(() => {
     fetch("/api/tenant/public")
       .then((r) => r.json())
@@ -133,6 +138,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       .then((d) => {
         const next = d?.user?.role;
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
+        if (Array.isArray(d?.permissions)) setPermissions(d.permissions);
       })
       .catch(() => undefined);
   }, []);
@@ -169,7 +175,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ×
           </button>
         </div>
-        <SidebarLinks onNavigate={onClose} role={role} />
+        <SidebarLinks onNavigate={onClose} role={role} permissions={permissions} />
         <div className="sidebar-footer">{legal} · AUTOMATION · WEBSITES · BRANDING · SYSTEMS</div>
       </aside>
     </>

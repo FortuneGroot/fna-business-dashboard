@@ -34,7 +34,7 @@ const FALLBACK_STEPS = [
 ];
 
 export default async function OnboardingPage() {
-  await requirePageRole("OWNER");
+  await requirePageRole("OWNER", "onboarding.read");
   const config = getTenantConfig();
   const report = evaluateClientReadiness(config);
   const publicReport = toPublicReadinessPayload(report);
