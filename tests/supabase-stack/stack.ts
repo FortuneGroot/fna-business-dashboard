@@ -60,7 +60,7 @@ function portOf(url: string): number {
  * Copies config.toml and migrations into a fresh temp directory with a random disposable project
  * id and shifted ports. Nothing else (no `.temp`, no linked project ref, no env files) is copied.
  */
-export function createDisposableProject(sourceDir = join(ROOT, "supabase")): DisposableProject {
+export function createDisposableProject(sourceDir = join(ROOT, "supabase"), portOffset = PORT_OFFSET): DisposableProject {
   const workdir = mkdtempSync(join(tmpdir(), "fna-disposable-stack-"));
   const token = randomBytes(6).toString("hex");
   const projectId = `${DISPOSABLE_PREFIX}${token}`;
@@ -80,7 +80,7 @@ export function createDisposableProject(sourceDir = join(ROOT, "supabase")): Dis
       if (/^project_id\s*=/.test(line)) return `project_id = "${projectId}"`;
       const port = /^(\s*(?:port|shadow_port|inspector_port)\s*=\s*)(\d+)(.*)$/.exec(line);
       if (!port) return line;
-      const shifted = Number(port[2]) + PORT_OFFSET;
+      const shifted = Number(port[2]) + portOffset;
       if (section === "api" && /^\s*port/.test(port[1])) apiPort = shifted;
       if (section === "db" && /^\s*port/.test(port[1])) dbPort = shifted;
       return `${port[1]}${shifted}${port[3]}`;
@@ -188,8 +188,11 @@ const tail = (r: { stdout: string; stderr: string }, n: number) =>
 
 export type Stack = { env: StackEnv; project: DisposableProject; stop: () => void };
 
-/** Creates, starts, verifies, and resets a disposable stack so every migration is applied by the CLI. */
-export function startStack(): Stack {
+/**
+ * Creates, starts, verifies, and resets a disposable stack so every migration is applied by the CLI.
+ * A second concurrent stack needs a different `portOffset`.
+ */
+export function startStack(portOffset = PORT_OFFSET): Stack {
   if (process.env.VERCEL_ENV) throw new Error("Stack tests refuse to run when VERCEL_ENV is set.");
   if (!existsSync(CLI)) throw new BlockedError("Supabase CLI is not installed (npm devDependency `supabase`).");
   const docker = run("docker", ["info", "--format", "{{.ServerVersion}}"], 30_000);
@@ -197,7 +200,7 @@ export function startStack(): Stack {
     throw new BlockedError("Docker engine is not running (Docker Desktop requires WSL2 and firmware virtualization).");
   }
 
-  const project = createDisposableProject();
+  const project = createDisposableProject(undefined, portOffset);
   let startedHere = false;
   // Stopping needs only the project-level guards: the random project id exists solely for this run.
   const stop = () => {
@@ -238,6 +241,27 @@ export function stackService(stack: Stack, service: "rest" | "auth" | "storage",
   const name = `supabase_${service}_${stack.project.projectId}`;
   const r = run("docker", [action, name], 180_000);
   if (r.error || r.status !== 0) throw new Error(`docker ${action} ${name} failed: ${tail(r, 3)}`);
+}
+
+/**
+ * Runs one docker command against a container of this run's disposable stack only (backup and
+ * restore rehearsal). `args` receives the container name; `input` is piped to stdin.
+ */
+export function stackDocker(
+  stack: Stack,
+  service: "db" | "storage",
+  args: (container: string) => string[],
+  input?: string,
+  timeoutMs = 300_000
+): string {
+  const problems = disposableProjectProblems(stack.project);
+  if (problems.length) throw new Error(`Refusing docker access to ${service}: ${problems.join("; ")}`);
+  const container = `supabase_${service}_${stack.project.projectId}`;
+  const env = { ...process.env, PATH: [...DOCKER_DIRS, process.env.PATH ?? ""].join(process.platform === "win32" ? ";" : ":") };
+  const argv = args(container);
+  const r = spawnSync("docker", argv, { cwd: ROOT, env, encoding: "utf8", input, timeout: timeoutMs, windowsHide: true, maxBuffer: 512 * 1024 * 1024 });
+  if (r.error || r.status !== 0) throw new Error(`docker ${argv[0]} on ${service} failed: ${tail(r, 6)}`);
+  return r.stdout;
 }
 
 /** Waits until a restarted service answers through the API gateway again. */
