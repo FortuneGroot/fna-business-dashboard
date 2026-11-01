@@ -1,5 +1,5 @@
 import "server-only";
-import type { DashboardSummary } from "@/lib/sync/types";
+import type { DashboardSummary } from "@/lib/data/records";
 import { centsToAmount, latestTimestamp } from "./dashboard-adapters";
 import { openValueCents } from "./pipeline";
 import { countWorkspace, fromWorkspace, rows, total, type DataScope } from "./query";

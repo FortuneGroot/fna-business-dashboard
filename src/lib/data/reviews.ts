@@ -1,5 +1,5 @@
 import "server-only";
-import type { ReviewEventRecord } from "@/lib/sync/types";
+import type { ReviewEventRecord } from "@/lib/data/records";
 import { reviewEventRecord, type NativeReviewRow } from "./dashboard-adapters";
 import { fromWorkspace, rows, type DataScope } from "./query";
 

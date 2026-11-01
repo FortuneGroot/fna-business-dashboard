@@ -4,7 +4,7 @@ import { Card, MetricTile, Badge, EmptyState, QuickActions, Button } from "@/com
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { SidebarIcon } from "@/components/Sidebar";
 import { getPageData } from "@/lib/data";
-import { platformProductName } from "@/lib/tenant";
+import { BRAND } from "@/lib/brand";
 import { dataCopy } from "@/lib/ui/sync-copy";
 import Link from "next/link";
 
@@ -75,7 +75,7 @@ export default async function DashboardPage() {
     <AppShell>
       <section className="hero">
         <Badge tone="gold">Business Dashboard</Badge>
-        <h1 style={{ marginTop: "0.6rem" }}>{platformProductName()}</h1>
+        <h1 style={{ marginTop: "0.6rem" }}>{BRAND.product}</h1>
         <p>
           Client: <strong>{workspace.businessName}</strong>. AUTOMATION · WEBSITES · BRANDING · SYSTEMS.
           {` ${copy.sourceDetail}`}

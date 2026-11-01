@@ -6,12 +6,12 @@ import type {
   DashboardSummary,
   OpportunityRecord,
   ReviewEventRecord,
+  StorageMode,
   TaskEventRecord,
-} from "@/lib/sync/types";
-import type { StorageMode } from "@/lib/sync/store";
+} from "@/lib/data/records";
 
 /**
- * Read surface shared by pages and /api/dashboard/*. With AUTH_PROVIDER=legacy it is the sync store;
+ * Read surface shared by pages and /api/dashboard/*. With AUTH_PROVIDER=legacy it is the frozen sync snapshot;
  * with AUTH_PROVIDER=supabase it reads the active workspace's native tables (spec §9.2 P3).
  */
 export type DashboardReader = {

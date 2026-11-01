@@ -1,5 +1,5 @@
 import "server-only";
-import type { AppointmentRecord } from "@/lib/sync/types";
+import type { AppointmentRecord } from "@/lib/data/records";
 import { appointmentRecord, type NativeAppointmentRow, type NativeCalendarRow } from "./dashboard-adapters";
 import { displayNames, fromWorkspace, LIST_LIMIT, rows, type DataScope } from "./query";
 

@@ -5,9 +5,8 @@ import sms from "@/content/sms.json";
 import snippets from "@/content/snippets.json";
 import alerts from "@/content/alerts.json";
 import { requirePageRole } from "@/lib/auth/guards";
-import { applyClientBusinessName } from "@/lib/mapping";
 import { getPageData } from "@/lib/data";
-import { sanitizeClientFacingCopy } from "@/lib/ui/sync-copy";
+import { applyClientBusinessName, sanitizeClientFacingCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 

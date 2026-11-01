@@ -2,7 +2,6 @@ import { AppShell } from "@/components/AppShell";
 import { Card, PageHead, Button } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
 import { getPageData } from "@/lib/data";
-import { platformProductName } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +11,7 @@ export default async function HelpPage() {
   const supportEmail = workspace.supportEmail;
   const phone = workspace.phone;
   const booking = workspace.bookingUrl;
-  const product = platformProductName();
+  const product = BRAND.product;
 
   return (
     <AppShell>

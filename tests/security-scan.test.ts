@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, it } from "node:test";
-import { PROTECTED_MASTER_LOCATION_ID } from "../src/lib/master-guard";
+import { LEGACY_DEFAULT_PARTITION, LEGACY_REFUSED_PARTITION } from "../src/lib/legacy/deployment";
 
 /**
  * Browser-bundle + source boundary scans.
@@ -10,7 +10,7 @@ import { PROTECTED_MASTER_LOCATION_ID } from "../src/lib/master-guard";
  * Fail on embedded secret VALUE shapes and the protected Master location id.
  */
 
-const MASTER_ID = PROTECTED_MASTER_LOCATION_ID;
+const MASTER_ID = LEGACY_REFUSED_PARTITION;
 
 const VALUE_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "sb_secret_value", re: /sb_secret_[A-Za-z0-9_]{8,}/ },
@@ -121,7 +121,7 @@ describe("compiled client bundle secret scan", () => {
     assert.equal(/forbiddenMasterId|liveLocationId|pipelineId\s*:/.test(brand), false);
   });
 
-  it("client components and sync-copy never import master-guard or privileged tenant ids", () => {
+  it("client components and sync-copy never import the legacy server modules or privileged ids", () => {
     const offenders: string[] = [];
     const roots = [
       ...CLIENT_ENTRY_GLOBS,
@@ -131,8 +131,8 @@ describe("compiled client bundle secret scan", () => {
     for (const root of roots) {
       for (const file of walkTs(root)) {
         const text = readFileSync(file, "utf8");
-        if (/from\s+["']@\/lib\/master-guard["']/.test(text)) {
-          offenders.push(`${relative(process.cwd(), file)} :: master-guard`);
+        if (/from\s+["']@\/lib\/legacy\//.test(text)) {
+          offenders.push(`${relative(process.cwd(), file)} :: legacy server module`);
         }
         if (text.includes(MASTER_ID)) {
           offenders.push(`${relative(process.cwd(), file)} :: Master id literal`);
@@ -142,7 +142,7 @@ describe("compiled client bundle secret scan", () => {
     // Client components that import brand must only pull client-safe brand.ts
     for (const file of walkTs(join(process.cwd(), "src", "components"))) {
       const text = readFileSync(file, "utf8");
-      if (/from\s+["']@\/lib\/(tenant|mapping|env|ghl|master-guard)["']/.test(text)) {
+      if (/from\s+["']@\/lib\/(legacy\/|data\/legacy|supabase\/admin)/.test(text) || text.includes(LEGACY_DEFAULT_PARTITION)) {
         offenders.push(`${relative(process.cwd(), file)} :: privileged server import`);
       }
     }
@@ -163,9 +163,12 @@ describe("compiled client bundle secret scan", () => {
     }
   });
 
-  it("master-guard is marked server-only", () => {
-    const text = readFileSync(join(process.cwd(), "src", "lib", "master-guard.ts"), "utf8");
-    assert.match(text, /import\s+["']server-only["']/);
-    assert.match(text, new RegExp(MASTER_ID));
+  it("the legacy deployment and snapshot modules are server-only and keep the Master refusal", () => {
+    for (const f of ["deployment.ts", "snapshot.ts"]) {
+      const text = readFileSync(join(process.cwd(), "src", "lib", "legacy", f), "utf8");
+      assert.match(text, /import\s+["']server-only["']/, f);
+    }
+    const deployment = readFileSync(join(process.cwd(), "src", "lib", "legacy", "deployment.ts"), "utf8");
+    assert.match(deployment, new RegExp(MASTER_ID));
   });
 });

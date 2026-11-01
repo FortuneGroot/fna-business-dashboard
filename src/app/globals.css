@@ -1,7 +1,7 @@
 /* Fortune & Automations Business Dashboard — design system (2026-09-17 pass)
    Locked palette: Background Blue #445367 · Background Cream #F3EFE9 ·
    White #FFFFFF · Primary/Logo Blue #314258 · Gold #BCA077.
-   Gold is an accent only — borders, highlights, selected states, key icons.
+   Gold is an accent only — borders, emphasis marks, selected states, key icons.
    Never used as a large fill. */
 :root {
   --blue: #445367;

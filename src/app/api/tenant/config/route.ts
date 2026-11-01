@@ -4,7 +4,6 @@ import { canAccessOwnerSettings } from "@/lib/auth/types";
 import { authProvider } from "@/lib/auth/provider";
 import { readApi } from "@/lib/data/api";
 import type { WorkspaceView } from "@/lib/data/types";
-import { getTenantConfig } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +25,7 @@ function clientBlock(view: WorkspaceView) {
  * Authenticated tenant contact + configuration.
  * AUTH_PROVIDER=supabase: the active workspace's settings (`settings.read`); holders of
  * `settings.write` also get `owner: { pipelineName, stagesCount }` (spec §7.3).
- * AUTH_PROVIDER=legacy: deployment config; owner configuration for OWNER only.
+ * AUTH_PROVIDER=legacy: the legacy deployment identity; `owner: { pipelineName, stagesCount }` for OWNER only.
  */
 export async function GET(req: NextRequest) {
   if (authProvider() === "supabase") {
@@ -46,15 +45,12 @@ export async function GET(req: NextRequest) {
   if (denied) return denied;
 
   const session = await getApiSession(req);
-  const { legacyWorkspaceView } = await import("@/lib/data/legacy");
-  const body: Record<string, unknown> = { ok: true, client: clientBlock(legacyWorkspaceView()) };
+  const { legacyWorkspaceView } = await import("@/lib/legacy/deployment");
+  const view = legacyWorkspaceView();
+  const body: Record<string, unknown> = { ok: true, client: clientBlock(view) };
 
   if (session && canAccessOwnerSettings(session.role)) {
-    const cfg = getTenantConfig();
-    body.owner = {
-      pipelineName: cfg.ghl.pipelineName,
-      locationConfigured: Boolean(cfg.ghl.locationId),
-    };
+    body.owner = { pipelineName: view.pipelineName, stagesCount: view.stageNames.length };
   }
 
   return NextResponse.json(body);

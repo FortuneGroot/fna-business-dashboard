@@ -10,7 +10,7 @@ import { stageTotals } from "../src/lib/data/pipeline";
 import { loadWorkspaceView } from "../src/lib/data/workspace";
 import type { DataScope } from "../src/lib/data/query";
 import type { RequestContext } from "../src/lib/authz/evaluate";
-import type { AppointmentRecord, OpportunityRecord } from "../src/lib/sync/types";
+import type { AppointmentRecord, OpportunityRecord } from "../src/lib/data/records";
 
 const WS = "00000000-0000-4000-8000-00000000a0a0";
 const WS_B = "00000000-0000-4000-8000-00000000b0b0";

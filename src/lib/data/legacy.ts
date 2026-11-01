@@ -1,22 +1,13 @@
 import "server-only";
-import { getSyncStore } from "@/lib/sync";
-import {
-  clientBookingUrl,
-  clientBusinessName,
-  clientLegalName,
-  clientReviewUrl,
-  clientSupportEmail,
-  configuredCalendars,
-  configuredPipelineName,
-  configuredStageNames,
-  getTenantConfig,
-} from "@/lib/tenant";
-import { looksLikePlaceholderCalendars, looksLikePlaceholderStages } from "@/lib/tenant-ui";
-import type { DashboardReader, DataSource, WorkspaceView } from "./types";
+import { legacyWorkspaceView } from "@/lib/legacy/deployment";
+import { getLegacySnapshotStore } from "@/lib/legacy/snapshot";
+import type { DashboardReader, DataSource } from "./types";
 
-/** AUTH_PROVIDER=legacy: the deployment's sync store, unchanged. */
+export { legacyWorkspaceView };
+
+/** AUTH_PROVIDER=legacy: the deployment's frozen sync snapshot, read-only. */
 export function legacyReader(): DashboardReader {
-  const store = getSyncStore();
+  const store = getLegacySnapshotStore();
   return {
     native: false,
     source: "sync-store",
@@ -30,28 +21,6 @@ export function legacyReader(): DashboardReader {
     listTaskEvents: (limit) => store.listTaskEvents(limit),
     listReviewEvents: (limit) => store.listReviewEvents(limit),
     listAuditEvents: (limit) => store.listAuditEvents(limit),
-  };
-}
-
-/** AUTH_PROVIDER=legacy: the deployment's client config, unchanged. */
-export function legacyWorkspaceView(): WorkspaceView {
-  const cfg = getTenantConfig();
-  return {
-    businessName: clientBusinessName(),
-    legalName: clientLegalName(),
-    timezone: cfg.business.timezone,
-    industry: cfg.business.industry,
-    supportEmail: clientSupportEmail() || cfg.business.supportEmail || "",
-    phone: cfg.business.businessPhone || cfg.ghl.phoneNumber || "",
-    website: cfg.business.websiteUrl || "",
-    bookingUrl: clientBookingUrl(),
-    reviewUrl: clientReviewUrl(),
-    pipelineName: configuredPipelineName(),
-    stageNames: configuredStageNames(),
-    stages: [],
-    stagesConfigured: !looksLikePlaceholderStages(),
-    calendars: configuredCalendars().map((c) => ({ id: c.id, name: c.name, duration: c.duration || "—" })),
-    calendarsConfigured: !looksLikePlaceholderCalendars(),
   };
 }
 

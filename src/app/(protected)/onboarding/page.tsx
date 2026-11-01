@@ -1,11 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, Badge, PageHead } from "@/components/ui";
 import { requirePageRole } from "@/lib/auth/guards";
-import {
-  evaluateClientReadiness,
-  toPublicReadinessPayload,
-} from "@/lib/onboarding";
-import { getTenantConfig } from "@/lib/tenant";
 import { getPageData, getPageScope } from "@/lib/data";
 import type { ChecklistItem, ChecklistKey } from "@/lib/native/onboarding";
 
@@ -81,7 +76,7 @@ export default async function OnboardingPage() {
   const summary = await data.reader.summary();
   const publicReport: ReadinessView = native
     ? nativeReadiness(await nativeChecklist())
-    : toPublicReadinessPayload(evaluateClientReadiness(getTenantConfig()));
+    : { status: "IN PROGRESS", checks: [] };
 
   const checks = publicReport.checks?.length
     ? publicReport.checks.map((c) => {

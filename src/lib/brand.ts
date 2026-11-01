@@ -16,7 +16,7 @@ export const BRAND = {
   tagline: "AUTOMATION • WEBSITES • BRANDING • SYSTEMS",
   voice: "Make Your Business Look Better. Work Smarter. Run Smoother.",
   supportEmailRecovered: "Automations@fortuneandfinance.com",
-  supportPhoneRecovered: "860-337-2617",
+  supportPhoneRecovered: "781-964-0654",
   colors: {
     // Locked app-dashboard palette (2026-09-17 design pass). Distinct from the
     // marketing-site navy/gold tokens — do not merge the two systems.
@@ -32,13 +32,6 @@ export const BRAND = {
     owner: "F&A | OWNER COMMAND CENTER",
     sales: "F&A | SALES & LEAD PERFORMANCE",
   },
-  clientForbiddenTerms: [
-    "HighLevel",
-    "GoHighLevel",
-    "GHL",
-    "LeadConnector",
-    "app.gohighlevel.com",
-  ],
 } as const;
 
 export const SERVICES = ["Automation", "Websites", "Branding", "Systems"] as const;

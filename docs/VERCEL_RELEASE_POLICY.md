@@ -22,10 +22,9 @@ If Production must track `main` temporarily:
 ## Production readiness checklist (owner)
 - [ ] `AUTH_SECRET` set in Production env
 - [ ] `AUTH_OWNER_EMAIL` / `AUTH_OWNER_PASSWORD` set
-- [ ] `GHL_WEBHOOK_SECRET` set (per deployment)
-- [ ] `GHL_LOCATION_ID` matches `CLIENT_CONFIG_PATH` location
-- [ ] `ALLOW_PRODUCTION_CONTACT_WRITES=false` until explicitly authorized
-- [ ] Master location never configured
+- [ ] Master location never configured as the legacy snapshot partition (`GHL_LOCATION_ID`; it is refused in code)
+- [ ] A build from P7 onward is not promoted while live workflow webhooks are still expected (P7 removed `/api/webhooks/ghl`; see `docs/archive/README.md` for the pre-P7 rollback target)
+- [ ] Native mode: see the staging/cutover checklist in `docs/NATIVE_MULTI_TENANT_CHECKLIST.md`
 - [ ] Vercel Deployment Protection reviewed alongside app auth
 
 ## Code behavior reminder

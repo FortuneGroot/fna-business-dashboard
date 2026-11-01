@@ -18,11 +18,6 @@ import { GET as getDashboardEvents } from "../src/app/api/dashboard/events/route
 import { GET as getTenantConfig } from "../src/app/api/tenant/config/route";
 import { GET as getTenantPublic } from "../src/app/api/tenant/public/route";
 import { GET as getHealth } from "../src/app/api/health/route";
-import { GET as getEvents } from "../src/app/api/events/route";
-import { GET as getSyncHealth } from "../src/app/api/sync/health/route";
-import { GET as getReadiness } from "../src/app/api/onboarding/readiness/route";
-import { GET as getGhlHealth } from "../src/app/api/ghl/health/route";
-import { POST as postLead } from "../src/app/api/leads/route";
 import {
   activityEventType,
   appointmentRecord,
@@ -34,8 +29,9 @@ import {
   reviewEventRecord,
   taskEventRecord,
 } from "../src/lib/data/dashboard-adapters";
-import { CLIENT_FORBIDDEN_RENDER_TERMS, NATIVE_COPY, SYNC_COPY } from "../src/lib/ui/sync-copy";
-import { resetSyncStoreForTests } from "../src/lib/sync";
+import { NATIVE_COPY, SYNC_COPY } from "../src/lib/ui/sync-copy";
+import { CLIENT_FORBIDDEN_RENDER_TERMS } from "./helpers/forbidden-terms";
+import { createMemorySnapshotStore, resetLegacySnapshotStoreForTests } from "../src/lib/legacy/snapshot";
 
 const ROOT = join(__dirname, "..");
 const ENV_KEYS = [
@@ -420,20 +416,6 @@ describe("P3 tenant configuration, public branding, and health", () => {
     const body = await down.json();
     assert.deepEqual([body.ok, body.db], [false, "error"]);
   });
-
-  test("deployment-wide legacy endpoints answer 404 not_available after authentication", async () => {
-    const owner = cookieFor(ownerA);
-    for (const [label, handler] of [["events", getEvents], ["sync/health", getSyncHealth], ["onboarding/readiness", getReadiness]] as const) {
-      const anon = await handler(req(`/api/${label}`));
-      assert.equal(anon.status, 401, `${label} signed out`);
-      const res = await handler(req(`/api/${label}`, { cookie: owner }));
-      assert.deepEqual([res.status, (await res.json()).code], [404, "not_available"], label);
-    }
-    const ghl = await getGhlHealth(req("/api/ghl/health"));
-    assert.deepEqual([ghl.status, (await ghl.json()).code], [404, "not_available"]);
-    const lead = await postLead(req("/api/leads", { method: "POST", body: "{}" }));
-    assert.deepEqual([lead.status, (await lead.json()).code], [404, "not_available"]);
-  });
 });
 
 describe("P3 legacy mode is unchanged", () => {
@@ -443,12 +425,13 @@ describe("P3 legacy mode is unchanged", () => {
     delete process.env.SUPABASE_ANON_KEY;
   });
 
-  test("/api/dashboard/* still read the sync store, with the same shapes as native mode", async () => {
-    const store = resetSyncStoreForTests();
-    await store.upsertContact({ externalContactId: "ghl-c1", firstName: "Legacy", tags: ["x"], phone: "1", updatedAt: T(1) });
-    await store.upsertOpportunity({ externalOpportunityId: "ghl-o1", stageName: "Qualified", monetaryValue: 10, updatedAt: T(1) });
-    await store.upsertAppointment({ externalAppointmentId: "ghl-a1", status: "booked", updatedAt: T(1) });
-    await store.appendConversationEvent({ id: "ghl-m1", eventType: "conversation.inbound", timestamp: T(1) });
+  test("/api/dashboard/* still read the legacy snapshot, with the same shapes as native mode", async () => {
+    resetLegacySnapshotStoreForTests(createMemorySnapshotStore({
+      contacts: [{ externalContactId: "ghl-c1", firstName: "Legacy", tags: ["x"], phone: "1", updatedAt: T(1) }],
+      opportunities: [{ externalOpportunityId: "ghl-o1", stageName: "Qualified", monetaryValue: 10, updatedAt: T(1) }],
+      appointments: [{ externalAppointmentId: "ghl-a1", status: "booked", updatedAt: T(1) }],
+      conversationEvents: [{ id: "ghl-m1", eventType: "conversation.inbound", timestamp: T(1) }],
+    }));
     try {
       for (const endpoint of DASHBOARD_ENDPOINTS) {
         const res = await HANDLERS[endpoint](req(`/api/dashboard/${endpoint}`));
@@ -462,18 +445,20 @@ describe("P3 legacy mode is unchanged", () => {
         hasPhone: true, source: "—", tags: ["x"], assignedUser: "—", updatedAt: T(1) });
       assert.equal(fake.calls.length, 0, "legacy mode never contacts Supabase");
     } finally {
-      resetSyncStoreForTests();
+      resetLegacySnapshotStoreForTests();
     }
   });
 
-  test("legacy tenant config, public branding, and legacy endpoints keep their behaviour", async () => {
+  test("legacy tenant config, public branding, and health keep their shapes without any CRM call", async () => {
     const config = await (await getTenantConfig(req("/api/tenant/config"))).json();
     assert.deepEqual(Object.keys(config.client).sort(), ["bookingUrl", "businessName", "industry", "legalBusinessName",
       "phone", "reviewUrl", "supportEmail", "timezone", "website"]);
     const pub = await (await getTenantPublic()).json();
     assert.ok(pub.client.businessName);
-    assert.equal((await getSyncHealth(req("/api/sync/health"))).status, 200);
-    assert.equal((await getEvents(req("/api/events"))).status, 200);
+    const health = await (await getHealth(req("/api/health"))).json();
+    assert.deepEqual([health.ok, health.authProvider], [true, "legacy"]);
+    assert.equal(/ghl|crm|dryRun|location/i.test(JSON.stringify(health)), false, JSON.stringify(health));
+    assert.equal(fake.calls.length, 0, "legacy mode never contacts Supabase");
   });
 });
 
@@ -528,7 +513,9 @@ describe("P3 static checks", () => {
     assert.match(onboarding, /native\s*\?\s*"Owner-only setup status for this workspace\./, "native onboarding description");
     const settings = readFileSync(join(ROOT, "src", "app", "(protected)", "settings", "page.tsx"), "utf8");
     assert.match(settings, /me\?\.legacyRole/, "settings reads the native membership's legacy role");
-    assert.match(settings, /isNative \? "\/api\/dashboard\/summary" : "\/api\/sync\/health"/, "native settings never calls the sync endpoint");
+    assert.match(settings, /fetch\("\/api\/dashboard\/summary"\)/, "settings reads system status from the dashboard summary");
+    assert.equal(settings.includes("/api/sync/health"), false, "settings never calls the retired sync endpoint");
+    assert.equal(settings.includes("/api/health"), false, "settings does not fetch a health body it never reads (left the page loading in Chromium)");
     const nativeSettings = readFileSync(join(ROOT, "src", "components", "settings", "NativeSettings.tsx"), "utf8");
     assert.match(nativeSettings, /No integrations are connected to this workspace yet\./);
     assert.match(settings, /<NativeIntegrations /, "native settings renders the integrations list");

@@ -29,15 +29,16 @@ const SUITES = {
   unit: {
     label: "unit tests",
     files: () => [
-      "tests/sync.test.ts", "tests/onboarding.test.ts", "tests/tenant.test.ts", "tests/auth.test.ts",
+      "tests/legacy-snapshot.test.ts", "tests/auth.test.ts",
       "tests/client-facing-copy.test.ts", "tests/supabase-rest-auth.test.ts", "tests/authorization.test.ts",
       "tests/security-scan.test.ts", "tests/run-tests.test.ts", "tests/stack-helpers.test.ts",
       "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts", "tests/p3-data.test.ts",
       "tests/p3-display.test.ts", "tests/p4-team-settings.test.ts", "tests/p5-crm.test.ts",
-      "tests/p6-platform.test.ts",
+      "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts",
     ],
     timeoutMs: 60_000,
-    min: 298,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20.
+    min: 240,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",

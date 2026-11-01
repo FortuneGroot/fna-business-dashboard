@@ -1,5 +1,5 @@
 import "server-only";
-import type { AuditEventRecord } from "@/lib/sync/types";
+import type { AuditEventRecord } from "@/lib/data/records";
 import { auditEventRecord, type NativeActivityRow } from "./dashboard-adapters";
 import { activeWorkspaceId, fromWorkspace, rows, type DataScope } from "./query";
 

@@ -780,7 +780,7 @@ create policy contacts_update on public.contacts for update to authenticated
 | A4 | Test harness (`tests/integration/_harness.ts`) | Creates test users locally | Refuses unless the URL host is `127.0.0.1`/`localhost` or the project ref is in `TEST_SUPABASE_PROJECT_REFS` |
 | A5 (P2) | `platformWriteWorkspaceLogo` / `platformDeleteWorkspaceLogo` / `claimPlatformStorageChange` / `completePlatformStorageChange` — only caller `src/app/api/platform/workspace-logo/route.ts` | Storage writes require membership (R2-3 decision A); a platform write grant cannot write through RLS; audit outcomes must not be client-controlled | Route requires AUTH_PROVIDER=supabase, an AAL2 platform admin with no membership and a live `write` grant, a fresh `getUser()`; the workspace and actor come from the request context; the path is fixed to `<ws>/logo.(png\|jpg\|webp)`; `platform_storage_change_requested` (user JWT) records the request; claim and outcome RPCs are executable by `service_role` only; the outcome is whether the database saw this operation's own token-tagged write commit, and none is recorded while the operation may still be running (§16.2, §16.6) |
 
-As implemented in P2 the static check is `tests/p2-auth.test.ts` (SR-1): only `src/lib/supabase/admin.ts` may read `SUPABASE_SERVICE_ROLE_KEY` among new code, only the workspace-logo route imports it, and the pre-existing legacy readers (`src/lib/sync/db-client.ts`, `src/lib/sync/supabase-rest-auth.ts`, `src/lib/auth/session-store.ts`, `src/lib/auth/session-edge.ts`, `src/lib/deployment/validate.ts`, `scripts/generate-client-deployment.ts`) are tolerated until P7 retires them.
+As implemented in P2 the static check is `tests/p2-auth.test.ts` (SR-1): only `src/lib/supabase/admin.ts` may read `SUPABASE_SERVICE_ROLE_KEY` among new code, only the workspace-logo route imports it, and the pre-existing legacy readers (`src/lib/sync/db-client.ts`, `src/lib/sync/supabase-rest-auth.ts`, `src/lib/auth/session-store.ts`, `src/lib/auth/session-edge.ts`, `src/lib/deployment/validate.ts`, `scripts/generate-client-deployment.ts`) are tolerated until P7 retires them. After P7 (§21) the tolerated set is four files, all legacy-mode only and retired at T6: `src/lib/legacy/rest-client.ts` (read-only snapshot reader), `src/lib/legacy/rest-auth.ts`, `src/lib/auth/session-store.ts`, `src/lib/auth/session-edge.ts`.
 
 A static test (`tests/unit/service-role-allowlist.test.ts`) fails if any file outside `src/lib/supabase/admin.ts`, `scripts/bootstrap-platform-admin.ts`, and `tests/integration/_harness.ts` imports the admin client or reads `SUPABASE_SERVICE_ROLE_KEY`.
 
@@ -1053,7 +1053,7 @@ The legacy migrations originally shared the 8-digit version `20260917`. They are
 | P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass — done locally (§18): INV, ROLE, MEM, SUSP, SET-1..7, browser flow, and NET-1 pass on the real stack |
 | P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) — done locally (§19): CRUD-1..5, workspace switching, browser flow, and NET-1 pass on the real stack |
 | P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass — done locally (§20): CON-1..9 (covering PLAT-1..3 and SUSP-1/2/5/6 through the app) pass on the real stack, including MFA and the browser flow |
-| P7 GHL removal | Delete §8.3 files; env cleanup | GHL-1, GHL-2 pass; build + all tests green |
+| P7 GHL removal | Delete §8.3 files; env cleanup | GHL-1, GHL-2 pass; build + all tests green — done locally (§21). GHL-1/GHL-2 pass with an exact, test-enforced exception list: the read-only legacy snapshot (`src/lib/legacy/deployment.ts`, `snapshot.ts`) kept for `AUTH_PROVIDER=legacy` until T6/M15 (§21.3) |
 | P8 Staging rehearsal | T3–T4 on staging | Full suite green on staging; George signs off |
 | P9 Production cutover | T5, then T6 after 14 days | **Requires George's explicit approval** |
 
@@ -1630,3 +1630,62 @@ These console tests (CON) run through the app and also exercise the §10 criteri
 | Disposable stack cleanup | Docker | 0 containers, volumes, networks, or temp projects left |
 
 Fixes made during the P6 runs: (1) the first stack run failed in the provisioning test because the test expected an unknown key's error under its own name; the API reports unknown keys under `body`, and the test now expects that (later P6 tests failed only because that workspace was never created); (2) the suspension test expected 423 for an existing write grant, but the database treats a write grant on a suspended workspace as no access (403 `no_active_workspace`); the expectation was corrected and the test now also asserts nothing was written; (3) the audit showed "Support access ended" for a grant that had already expired (test cleanup ended it), so `platform_revoke_access` now ends live grants only, with PGlite and stack tests; (4) test files were not type-clean (Next's global `ProcessEnv` type and handler casts); they are now checked by `npm run typecheck` with no change to any assertion.
+
+## 21. P7 implementation record (GHL runtime retired)
+
+Local only: nothing pushed or deployed; no hosted project touched. M15 not executed; no legacy table dropped or altered; no real/private configuration removed; legacy authentication (T6) not retired. `AUTH_PROVIDER=legacy` remains the default.
+
+### 21.1 Files
+
+| Area | Change |
+| --- | --- |
+| Deleted (§8.3, recoverable from Git) | `src/lib/{ghl,mapping,owner-values,master-guard,leads,env,tenant,tenant-ui}.ts`, `src/lib/auth/legacy-only.ts`, `src/lib/sync/*` (except the two files moved below), `src/lib/onboarding/*`, `src/lib/deployment/*`; routes `/api/ghl/health`, `/api/webhooks/ghl`, `/api/leads`, `/api/sync/health`, `/api/events`, `/api/onboarding/readiness`; `public/ghl-custom.css`; `scripts/{check-client-readiness,client-prepare,generate-client-deployment,validate-client-env}.ts`; `config/` (synthetic client JSON only); npm scripts `check:readiness`, `client:*` |
+| Archived (`git mv` → `docs/archive/`, index in `docs/archive/README.md`) | the three GHL contract docs of §8.3 plus the per-client runbook, clone manifest, go-live gate, onboarding checklists, first fake-client E2E, tenant content audit, `$297`/`297` feature matrices, and `checklists/{SNAPSHOT_CLONE_SYSTEM,POST_CLONE_VALIDATOR,WEBSITE_GHL_INTEGRATION}.md` |
+| New | `src/lib/data/records.ts` (record and summary types formerly in `sync/types.ts`); `src/lib/legacy/snapshot.ts` (read-only snapshot store: memory or the existing `sync_*` tables, every query filtered by the legacy partition); `src/lib/legacy/deployment.ts` (the F&A identity the pre-P7 build showed by default: business, 12 stages, 5 calendars, branding); `src/lib/legacy/rest-client.ts` (from `sync/db-client.ts`, now GET/HEAD only); `src/lib/legacy/rest-auth.ts` (moved unchanged); tests `legacy-snapshot.test.ts`, `p7-retirement.test.ts`, helper `tests/helpers/forbidden-terms.ts` |
+| Modified | `src/lib/data/{index,api,legacy}.ts` (legacy modules loaded by dynamic import inside the legacy branch only); `api/health`, `api/tenant/config`, `api/tenant/public`; Settings, Onboarding, Library, Dashboard, Help pages; `middleware.ts` (retired paths removed from public/protected lists and matcher); `brand.ts` (D7 phone 781-964-0654); `.env.example` (no `GHL_*`, `FAKE_CONTACT_ONLY`, `ALLOW_PRODUCTION_CONTACT_WRITES`, `FORBIDDEN_MASTER_LOCATION_ID`, `CLIENT_CONFIG_PATH`); `scripts/verify-auth-runtime.mjs` (GHL probes removed); README; `docs/VERCEL_RELEASE_POLICY.md` |
+
+### 21.2 Behaviour
+
+- **Native mode** (`AUTH_PROVIDER=supabase`) has no GHL code on any path: no import, environment read, or route. The retired routes answer 404 (Next's not-found, not the P3 `not_available` body).
+- **Legacy mode** keeps the original login and pages. Its data is the frozen `sync_*` snapshot (last activity received before sync was retired), read-only; with no Supabase configured it shows empty states as before. Settings → Integrations shows "Not connected" with "Workflow sync is no longer active for this dashboard." Onboarding shows the static setup steps (no readiness probe). Business identity, stages, calendars, colours, and empty booking/review URLs equal the pre-P7 defaults.
+- **Legacy health** (`/api/health`): `{ ok, service, product, authProvider: "legacy" }`, plus `up`/`ts` anonymously, and `brand`, `intendedHost`, `storageMode` for privileged callers. No GHL probe, location, or dry-run fields.
+- **Legacy tenant config** owner block is `{ pipelineName, stagesCount }` (was `locationConfigured`).
+
+### 21.3 Remaining GHL dependency (exact, test-enforced)
+
+Full removal conflicts with the retained legacy mode until T6/M15. `tests/p7-retirement.test.ts` pins the remaining matches exactly, so any new reference or the removal of the last ones fails the suite:
+
+1. GHL-1 (`ghl|highlevel|leadconnector|location_id`, case-insensitive, over `src/`, `scripts/`, `public/`, `supabase/migrations/2026110*`): only `src/lib/legacy/deployment.ts` and `src/lib/legacy/snapshot.ts`.
+2. GHL-2 (code reading `GHL_*` or the retired settings): only `src/lib/legacy/deployment.ts` reads `GHL_LOCATION_ID` — the legacy snapshot partition (trimmed; default `kIXDnRuhkj6HLR1g6V6V`; the Master `NQwD3zdWCuBSVpOuzybj` is refused). Native mode never loads this module.
+3. Outside GHL-1 scope: the legacy migration `20260917121316_sync_store.sql` (creates the `sync_*` tables; kept because the tables are kept until M15), and the legacy session store/edge (`session-store.ts`, `session-edge.ts`, T6) using `legacy/rest-auth` and `legacy/rest-client`.
+
+These go at T6 (legacy auth retired) and M15 (legacy tables dropped), both gated on George's approval (§11).
+
+### 21.4 Deviations and limitations
+
+1. Legacy data is frozen: P7 removes webhook ingestion, so a legacy deployment from this build no longer receives new activity. **Deploy ordering:** a P7 build must not serve production while live workflow webhooks are still expected; until native cutover the production target stays the pre-P7 build (`release` @ `9c189f8`).
+2. `CLIENT_CONFIG_PATH` and `GHL_PIPELINE_ID` are no longer read; the legacy identity is the F&A default only. A legacy deployment that set either variable would show F&A defaults; check the production environment for them before promoting any P7 build (staging/cutover checklist).
+3. `/api/events` is removed rather than kept for legacy owners; the dashboard activity feed (`/api/dashboard/*`) covers it.
+4. Latent bug fixed: the legacy task listing read a non-existent column `assigned_user`; it reads `assigned_user_id`.
+5. Unit test count: 298 → 240. 78 tests of deleted code (sync ingestion, webhook signature/Master guards on ingestion, onboarding readiness, deployment and client-config validation, `$297` checks) were removed with that code; 20 were added (12 legacy snapshot, 8 retirement guards). No remaining test was weakened; the runner minimum is 240.
+6. Rollback: `git revert` of the P7 commit, or deploy the pre-P7 build (§11). No data or schema changed.
+7. Defect found and fixed during the P7 runs: after the GHL card was removed, Settings still fetched `/api/health` but no longer read the body, and in Chromium that request never completed, so the page never reached network idle (UI-2 timed out on `/settings`; the page itself rendered). Settings no longer fetches `/api/health` (it carried no information the page uses; session expiry is still detected through `/api/tenant/config`); a static assertion in `tests/p3-data.test.ts` guards it. The UI-2 harness now names the pending requests when a page does not settle.
+
+### 21.5 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (298 at `619a558` − 78 deleted with retired code + 20 new) | Node 24.20.0 | PASS 240/240 |
+| DB suite | PGlite + shim | PASS 217/217 (unchanged) |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 (unchanged) |
+| Stack suite (retired routes 404 incl. webhook POST; employee owner-API check moved from `/api/events` to `/api/audit`; NET-1 empty) | Real Supabase local stack (disposable) + `next build`/`next start` + Chromium; app started with every `GHL_*`, `AUTH_*`, `SUPABASE_*`, `VERCEL*` variable removed and native values injected | PASS 63/63, twice (before and after the Settings fix; the second run is on the committed source) |
+| Legacy runtime smoke (`next start`, default `AUTH_PROVIDER`, no `GHL_*`/`AUTH_*`/`SUPABASE_*` variables) | built app, local only | `/api/health` 200 `{ok, authProvider:"legacy", storageMode:"memory", …}` with no CRM fields; `/login`, `/dashboard` 200 (local open mode, pre-existing); `/api/ghl/health`, `POST /api/webhooks/ghl`, `POST /api/leads`, `/api/sync/health`, `/api/events`, `/api/onboarding/readiness`, `/ghl-custom.css` 404 |
+| GHL variables at build time | — | none in the shell, no `.env.local`; `.env.example` has none |
+| UI-2 visual harness | disposable stack + built app + Chromium | All 20 routes 200; sidebar 0.00% on every page; top bar 0.00% or 1.27% (baseline scrollbar strip); other pages equal to P3–P5 figures (help 9.87%, dashboard 6.71%); Settings 56.98% and Onboarding 62.71% are the P4 native content (page length changed). First two runs failed on `/settings` (defect 7 above) |
+| `npm run typecheck` | — | PASS |
+| `npm run build` | Next.js 15.5.25 | PASS; no retired route in the route list |
+| Secret scan of every changed and new file | — | no secrets; matches are the existing synthetic test placeholders in `tests/auth.test.ts` and `tests/supabase-rest-auth.test.ts`, unchanged by P7 |
+| Disposable stack cleanup | Docker | 0 containers, volumes, networks, or temp projects left |
+
+Unit, DB, and concurrency results above are from the final source (rerun after the Settings fix).
+| Browser bundle scan (`.next/static`, 112 files) | — | 0 files contain `ghl`/`highlevel`/`leadconnector`, either partition id, `GHL_`, service-role names, `sb_secret_`, JWTs, or private keys; one names `AUTH_SECRET` in the existing legacy login message (no value) |

@@ -196,7 +196,16 @@ async function main() {
     const results: PageResult[] = [];
     for (const [name, route] of Object.entries(ROUTES)) {
       const page = await (name === "00-login" ? anon : authed).newPage();
-      const res = await page.goto(`${app.url}${route}`, { waitUntil: "networkidle" });
+      const pending = new Map<any, string>();
+      const done: string[] = [];
+      page.on("request", (r: any) => pending.set(r, `${r.method()} ${new URL(r.url()).pathname}`));
+      const settle = (r: any) => { done.push(pending.get(r) ?? r.url()); pending.delete(r); };
+      page.on("requestfinished", settle);
+      page.on("requestfailed", settle);
+      const res = await page.goto(`${app.url}${route}`, { waitUntil: "networkidle" }).catch((e: Error) => {
+        const last = done.slice(-12).join(", ");
+        throw new Error(`${route}: ${e.message.split("\n")[0]}; pending [${[...pending.values()].join(", ")}]; ${done.length} finished, last [${last}]`);
+      });
       await page.waitForTimeout(400);
       const shot: Buffer = await page.screenshot({ fullPage: true });
       await page.close();

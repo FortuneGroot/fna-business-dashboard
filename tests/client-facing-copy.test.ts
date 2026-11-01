@@ -2,11 +2,8 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, it } from "node:test";
-import {
-  CLIENT_FORBIDDEN_RENDER_TERMS,
-  sanitizeClientFacingCopy,
-  syncWaitingNote,
-} from "../src/lib/ui/sync-copy";
+import { sanitizeClientFacingCopy, syncWaitingNote } from "../src/lib/ui/sync-copy";
+import { CLIENT_FORBIDDEN_RENDER_TERMS } from "./helpers/forbidden-terms";
 import emails from "../src/content/emails.json";
 import sms from "../src/content/sms.json";
 import alerts from "../src/content/alerts.json";

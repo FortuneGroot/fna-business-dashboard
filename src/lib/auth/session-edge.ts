@@ -4,8 +4,8 @@
  * using the same id / revoked / expires_at columns as the Node session store.
  */
 import { AUTH_COOKIE } from "./types";
-import { supabaseRestAuthHeaders } from "@/lib/sync/supabase-rest-auth";
-import { isValidSupabaseUrl } from "@/lib/sync/db-client";
+import { supabaseRestAuthHeaders } from "@/lib/legacy/rest-auth";
+import { isValidSupabaseUrl } from "@/lib/legacy/rest-client";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (a.length !== b.length) return false;

@@ -1,5 +1,5 @@
 import "server-only";
-import type { TaskEventRecord } from "@/lib/sync/types";
+import type { TaskEventRecord } from "@/lib/data/records";
 import { taskEventRecord, type NativeTaskRow } from "./dashboard-adapters";
 import { displayNames, fromWorkspace, rows, type DataScope } from "./query";
 

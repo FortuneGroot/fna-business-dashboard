@@ -1,6 +1,6 @@
 /**
  * Client-facing sync language for the Business Dashboard.
- * Never name HighLevel / GHL / LeadConnector / Vercel / Supabase in UI copy.
+ * Never name the former CRM vendor, the hosting provider, or the database provider in UI copy.
  */
 
 export const SYNC_WAITING_TITLE = "Waiting for sync";
@@ -90,6 +90,10 @@ export const PLACEHOLDER_CONFIG_STAGES =
 export const PLACEHOLDER_CONFIG_CALENDARS =
   "Calendar setup still needs final configuration. Contact Fortune & Automations if this persists.";
 
+export function applyClientBusinessName(template: string, businessName: string): string {
+  return template.replace(/\{\{CLIENT_BUSINESS_NAME\}\}/g, businessName);
+}
+
 /** Strip CRM merge tokens and technical markers from client-facing drafts. */
 export function sanitizeClientFacingCopy(text: string): string {
   return String(text || "")
@@ -101,26 +105,3 @@ export function sanitizeClientFacingCopy(text: string): string {
     .replace(/\{\{CLIENT_BUSINESS_NAME\}\}/g, "[Business Name]")
     .replace(/\{\{[^}]+\}\}/g, "[value]");
 }
-
-export const CLIENT_FORBIDDEN_RENDER_TERMS = [
-  "HighLevel",
-  "GoHighLevel",
-  "GHL",
-  "$297",
-  "/api/webhooks/ghl",
-  "Vercel",
-  "Supabase",
-  "qa.lead@example.invalid",
-  "Fortune&Finance",
-  "[[CV:",
-  "[[APPT:",
-  "ClientConfig",
-  "Next.js",
-  "AUTH_SECRET",
-  "Owner Command Center",
-  "CRM list APIs",
-  "vercel.app",
-  "SUPABASE_SERVICE_ROLE",
-  "GHL_WEBHOOK_SECRET",
-  "pit-",
-] as const;

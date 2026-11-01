@@ -23,7 +23,7 @@ import { GET as getMe } from "../src/app/api/auth/me/route";
 import { POST as postLogin } from "../src/app/api/auth/login/route";
 import { POST as postLogout } from "../src/app/api/auth/logout/route";
 import { GET as getTenantConfig } from "../src/app/api/tenant/config/route";
-import { GET as getEvents } from "../src/app/api/events/route";
+import { requireApiRole } from "../src/lib/auth/guards";
 import { GET as getWorkspaces } from "../src/app/api/workspaces/route";
 import { POST as postActive } from "../src/app/api/workspaces/active/route";
 import { PUT as putLogo } from "../src/app/api/platform/workspace-logo/route";
@@ -223,7 +223,8 @@ describe("P2: AUTH_PROVIDER=supabase routing without a session (no network)", ()
   });
 
   test("guards answer 401 with the stable code; role-gated APIs too", async () => {
-    for (const handler of [getTenantConfig, getEvents, getWorkspaces]) {
+    const ownerGate = async (r: NextRequest) => (await requireApiRole(r, "OWNER")).error!;
+    for (const handler of [getTenantConfig, ownerGate, getWorkspaces]) {
       const res = await handler(req("/api/x"));
       assert.equal(res.status, 401);
       assert.equal((await res.json()).code, "unauthenticated");
@@ -334,12 +335,10 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (p: string) => relative(ROOT, p).split("\\").join("/");
 
 describe("P2: static guards", () => {
-  test("SR-1: only the allowlisted admin module (and legacy sync/session code until P7/T6) reads the service-role key", () => {
-    const LEGACY_UNTIL_P7 = new Set([
-      "scripts/generate-client-deployment.ts",
-      "src/lib/deployment/validate.ts",
-      "src/lib/sync/db-client.ts",
-      "src/lib/sync/supabase-rest-auth.ts",
+  test("SR-1: only the allowlisted admin module (and the legacy snapshot/session code until T6) reads the service-role key", () => {
+    const LEGACY_UNTIL_T6 = new Set([
+      "src/lib/legacy/rest-client.ts",
+      "src/lib/legacy/rest-auth.ts",
       "src/lib/auth/session-store.ts",
       "src/lib/auth/session-edge.ts",
     ]);
@@ -347,7 +346,7 @@ describe("P2: static guards", () => {
       .filter((f) => readFileSync(f, "utf8").includes("SUPABASE_SERVICE_ROLE_KEY"))
       .map(rel);
     for (const f of readers) {
-      assert.ok(f === "src/lib/supabase/admin.ts" || LEGACY_UNTIL_P7.has(f), `${f} reads SUPABASE_SERVICE_ROLE_KEY`);
+      assert.ok(f === "src/lib/supabase/admin.ts" || LEGACY_UNTIL_T6.has(f), `${f} reads SUPABASE_SERVICE_ROLE_KEY`);
     }
     const importers = walk(join(ROOT, "src"))
       .filter((f) => /from\s+["'](@\/lib\/supabase\/admin|[./]+supabase\/admin)["']/.test(readFileSync(f, "utf8")))

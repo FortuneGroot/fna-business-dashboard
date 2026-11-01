@@ -1,13 +1,6 @@
 import { NextResponse } from "next/server";
 import { BRAND } from "@/lib/brand";
 import { authProvider } from "@/lib/auth/provider";
-import {
-  clientBusinessName,
-  clientBrandColors,
-  clientLogoUrl,
-  platformBrandName,
-  platformProductName,
-} from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +11,8 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   const platform = {
-    brandName: platformBrandName(),
-    productName: platformProductName(),
+    brandName: BRAND.name,
+    productName: BRAND.product,
     legal: BRAND.legal,
     appHost: BRAND.appHost,
   };
@@ -29,7 +22,7 @@ export async function GET() {
       ok: true,
       platform,
       client: {
-        businessName: platformBrandName(),
+        businessName: BRAND.name,
         logoUrl: "",
         hasLogo: false,
         colors: { primary: BRAND.colors.blue, secondary: BRAND.colors.gold, background: BRAND.colors.cream },
@@ -37,15 +30,6 @@ export async function GET() {
     });
   }
 
-  const logo = clientLogoUrl();
-  return NextResponse.json({
-    ok: true,
-    platform,
-    client: {
-      businessName: clientBusinessName(),
-      logoUrl: logo || "",
-      hasLogo: Boolean(logo),
-      colors: clientBrandColors(),
-    },
-  });
+  const { legacyBranding } = await import("@/lib/legacy/deployment");
+  return NextResponse.json({ ok: true, platform, client: legacyBranding() });
 }

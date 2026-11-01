@@ -1,20 +1,15 @@
 # Fortune & Automations Business Dashboard
 
-Production-quality Next.js shell for **one client per deployment** on HighLevel **$297 Unlimited**.
+Next.js business dashboard. Native mode (`AUTH_PROVIDER=supabase`) serves many workspaces from one
+deployment on Supabase Auth and Postgres with row-level security: contacts, opportunities, calendars,
+tasks, internal notes, team and settings per workspace, plus a platform console for provisioning and
+support. The design and navigation are unchanged from the original F&A dashboard.
 
-Sync model: HighLevel **workflow webhooks** → durable SyncStore → dashboard.  
-No Advanced OAuth. No agency CRM list APIs. No $497-only features.
+Legacy mode (`AUTH_PROVIDER=legacy`, still the default until the approved cutover) keeps the original
+cookie login and shows the F&A data as a read-only snapshot of the last workflow-synced activity.
+Workflow (HighLevel) sync was retired in P7; history is in `docs/archive/`.
 
-## Source workflow
-
-1. Edit client JSON under `config/`
-2. `npm run client:prepare -- config/path.json`
-3. `npm run client:generate -- config/path.json --out generated/manifest.json`
-4. Owner sets secrets in Vercel (never commit)
-5. Preview deploy + webhook test + auth test
-6. Go-live gate (`docs/CLIENT_GO_LIVE_GATE.md`)
-
-See **`docs/CLIENT_DEPLOYMENT_RUNBOOK.md`**.
+Design and phase record: `docs/NATIVE_MULTI_TENANT_SPEC.md` and `docs/NATIVE_MULTI_TENANT_CHECKLIST.md`.
 
 ## Local
 
@@ -27,49 +22,27 @@ npm run dev
 
 Open http://localhost:3000 → redirects to `/login`.
 
-## Preview env requirements
+## Environment
 
-Non-secret:
-- `CLIENT_CONFIG_PATH` (optional; empty = F&A LIVE defaults)
-- `GHL_LOCATION_ID`, `GHL_PIPELINE_ID`
-- `GHL_DRY_RUN=true`
-- `ALLOW_PRODUCTION_CONTACT_WRITES=false`
-- `FAKE_CONTACT_ONLY=true`
-- `FORBIDDEN_MASTER_LOCATION_ID=NQwD3zdWCuBSVpOuzybj` (informational; block is hard-coded)
+Names only — values are owner secrets and are never committed or printed. See `.env.example`.
 
-Owner secrets (never commit / never print):
-- `GHL_API_TOKEN`
-- `GHL_WEBHOOK_SECRET` (per deployment)
-- `AUTH_SECRET`
-- `AUTH_OWNER_EMAIL` / `AUTH_OWNER_PASSWORD`
-- optional Admin/Client credentials
-- optional `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`
-
-## Auth
-
-When `AUTH_SECRET` is set, middleware protects dashboard pages and private APIs.  
-Webhooks stay machine-accessible with the deployment webhook secret.  
-Roles: `OWNER` | `ADMIN` | `CLIENT` (same deployment access in V1).
+- `AUTH_PROVIDER` — `legacy` (default) or `supabase`
+- Native mode (all server-side): `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`), `SUPABASE_SERVICE_ROLE_KEY`, `APP_ORIGIN`
+- Legacy mode: `AUTH_SECRET`, `AUTH_OWNER_EMAIL` / `AUTH_OWNER_PASSWORD` (optional admin/client logins),
+  optional `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the session store and the read-only snapshot
 
 ## Safety
 
-- Protected Master `NQwD3zdWCuBSVpOuzybj` is always refused
-- Default dry-run / no production writes
-- Vercel Deployment Protection remains the Preview access layer until auth secrets are set
+- Production (`VERCEL_ENV=production`) fails closed when legacy auth is not configured
+- Workspace isolation is enforced in Postgres (RLS); the service-role key is confined to an allowlisted server module
+- No outbound email/SMS, no external CRM calls
 
 ## Scripts
 
 | Command | Purpose |
 |---------|---------|
-| `npm test` | Unit tests |
+| `npm test` | All suites via `scripts/run-tests.mjs` (fails closed; Docker-backed suites report BLOCKED when Docker is missing) |
+| `npm run test:unit` / `test:db` / `test:db:concurrency` / `test:stack` | One suite |
+| `npm run typecheck` | Strict TypeScript for app and tests |
 | `npm run build` | Production build |
-| `npm run check:readiness` | Config readiness |
-| `npm run client:prepare` | Terminal deployment checklist |
-| `npm run client:validate` | Env/config validator |
-| `npm run client:generate` | Non-secret deployment manifest |
-
-## Architecture notes
-
-- `$297` only — see `docs/$297_FEATURE_MATRIX.md`
-- Webhook security — `docs/WEBHOOK_SECURITY_V1.md`
-- Auth next steps historically noted in `docs/AUTH_NEXT_GATE.md` (foundation now shipped)
+| `npm run verify:auth` | Probe a running deployment's auth behavior |

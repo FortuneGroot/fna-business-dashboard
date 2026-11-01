@@ -1,5 +1,5 @@
 import "server-only";
-import type { ConversationEventRecord } from "@/lib/sync/types";
+import type { ConversationEventRecord } from "@/lib/data/records";
 import {
   conversationEventRecord,
   type NativeConversationRow,

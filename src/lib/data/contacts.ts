@@ -1,5 +1,5 @@
 import "server-only";
-import type { ContactRecord } from "@/lib/sync/types";
+import type { ContactRecord } from "@/lib/data/records";
 import { contactRecord, type NativeContactRow } from "./dashboard-adapters";
 import { displayNames, fromWorkspace, LIST_LIMIT, rows, type DataScope } from "./query";
 

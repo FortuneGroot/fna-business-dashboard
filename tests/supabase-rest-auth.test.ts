@@ -6,7 +6,7 @@ import {
   isLegacyJwtServiceRoleKey,
   isSbSecretServiceRoleKey,
   supabaseRestAuthHeaders,
-} from "../src/lib/sync/supabase-rest-auth";
+} from "../src/lib/legacy/rest-auth";
 
 describe("supabase REST auth headers", () => {
   it("sb_secret_ keys use apikey only (never Authorization Bearer)", () => {
@@ -42,7 +42,7 @@ describe("supabase REST auth headers", () => {
   it("source call sites do not hardcode Bearer with service role key", () => {
     const roots = [
       join(process.cwd(), "src", "lib", "auth"),
-      join(process.cwd(), "src", "lib", "sync"),
+      join(process.cwd(), "src", "lib", "legacy"),
     ];
     const offenders: string[] = [];
     function walk(dir: string) {
@@ -50,7 +50,7 @@ describe("supabase REST auth headers", () => {
         const p = join(dir, name);
         const st = statSync(p);
         if (st.isDirectory()) walk(p);
-        else if (/\.(ts|tsx)$/.test(name) && !name.includes("supabase-rest-auth")) {
+        else if (/\.(ts|tsx)$/.test(name) && name !== "rest-auth.ts") {
           const text = readFileSync(p, "utf8");
           // Forbidden: pairing apikey with Authorization Bearer using the same key variable.
           if (

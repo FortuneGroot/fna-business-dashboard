@@ -7,11 +7,11 @@ import type {
   ReviewEventRecord,
   SyncEventType,
   TaskEventRecord,
-} from "@/lib/sync/types";
+} from "@/lib/data/records";
 
 /**
  * Maps native workspace rows (spec §5.3 tables) to the pre-migration record shapes in
- * src/lib/sync/types.ts, so pages and /api/dashboard/* keep their output unchanged (API-1).
+ * src/lib/data/records.ts, so pages and /api/dashboard/* keep their output unchanged (API-1).
  * Pure functions: no I/O, no workspace argument.
  */
 

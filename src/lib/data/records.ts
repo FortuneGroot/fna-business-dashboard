@@ -1,4 +1,4 @@
-/** Normalized sync domain models for the $297 webhook-backed dashboard. */
+/** Record shapes shared by the dashboard readers (native tables and the legacy snapshot) and /api/dashboard/*. */
 
 export const SYNC_EVENT_TYPES = [
   "lead.created",
@@ -26,6 +26,8 @@ export const SYNC_EVENT_TYPES = [
 ] as const;
 
 export type SyncEventType = (typeof SYNC_EVENT_TYPES)[number];
+
+export type StorageMode = "memory" | "postgres";
 
 export type ContactRecord = {
   externalContactId: string;
@@ -101,6 +103,7 @@ export type AuditEventRecord = {
   id: string;
   idempotencyKey: string;
   eventType: SyncEventType;
+  /** The reader's partition: the workspace id for native data, the deployment partition for the legacy snapshot. */
   locationId: string;
   receivedAt: string;
   sourceEventName?: string;
@@ -113,19 +116,6 @@ export type AuditEventRecord = {
   note?: string;
 };
 
-export type SyncSnapshot = {
-  contacts: Record<string, ContactRecord>;
-  opportunities: Record<string, OpportunityRecord>;
-  appointments: Record<string, AppointmentRecord>;
-  conversationEvents: ConversationEventRecord[];
-  taskEvents: TaskEventRecord[];
-  reviewEvents: ReviewEventRecord[];
-  auditTrail: AuditEventRecord[];
-  idempotencyKeys: string[];
-  lastEventAt?: string;
-  updatedAt: string;
-};
-
 export type DashboardSummary = {
   contactsCount: number;
   opportunitiesCount: number;
@@ -135,66 +125,4 @@ export type DashboardSummary = {
   wonCount: number;
   lastEventAt?: string;
   waitingForSync: boolean;
-};
-
-export type InboundSyncPayload = {
-  event?: string;
-  type?: string;
-  eventType?: string;
-  event_name?: string;
-  locationId?: string;
-  location_id?: string;
-  idempotencyKey?: string;
-  idempotency_key?: string;
-  eventId?: string;
-  event_id?: string;
-  occurredAt?: string;
-  occurred_at?: string;
-  timestamp?: string;
-  contact?: Record<string, unknown>;
-  opportunity?: Record<string, unknown>;
-  appointment?: Record<string, unknown>;
-  conversation?: Record<string, unknown>;
-  task?: Record<string, unknown>;
-  review?: Record<string, unknown>;
-  contactId?: string;
-  contact_id?: string;
-  firstName?: string;
-  lastName?: string;
-  name?: string;
-  email?: string;
-  phone?: string;
-  source?: string;
-  tags?: string[] | string;
-  assignedUser?: string;
-  assigned_user?: string;
-  opportunityId?: string;
-  opportunity_id?: string;
-  pipelineId?: string;
-  pipeline_id?: string;
-  stageId?: string;
-  stage_id?: string;
-  stageName?: string;
-  stage_name?: string;
-  status?: string;
-  monetaryValue?: number | string;
-  monetary_value?: number | string;
-  appointmentId?: string;
-  appointment_id?: string;
-  calendarId?: string;
-  calendar_id?: string;
-  calendarName?: string;
-  start?: string;
-  end?: string;
-  timezone?: string;
-  direction?: string;
-  channel?: string;
-  summary?: string;
-  resultStatus?: string;
-  result_status?: string;
-  workflowId?: string;
-  workflow_id?: string;
-  workflowName?: string;
-  workflow_name?: string;
-  [key: string]: unknown;
 };

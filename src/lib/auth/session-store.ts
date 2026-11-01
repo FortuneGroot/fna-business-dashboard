@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { AuthRole, SessionUser } from "./types";
 import { SESSION_TTL_SECONDS } from "./types";
-import { isSupabaseConfigured, isValidSupabaseUrl } from "@/lib/sync/db-client";
-import { supabaseRestAuthHeaders } from "@/lib/sync/supabase-rest-auth";
+import { isSupabaseConfigured, isValidSupabaseUrl } from "@/lib/legacy/rest-client";
+import { supabaseRestAuthHeaders } from "@/lib/legacy/rest-auth";
 
 export type StoredSession = {
   id: string;

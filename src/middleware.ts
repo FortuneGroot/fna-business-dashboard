@@ -15,15 +15,12 @@ const PUBLIC_EXACT = new Set([
   "/privacy",
   "/terms",
   "/api/health",
-  "/api/ghl/health",
-  "/api/webhooks/ghl",
   "/api/auth/login",
   "/api/auth/logout",
   // Probe endpoint for login UI — route handler reports authEnforced / session.
   // Must not be middleware-blocked with a bare 401 (that falsely looks like "auth off").
   "/api/auth/me",
   "/api/tenant/public",
-  "/api/leads",
 ]);
 
 const PUBLIC_PREFIXES: string[] = [];
@@ -68,9 +65,6 @@ const NATIVE_API_PREFIXES = [
 
 const PROTECTED_API_PREFIXES = [
   "/api/dashboard",
-  "/api/events",
-  "/api/sync/health",
-  "/api/onboarding/readiness",
   "/api/tenant/config",
   "/api/workspaces",
   "/api/platform",
@@ -304,9 +298,6 @@ export const config = {
     "/onboarding/:path*",
     "/help/:path*",
     "/api/dashboard/:path*",
-    "/api/events",
-    "/api/sync/health",
-    "/api/onboarding/readiness",
     "/api/tenant/config",
     "/api/workspaces/:path*",
     "/api/platform/:path*",

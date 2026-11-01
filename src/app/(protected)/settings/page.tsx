@@ -15,18 +15,9 @@ import {
   useTeam,
 } from "@/components/settings/NativeSettings";
 
-type Health = {
-  ok?: boolean;
-  ghl?: {
-    connected?: boolean;
-    error?: string | null;
-    locationName?: string | null;
-  };
-};
-
 type TenantConfig = {
   client?: { businessName?: string; timezone?: string };
-  owner?: { pipelineName?: string; locationConfigured?: boolean; stagesCount?: number };
+  owner?: { pipelineName?: string; stagesCount?: number };
 };
 
 type SyncHealth = {
@@ -39,7 +30,6 @@ type SyncHealth = {
 };
 
 export default function SettingsPage() {
-  const [health, setHealth] = useState<Health | null>(null);
   const [tenant, setTenant] = useState<TenantConfig | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
@@ -55,11 +45,7 @@ export default function SettingsPage() {
     setLoadState("loading");
     setErr("");
     try {
-      const [meRes, healthRes, tenantRes] = await Promise.all([
-        fetch("/api/auth/me"),
-        fetch("/api/health"),
-        fetch("/api/tenant/config"),
-      ]);
+      const [meRes, tenantRes] = await Promise.all([fetch("/api/auth/me"), fetch("/api/tenant/config")]);
       let isNative = false;
       if (meRes.ok) {
         const me = await meRes.json();
@@ -72,28 +58,21 @@ export default function SettingsPage() {
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
       }
       setNative(isNative);
-      const syncRes = await fetch(isNative ? "/api/dashboard/summary" : "/api/sync/health");
-      if (healthRes.status === 401 || healthRes.status === 403) {
-        setLoadState("unauthorized");
-        setErr("Your session expired or you are not signed in. Sign out and sign back in.");
-        return;
-      }
+      const syncRes = await fetch("/api/dashboard/summary");
       if (tenantRes.status === 401 || tenantRes.status === 403) {
         setLoadState("unauthorized");
         setErr("Your session expired or you are not signed in. Sign out and sign back in.");
         return;
       }
-      if (!healthRes.ok || !tenantRes.ok) {
+      if (!tenantRes.ok) {
         setLoadState("error");
         setErr("Could not load settings status. Try again in a moment.");
         return;
       }
-      const healthJson = (await healthRes.json()) as Health;
-      setHealth(healthJson);
       setTenant((await tenantRes.json()) as TenantConfig);
       if (syncRes.ok) {
         const body = await syncRes.json();
-        setSyncHealth(isNative ? ({ ...body.summary, storageMode: body.storageMode } as SyncHealth) : (body as SyncHealth));
+        setSyncHealth({ ...body.summary, storageMode: body.storageMode } as SyncHealth);
       } else if (syncRes.status === 403) {
         setSyncHealth(null);
       }
@@ -112,10 +91,6 @@ export default function SettingsPage() {
   const team = useTeam(native && loadState === "ready" && can("team.read"));
   const isOwner = role ? canAccessOwnerSettings(role) : false;
   const canSeeSystem = role ? canAccessSyncHealth(role) : false;
-  const connected = Boolean(health?.ghl?.connected);
-  const crmTone = connected ? "ok" : health?.ghl?.error ? "warn" : "neutral";
-  const crmLabel =
-    loadState === "loading" ? "Checking…" : connected ? "Connected" : "Not connected";
   const bizName = tenant?.client?.businessName || BRAND.name;
   const bizTz = tenant?.client?.timezone || BRAND.timezone;
 
@@ -164,22 +139,13 @@ export default function SettingsPage() {
         {native && can("integrations.read") ? (
           <NativeIntegrations pipelineName={tenant?.owner?.pipelineName} stagesCount={tenant?.owner?.stagesCount} />
         ) : isOwner && !native ? (
-          <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
-            <p>
-              {connected
-                ? "Your CRM connection is active."
-                : loadState === "loading"
-                  ? "Checking connection status…"
-                  : "Your CRM connection is not active yet."}
-              {health?.ghl?.locationName ? (
-                <span className="muted"> Location label: {health.ghl.locationName}</span>
-              ) : null}
-            </p>
+          <Card title="Integrations" action={<Badge tone="neutral">Not connected</Badge>}>
+            <p>Workflow sync is no longer active for this dashboard.</p>
             {tenant?.owner?.pipelineName ? (
               <p className="muted">Pipeline: {tenant.owner.pipelineName}</p>
             ) : null}
             <p className="muted">
-              Lists and metrics update when connected workflows send activity into this dashboard.
+              Lists and metrics show the last activity received before sync was retired.
             </p>
           </Card>
         ) : (

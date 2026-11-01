@@ -1,4 +1,4 @@
-import type { AppointmentRecord, OpportunityRecord } from "@/lib/sync/types";
+import type { AppointmentRecord, OpportunityRecord } from "@/lib/data/records";
 import type { StageTotals, WorkspaceCalendar, WorkspaceStage } from "@/lib/data/types";
 
 export type PipelineColumn = { key: string; title: string; items: OpportunityRecord[]; count: number; value: number };

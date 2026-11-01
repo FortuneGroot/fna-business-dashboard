@@ -9,15 +9,19 @@ import {
   canAccessOwnerSettings,
   canAccessSyncHealth,
   createSessionToken,
+  requireApiRole,
   resetAuthSessionsForTests,
   roleSatisfies,
   sessionCookieOptions,
 } from "../src/lib/auth";
 import { GET as getTenantPublic } from "../src/app/api/tenant/public/route";
 import { GET as getTenantConfig } from "../src/app/api/tenant/config/route";
-import { GET as getEvents } from "../src/app/api/events/route";
-import { GET as getSyncHealth } from "../src/app/api/sync/health/route";
-import { GET as getReadiness } from "../src/app/api/onboarding/readiness/route";
+import { GET as getSummary } from "../src/app/api/dashboard/summary/route";
+
+async function roleGate(r: NextRequest, minimum: "OWNER" | "ADMIN"): Promise<number> {
+  const { error } = await requireApiRole(r, minimum);
+  return error ? error.status : 200;
+}
 
 const SECRET = "test-auth-secret-roles-do-not-use-in-prod";
 
@@ -120,12 +124,10 @@ describe("tenant exposure split + role API gates", () => {
     assert.equal(body.owner, undefined);
   });
 
-  it("anonymous restricted APIs return 401 JSON (not HTML login)", async () => {
+  it("anonymous restricted APIs and role gates return 401 JSON (not HTML login)", async () => {
     for (const [label, handler] of [
       ["tenant/config", getTenantConfig],
-      ["events", getEvents],
-      ["sync/health", getSyncHealth],
-      ["onboarding/readiness", getReadiness],
+      ["dashboard/summary", getSummary],
     ] as const) {
       const res = await handler(req(`/api/${label}`));
       assert.equal(res.status, 401, label);
@@ -133,9 +135,10 @@ describe("tenant exposure split + role API gates", () => {
       assert.equal(body.ok, false);
       assert.equal(body.error, "Unauthorized");
     }
+    assert.equal(await roleGate(req("/api/x"), "ADMIN"), 401);
   });
 
-  it("CLIENT receives 403 on owner/admin APIs and no owner block on tenant config", async () => {
+  it("CLIENT is refused by ADMIN and OWNER gates and gets no owner block on tenant config", async () => {
     const cookie = await cookieFor("client@example.invalid", "client-pass");
 
     const configRes = await getTenantConfig(req("/api/tenant/config", cookie));
@@ -144,53 +147,32 @@ describe("tenant exposure split + role API gates", () => {
     assert.ok(configBody.client?.supportEmail !== undefined || configBody.client?.phone !== undefined || configBody.ok);
     assert.equal(configBody.owner, undefined);
 
-    const events = await getEvents(req("/api/events", cookie));
-    assert.equal(events.status, 403);
-    assert.equal((await events.json()).error, "Forbidden");
-
-    const readiness = await getReadiness(req("/api/onboarding/readiness", cookie));
-    assert.equal(readiness.status, 403);
-
-    const sync = await getSyncHealth(req("/api/sync/health", cookie));
-    assert.equal(sync.status, 403);
+    assert.equal(await roleGate(req("/api/x", cookie), "ADMIN"), 403);
+    assert.equal(await roleGate(req("/api/x", cookie), "OWNER"), 403);
+    const { error } = await requireApiRole(req("/api/x", cookie), "OWNER");
+    assert.equal((await error!.json()).error, "Forbidden");
   });
 
-  it("ADMIN can read sync health but not owner-only APIs", async () => {
+  it("ADMIN passes the ADMIN gate but not the OWNER gate, and gets no owner block", async () => {
     const cookie = await cookieFor("admin@example.invalid", "admin-pass");
 
-    const sync = await getSyncHealth(req("/api/sync/health", cookie));
-    assert.equal(sync.status, 200);
-    const syncBody = await sync.json();
-    assert.equal(syncBody.ok, true);
-
-    const events = await getEvents(req("/api/events", cookie));
-    assert.equal(events.status, 403);
-
-    const readiness = await getReadiness(req("/api/onboarding/readiness", cookie));
-    assert.equal(readiness.status, 403);
+    assert.equal(await roleGate(req("/api/x", cookie), "ADMIN"), 200);
+    assert.equal(await roleGate(req("/api/x", cookie), "OWNER"), 403);
 
     const config = await getTenantConfig(req("/api/tenant/config", cookie));
     assert.equal(config.status, 200);
     assert.equal((await config.json()).owner, undefined);
   });
 
-  it("OWNER can access owner APIs and owner tenant configuration", async () => {
+  it("OWNER passes every gate and receives the owner tenant configuration", async () => {
     const cookie = await cookieFor("owner@example.invalid", "owner-pass");
 
-    const events = await getEvents(req("/api/events", cookie));
-    assert.equal(events.status, 200);
-
-    const readiness = await getReadiness(req("/api/onboarding/readiness", cookie));
-    assert.equal(readiness.status, 200);
-
-    const sync = await getSyncHealth(req("/api/sync/health", cookie));
-    assert.equal(sync.status, 200);
+    assert.equal(await roleGate(req("/api/x", cookie), "OWNER"), 200);
 
     const config = await getTenantConfig(req("/api/tenant/config", cookie));
     assert.equal(config.status, 200);
     const body = await config.json();
-    assert.ok(body.owner);
-    assert.equal(typeof body.owner.locationConfigured, "boolean");
+    assert.deepEqual(body.owner, { pipelineName: "Fortune & Automations Sales Pipeline", stagesCount: 12 });
   });
 
   it("anonymous tenant/public never includes location or pipeline IDs", async () => {

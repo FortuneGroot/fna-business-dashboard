@@ -5,8 +5,8 @@ import type {
   ConversationEventRecord,
   DashboardSummary,
   OpportunityRecord,
-} from "@/lib/sync/types";
-import type { StorageMode } from "@/lib/sync/store";
+  StorageMode,
+} from "@/lib/data/records";
 
 /**
  * Pre-migration /api/dashboard/* response shapes (API-1). Both providers build their responses with

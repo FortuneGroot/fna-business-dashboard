@@ -1,5 +1,5 @@
 import "server-only";
-import type { OpportunityRecord } from "@/lib/sync/types";
+import type { OpportunityRecord } from "@/lib/data/records";
 import { opportunityRecord, type NativeOpportunityRow, type NativeStageRow } from "./dashboard-adapters";
 import { displayNames, fromWorkspace, LIST_LIMIT, rows, type DataScope } from "./query";
 import type { StageTotals } from "./types";

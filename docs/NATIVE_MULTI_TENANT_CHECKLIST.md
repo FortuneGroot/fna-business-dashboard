@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1 / P2 / P3 / P4 / P5 / P6 Checklist
+# Native Multi-Tenant — P1–P7 Checklist
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record, §20 P6 record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record, §20 P6 record, §21 P7 record).
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P6. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. The platform console (P6) at `/platform` requires a listed platform admin with an AAL2 session (MFA through the app), provisions workspaces, replaces bootstrap owner invitations, suspends/reactivates, grants time-limited audited support access, and shows the audit log. Legacy mode (default) is unchanged. GHL runtime retirement (P7) is next.**
+**Stop point: end of P6. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. The platform console (P6) at `/platform` requires a listed platform admin with an AAL2 session (MFA through the app), provisions workspaces, replaces bootstrap owner invitations, suspends/reactivates, grants time-limited audited support access, and shows the audit log. P7 retired the GHL runtime: no webhook ingestion, CRM client, per-client configuration, or `GHL_*` settings remain on any native path; legacy mode (default) keeps its login and shows a read-only snapshot of the last synced activity. Next: full local acceptance rehearsal, then staging (P8) only with approval.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -90,7 +90,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] UI-1: 19 routes 200 with no page errors for the owner, seeded data rendered; admin Setup redirect, Resources visible; native empty states.
 - [x] UI-2: local harness; sidebar identical on all 20 pages; differences are copy (§17.4).
 - [x] Review fix: calendar cards match bookings by calendar id with no fallback; pipeline columns match by stage id with exact per-stage totals (§17.5).
-- [ ] `/api/webhooks/ghl` and legacy service-role readers retire in P7.
+- [x] `/api/webhooks/ghl` retired in P7; the remaining legacy service-role readers (`legacy/rest-client`, `legacy/rest-auth`, legacy session store/edge) are legacy-mode only and retire at T6 (spec §21.3).
 
 ## P4 team and settings
 
@@ -132,11 +132,25 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Audit view (all workspaces or one) with actor email and reason; credential-like metadata keys dropped; no tokens in any response except the one-time link.
 - [x] Browser flow against the real local stack (no-access → MFA enrolment → provision → detail → support access → banner → end → audit).
 - [ ] MFA device-loss recovery is not self-service (operator removes the factor); no recovery codes.
+
+## P7 GHL runtime retired
+
+- [x] §8.3 files deleted (CRM client, mapping, Master guard, leads, env, sync store and ingestion, onboarding readiness, deployment validation, tenant config, retired routes, custom CSS, client scripts, `config/`); recoverable from Git.
+- [x] GHL-era docs archived under `docs/archive/` with an index and rollback note; README and release policy rewritten.
+- [x] Native mode loads no legacy module (dynamic imports inside legacy branches only; static test).
+- [x] Legacy mode: read-only `sync_*` snapshot (GET/HEAD only, partition-filtered, Master refused), F&A identity equal to the pre-P7 defaults, D7 phone applied.
+- [x] Retired routes 404 in both modes; middleware lists cleaned; `.env.example` and npm scripts have no retired settings or scripts.
+- [x] GHL-1 / GHL-2 pass with an exact, test-enforced exception list (the two legacy snapshot files; `GHL_LOCATION_ID` as the legacy partition) — spec §21.3.
+- [x] Build and run without GHL variables; browser bundles free of CRM terms, partition ids, and secrets; NET-1 empty.
+- [x] Defect fixed: Settings fetched `/api/health` without reading it, which left the page loading in Chromium (UI-2).
+- [ ] Remaining dependency until T6/M15: legacy snapshot modules, legacy migration `20260917121316_sync_store.sql`, legacy session store/edge. Not removable before the approved cutover gates.
+- [ ] Before promoting any P7 build: confirm production no longer expects live workflow webhooks, and that `CLIENT_CONFIG_PATH`/`GHL_PIPELINE_ID` are unused there (owner check; not accessed from here).
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 298, db 217, realpg 28, stack 63) | see §20.5 of the spec for the P6 run |
+| `npm test` | runner (minimums: unit 240, db 217, realpg 28, stack 63) | see §21.5 of the spec for the P7 run (unit 298 → 240: 78 tests deleted with retired code, 20 added) |
 | `npm run test:db` | PGlite + Supabase shim | [x] PASS 217/217 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
 | `npm run typecheck` (`tsc` for the app, then `tsconfig.tests.json` for test files) | — | [x] PASS (test files were not type-clean before P6: 44 errors in P4/P5 tests and one in `auth.test.ts`, fixed without changing assertions) |
@@ -154,7 +168,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | P4 team and settings: INV, ROLE, MEM, SUSP, SET-1..7, browser flow; NET-1 (no outbound connection, no SMTP/SMS route) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
 | P5 native records: CRUD-1..5, workspace switching, browser flow (NET-1 still empty) | real Supabase local stack + Chromium | [x] PASS (7 tests) |
 | P6 platform console: CON-1..9 (denial, MFA, provisioning, rotation, search, grants, clock expiry, suspension, logged-out session, browser flow) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
-| UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run after P5: sidebar 0.00% on all 20 pages; P5 pages 1.2–2.2% (native copy and controls); Settings/Onboarding differ by P4 content (§19.5) |
+| P7 retirement: retired routes 404 (incl. webhook POST), employee owner-API 403 via `/api/audit`, app started without `GHL_*` | real Supabase local stack | [x] PASS (in the 63) |
+| UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run after P7: all 20 routes 200; sidebar 0.00% on all 20 pages; other pages at their P3–P5 figures; Settings/Onboarding differ by P4 content (§21.5) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
 ## Remaining blockers / before staging
@@ -164,4 +179,4 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 ## Not done by instruction
 
-No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), the native Settings cards and invite landing page (P4), native create/edit controls in the existing record pages (P5), and the separate platform console, MFA page, and support-access banner (P6).
+No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), the native Settings cards and invite landing page (P4), native create/edit controls in the existing record pages (P5), and the separate platform console, MFA page, and support-access banner (P6). P7 removed only code, routes, scripts, synthetic configuration, and docs (archived); no table, migration, data, or private configuration was removed, M15 was not run, and legacy authentication stays until T6.

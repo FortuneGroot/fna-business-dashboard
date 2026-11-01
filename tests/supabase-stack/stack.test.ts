@@ -608,7 +608,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       assert.equal(page.status, 307);
       const loc = new URL(page.location!, app.url);
       assert.deepEqual([loc.pathname, loc.searchParams.get("next")], ["/login", "/contacts"]);
-      for (const path of ["/api/dashboard/summary", "/api/tenant/config", "/api/workspaces", "/api/events"]) {
+      for (const path of ["/api/dashboard/summary", "/api/tenant/config", "/api/workspaces", "/api/team"]) {
         const r = await appFetch(app, path);
         assert.equal(r.status, 401, path);
         assert.equal(r.body.code, "unauthenticated", path);
@@ -667,7 +667,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         const loc = pageRedirect(await appFetch(app, path, { cookie }), path, [...markers]);
         assert.deepEqual([loc.pathname, loc.searchParams.get("denied")], ["/dashboard", "1"], path);
       }
-      const owner = await appFetch(app, "/api/events", { cookie });
+      const owner = await appFetch(app, "/api/audit", { cookie });
       assert.deepEqual([owner.status, owner.body.code], [403, "forbidden"]);
       const config = await appFetch(app, "/api/tenant/config", { cookie });
       assert.equal(config.status, 200, config.text);
@@ -1079,9 +1079,11 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.equal(pub.body.client.businessName, pub.body.platform.brandName, "public branding is the platform's only");
         const health = await appFetch(app, "/api/health");
         assert.deepEqual([health.status, health.body.ok, health.body.db, health.body.authProvider], [200, true, "ok", "supabase"]);
-        assert.deepEqual([(await appFetch(app, "/api/ghl/health")).status], [404]);
-        const sync = await appFetch(app, "/api/sync/health", { cookie: cookieA });
-        assert.deepEqual([sync.status, sync.body.code], [404, "not_available"]);
+        for (const path of ["/api/ghl/health", "/api/sync/health", "/api/events", "/api/onboarding/readiness", "/api/leads", "/api/webhooks/ghl"]) {
+          assert.equal((await appFetch(app, path, { cookie: cookieA })).status, 404, `${path} is retired (P7)`);
+        }
+        const webhook = await appFetch(app, "/api/webhooks/ghl", { method: "POST", body: "{}", contentType: "application/json" });
+        assert.equal(webhook.status, 404, "webhook ingestion is retired (P7)");
       });
 
       test("UI-1: the owner gets 200 with no page errors on all 15 sidebar destinations plus support, training, privacy, and terms", async () => {
