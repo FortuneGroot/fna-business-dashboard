@@ -132,25 +132,71 @@ describe("Storage policies confine objects to the caller's active workspace (shi
   });
 });
 
-describe("review 2, finding 3: platform-granted Storage mutations are audited", () => {
+describe("review 2, finding 3: platform grants cannot change Storage objects; the audit trigger is a backstop", () => {
   test("member uploads are not recorded as platform actions", async () => {
     const since = await lastAuditId();
     await asUser(w.db, w.adminA, (q) => upload(q, `${w.wsA}/member-upload.png`));
     assert.deepEqual(await storageAudit(w.wsA, since), []);
   });
 
-  test("insert, rename, and delete under a write grant record actor, workspace, grant, operation, and path", async () => {
+  test("Storage write policies require active membership as well as settings.write", async () => {
+    const r = await w.db.query<{ policyname: string; expr: string }>(
+      `select policyname, coalesce(with_check, qual) expr from pg_policies
+       where schemaname = 'storage' and tablename = 'objects' and policyname <> 'workspace_assets_read' order by policyname`);
+    assert.deepEqual(r.rows.map((p) => p.policyname), ["workspace_assets_delete", "workspace_assets_insert", "workspace_assets_update"]);
+    for (const p of r.rows) {
+      assert.match(p.expr, /has_permission\('settings\.write'/, p.policyname);
+      assert.match(p.expr, /active_member_role\(/, p.policyname);
+    }
+  });
+
+  test("a write grant can view assets but cannot insert, rename, update, upsert, or delete them", async () => {
     const grant = await asUser(w.db, w.platform, (q) =>
-      rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "write", "storage audit regression", 15]));
+      rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "write", "storage write grant regression", 15]));
+    try {
+      const since = await lastAuditId();
+      const existing = `${w.wsA}/policy-logo.png`;
+      const metadataOf = async () => (await w.db.query<{ m: unknown }>(
+        "select metadata m from storage.objects where bucket_id = $1 and name = $2", [BUCKET, existing])).rows;
+      const before = await metadataOf();
+      assert.equal(before.length, 1);
+      assert.equal(await asUser(w.db, w.platform, (q) => visible(q, existing)), 1, "write grants keep read access");
+
+      await assert.rejects(asUser(w.db, w.platform, (q) => upload(q, `${w.wsA}/granted.png`)), /row-level security/);
+      await assert.rejects(asUser(w.db, w.platform, (q) => q.query(
+        `insert into storage.objects (bucket_id, name, owner_id) values ($1, $2, auth.uid()::text)
+         on conflict (bucket_id, name) do update set metadata = '{"v":"granted"}'`, [BUCKET, existing])), /row-level security/);
+      const renamed = await asUser(w.db, w.platform, (q) =>
+        q.query("update storage.objects set name = $1 where bucket_id = $2 and name = $3", [`${w.wsA}/renamed.png`, BUCKET, existing]));
+      assert.equal(renamed.affectedRows, 0);
+      const updated = await asUser(w.db, w.platform, (q) =>
+        q.query("update storage.objects set metadata = '{\"v\":\"granted\"}' where bucket_id = $1 and name = $2", [BUCKET, existing]));
+      assert.equal(updated.affectedRows, 0);
+      const deleted = await asUser(w.db, w.platform, (q) =>
+        q.query("delete from storage.objects where bucket_id = $1 and name = $2", [BUCKET, existing]));
+      assert.equal(deleted.affectedRows, 0);
+
+      assert.deepEqual(await metadataOf(), before, "the object is unchanged");
+      assert.deepEqual(await storageAudit(w.wsA, since), []);
+    } finally {
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    }
+  });
+
+  test("backstop: a grant-holder write in the caller's own context is still audited with every field", async () => {
+    // Simulates a future policy widening: the superuser bypasses RLS but carries the platform admin's JWT claims.
+    const grant = await asUser(w.db, w.platform, (q) =>
+      rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "write", "storage audit backstop regression", 15]));
     const since = await lastAuditId();
     const path = `${w.wsA}/granted.png`;
     const renamed = `${w.wsA}/granted-renamed.png`;
-
-    await asUser(w.db, w.platform, (q) => upload(q, path));
-    await asUser(w.db, w.platform, (q) =>
-      q.query("update storage.objects set name = $1 where bucket_id = $2 and name = $3", [renamed, BUCKET, path]));
-    await asUser(w.db, w.platform, (q) =>
-      q.query("delete from storage.objects where bucket_id = $1 and name = $2", [BUCKET, renamed]));
+    await w.db.transaction(async (tx) => {
+      await tx.query("select set_config('request.jwt.claims', $1, true)", [
+        JSON.stringify({ sub: w.platform.id, email: w.platform.email, role: "authenticated", aal: "aal2" })]);
+      await tx.query("insert into storage.objects (bucket_id, name, owner_id) values ($1, $2, $3)", [BUCKET, path, w.platform.id]);
+      await tx.query("update storage.objects set name = $1 where bucket_id = $2 and name = $3", [renamed, BUCKET, path]);
+      await tx.query("delete from storage.objects where bucket_id = $1 and name = $2", [BUCKET, renamed]);
+    });
 
     const audit = await storageAudit(w.wsA, since);
     assert.deepEqual(audit.map((a) => a.action), ["storage.object_insert", "storage.object_update", "storage.object_delete"]);
@@ -178,7 +224,7 @@ describe("review 2, finding 3: platform-granted Storage mutations are audited", 
     await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
   });
 
-  test("after revocation the platform admin can no longer mutate assets", async () => {
+  test("after revocation the platform admin can neither view nor mutate assets", async () => {
     const since = await lastAuditId();
     await assert.rejects(asUser(w.db, w.platform, (q) => upload(q, `${w.wsA}/after-revoke.png`)), /row-level security/);
     assert.equal(await asUser(w.db, w.platform, (q) => visible(q, `${w.wsA}/policy-logo.png`)), 0);

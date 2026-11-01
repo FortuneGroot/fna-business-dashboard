@@ -37,7 +37,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Docker engine running (29.9.2; virtualization enabled).
 - [x] Legacy migration versions made unique and ordered; mapping in `docs/MIGRATION_VERSION_MAPPING.md`; enforced by test.
 - [ ] Remote migration history reconciled — cutover prerequisite (history unknown; no blind repair).
-- [x] Real-stack suite (`tests/supabase-stack/`, 17 tests) run on a disposable stack: 15 PASS, 2 FAIL (R2-3).
+- [x] Real-stack suite (`tests/supabase-stack/`, 17 tests) run on a disposable stack: 17/17 PASS after decision A (members-only Storage writes); the earlier run was 15/17 (R2-3).
 
 ## Second review (Codex) findings
 
@@ -46,7 +46,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] R2-3 (P2): platform-granted Storage mutations audited (actor, workspace, grant, operation, object path); Storage policy isolation covered on shim tables.
 - [x] R2-4 (P2): stack suite resets only an isolated, explicitly disposable project it started (guards unit-tested).
 - [x] Storage policies through the real Storage API — PASS.
-- [ ] R2-3 through the real Storage API — **FAIL, reopened**: the Storage API commits row writes as `service_role` without the caller's identity, so the trigger records nothing. Remediation decision pending.
+- [x] R2-3 through the real Storage API — reopened (the Storage API commits row writes as `service_role` without the caller's identity), then resolved by decision A: Storage writes require active membership plus `settings.write`; platform grants keep read access only.
+- [ ] Audited server endpoint for platform Storage changes — with P2 authentication.
 
 ## Second review coverage follow-up
 
@@ -61,8 +62,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (unit 155, db 168, realpg 24, stack 17) | exit 1: three suites PASS, stack 15/17 (2 FAIL, R2-3) |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 168/168 |
+| `npm test` | runner (unit 155, db 168, realpg 24, stack 17) | [x] all four suites PASS: unit 155, db 170, realpg 24, stack 17 |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 170/170 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 24/24 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
@@ -72,11 +73,11 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | RLS isolation, forged attribution, revoked membership, suspension, platform grants | real Supabase local stack | [x] PASS |
 | Storage bucket + policies, PUT/upsert, overrides, clock expiry, concurrency | real Supabase local stack | [x] PASS |
 | Legacy tables closed to anon/authenticated over PostgREST | real Supabase local stack | [x] PASS |
-| Platform-grant Storage audit through the Storage API | real Supabase local stack | **FAIL** (R2-3 reopened) |
+| Platform write grants refused for Storage upload, PUT, upsert, delete; GET allowed; nothing audited | real Supabase local stack | [x] PASS (R2-3, decision A) |
 
 ## Remaining blockers / before P2
 
-- [ ] Decide and apply the R2-3 remediation for Storage API writes, then rerun `npm run test:stack`.
+- [ ] Build the audited platform Storage endpoint with P2 authentication (R2-3, decision A).
 - [ ] Reconcile legacy migration history on the staging project before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
 - [ ] Staging Supabase project (D4) and paid plan (D5) — later, by instruction.
 

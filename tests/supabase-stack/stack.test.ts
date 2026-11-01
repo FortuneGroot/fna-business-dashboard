@@ -273,27 +273,25 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.deepEqual(await contacts(platformAal2), []);
   });
 
-  test("Storage API mutations under a platform write grant are audited with grant and object path", async () => {
-    const grant = await grantAccess(wsA, "write", "stack test storage audit");
+  test("a platform write grant can read Storage objects but cannot upload or delete them through the Storage API", async () => {
+    const logo = `workspace-assets/${wsA}/logo-${run}.txt`;
+    const grant = await grantAccess(wsA, "write", "stack test storage write grant");
     assert.equal(grant.status, 200, grant.text);
+    const read = await storage(env, platformAal2, "GET", logo);
+    assert.equal(read.status, 200, read.text);
     const objectPath = `${wsA}/granted-${run}.txt`;
-    const up = await storage(env, platformAal2, "POST", `workspace-assets/${objectPath}`, "granted upload");
-    assert.equal(up.status, 200, up.text);
-    const del = await storage(env, platformAal2, "DELETE", `workspace-assets/${objectPath}`);
-    assert.equal(del.status, 200, del.text);
+    assert.notEqual((await storage(env, platformAal2, "POST", `workspace-assets/${objectPath}`, "granted upload")).status, 200,
+      "a write grant alone uploaded an object");
+    assert.notEqual((await storage(env, platformAal2, "DELETE", logo)).status, 200, "a write grant alone deleted an object");
     await revokeGrant(grant.body.id);
 
-    const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string; metadata: any }>(
-      `select actor_id, actor_kind, grant_id, action, target, metadata from public.workspace_audit_log
-       where workspace_id = $1 and action like 'storage.%' and metadata ->> 'object_path' = $2 order by id`,
-      [wsA, objectPath]);
-    assert.deepEqual(audit.rows.map((r) => r.action), ["storage.object_insert", "storage.object_delete"]);
-    for (const r of audit.rows) {
-      assert.equal(r.actor_id, platform.id);
-      assert.equal(r.actor_kind, "platform_admin");
-      assert.equal(r.grant_id, grant.body.id);
-      assert.equal(r.target, `workspace-assets/${objectPath}`);
-    }
+    const objects = await db.query<{ name: string }>(
+      "select name from storage.objects where bucket_id = 'workspace-assets' and name = any($1)",
+      [[objectPath, `${wsA}/logo-${run}.txt`]]);
+    assert.deepEqual(objects.rows.map((r) => r.name), [`${wsA}/logo-${run}.txt`], "the asset survives and nothing was uploaded");
+    const storageAudit = await db.query("select count(*)::int n from public.workspace_audit_log where grant_id = $1 and action like 'storage.%'",
+      [grant.body.id]);
+    assert.equal(storageAudit.rows[0].n, 0);
     const memberUploads = await db.query(
       "select count(*)::int n from public.workspace_audit_log where action like 'storage.%' and metadata ->> 'object_path' like $1",
       [`%/logo-${run}.txt`]);
@@ -327,7 +325,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     }
   });
 
-  test("Storage update (PUT) and upsert follow the write policy; granted ones are audited exactly", async () => {
+  test("Storage update (PUT) and upsert require active membership plus settings.write", async () => {
     const objectPath = `${wsA}/logo-${run}.txt`;
     const obj = `workspace-assets/${objectPath}`;
     assert.equal((await storage(env, ownerA.token, "PUT", obj, "owner v2")).status, 200);
@@ -338,24 +336,18 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.notEqual((await storage(env, ownerB.token, "POST", obj, "intruder", { upsert: true })).status, 200, "other workspace upserted");
     assert.equal((await storage(env, ownerA.token, "GET", obj)).text, "owner v3");
 
-    const grant = await grantAccess(wsA, "write", "stack test storage update audit");
+    const grant = await grantAccess(wsA, "write", "stack test storage update write grant");
     assert.equal(grant.status, 200, grant.text);
-    assert.equal((await storage(env, platformAal2, "PUT", obj, "granted v4")).status, 200);
-    assert.equal((await storage(env, platformAal2, "POST", obj, "granted v5", { upsert: true })).status, 200);
+    assert.equal((await storage(env, platformAal2, "GET", obj)).text, "owner v3", "write grants keep read access");
+    assert.notEqual((await storage(env, platformAal2, "PUT", obj, "granted v4")).status, 200, "a write grant alone updated");
+    assert.notEqual((await storage(env, platformAal2, "POST", obj, "granted v5", { upsert: true })).status, 200, "a write grant alone upserted");
     await revokeGrant(grant.body.id);
-    assert.notEqual((await storage(env, platformAal2, "PUT", obj, "after revoke")).status, 200, "revoked grant still updates");
+    assert.notEqual((await storage(env, platformAal2, "GET", obj)).status, 200, "revoked grant still reads");
+    assert.equal((await storage(env, ownerA.token, "GET", obj)).text, "owner v3");
 
-    const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string }>(
-      `select actor_id, actor_kind, grant_id, action, target from public.workspace_audit_log
-       where workspace_id = $1 and action like 'storage.%' and grant_id = $2 order by id`, [wsA, grant.body.id]);
-    assert.deepEqual(audit.rows.map((r) => [r.action, r.target]), [
-      ["storage.object_update", obj],
-      ["storage.object_update", obj],
-    ]);
-    for (const r of audit.rows) {
-      assert.equal(r.actor_id, platform.id);
-      assert.equal(r.actor_kind, "platform_admin");
-    }
+    const audit = await db.query("select count(*)::int n from public.workspace_audit_log where grant_id = $1 and action like 'storage.%'",
+      [grant.body.id]);
+    assert.equal(audit.rows[0].n, 0);
   });
 
   test("permission overrides change what an employee can do through PostgREST and Storage", async () => {

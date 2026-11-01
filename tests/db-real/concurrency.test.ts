@@ -504,7 +504,7 @@ describe("real PostgreSQL: concurrent invitation acceptance, revocation, and rot
 });
 
 describe("real PostgreSQL: platform grants expire by the clock", () => {
-  test("a one-minute write grant ends reads, writes, Storage access, and context at expiry with no intervention", async () => {
+  test("a one-minute write grant ends reads, writes, Storage reads, and context at expiry with no intervention", async () => {
     const { ws, owner1 } = await twoOwnerWorkspace();
     const c = await server.connect();
     try {
@@ -517,15 +517,19 @@ describe("real PostgreSQL: platform grants expire by the clock", () => {
       const grantId = g.r.id;
       const before = (await admin.query("select created_at, expires_at, revoked_at from public.platform_access_grants where id = $1", [grantId])).rows[0];
 
-      const granted = `${ws}/granted-before-expiry.png`;
+      const granted = `${ws}/owner-logo.png`;
       const [contact] = await requestAs<{ id: string }>(c, platform,
         "insert into public.contacts (workspace_id, first_name) values ($1, 'Before expiry') returning id", [ws]);
-      await requestAs(c, platform,
-        "insert into storage.objects (bucket_id, name, owner_id) values ('workspace-assets', $1, auth.uid()::text)", [granted]);
-      await requestAs(c, platform,
-        "update storage.objects set metadata = '{\"v\":2}' where bucket_id = 'workspace-assets' and name = $1", [granted]);
       const [seen] = await requestAs<{ n: number }>(c, platform, "select count(*)::int n from public.contacts");
       assert.equal(seen.n, 2);
+      const [assetsLive] = await requestAs<{ n: number }>(c, platform,
+        "select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and name = $1", [granted]);
+      assert.equal(assetsLive.n, 1, "a live grant reads workspace assets");
+      await assert.rejects(requestAs(c, platform,
+        "insert into storage.objects (bucket_id, name, owner_id) values ('workspace-assets', $1, auth.uid()::text)",
+        [`${ws}/granted.png`]), /row-level security/, "a write grant alone must not upload");
+      assert.equal((await requestAs(c, platform,
+        "update storage.objects set metadata = '{\"v\":2}' where name = $1 returning id", [granted])).length, 0);
 
       // Wait on the database clock, not the test clock; nothing touches the grant row.
       const deadline = Date.now() + 120_000;
@@ -565,8 +569,6 @@ describe("real PostgreSQL: platform grants expire by the clock", () => {
       assert.deepEqual(audit.rows, [
         { action: "platform.access_granted", target: null },
         { action: "contacts.insert", target: contact.id },
-        { action: "storage.object_insert", target: `workspace-assets/${granted}` },
-        { action: "storage.object_update", target: `workspace-assets/${granted}` },
       ]);
       const objects = await admin.query<{ n: number }>("select count(*)::int n from storage.objects where name = $1", [granted]);
       assert.equal(objects.rows[0].n, 1);

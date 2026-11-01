@@ -96,7 +96,7 @@ async function newMember(owner: TestUser, email: string, role: string): Promise<
   return u;
 }
 
-describe("Storage update and upsert follow the workspace write policy", () => {
+describe("Storage update and upsert require active membership plus settings.write", () => {
   const path = () => `${w.wsA}/upsert-logo.png`;
 
   test("an owner updates and upserts their own workspace object", async () => {
@@ -128,25 +128,16 @@ describe("Storage update and upsert follow the workspace write policy", () => {
     assert.equal(await storedVersion(path()), "v5");
   });
 
-  test("updates and upserts under a write grant are audited with the exact operation, grant, and path", async () => {
-    const g = await grant(w.wsA, "write", "storage upsert audit regression");
+  test("a write grant alone can view but cannot update, upsert, insert, or delete", async () => {
+    const g = await grant(w.wsA, "write", "storage upsert write-grant regression");
     const since = await lastAuditId();
-    const fresh = `${w.wsA}/granted-upsert.png`;
-    assert.equal(await asUser(w.db, w.platform, (q) => updateMeta(q, path(), "g1")), 1);
-    await asUser(w.db, w.platform, (q) => upsert(q, path(), "g2"));
-    await asUser(w.db, w.platform, (q) => upsert(q, fresh, "g3"));
-    const audit = await auditSince(w.wsA, since, "storage.%");
-    assert.deepEqual(audit.map((a) => [a.action, a.target, a.metadata.object_path]), [
-      ["storage.object_update", `${BUCKET}/${path()}`, path()],
-      ["storage.object_update", `${BUCKET}/${path()}`, path()],
-      ["storage.object_insert", `${BUCKET}/${fresh}`, fresh],
-    ]);
-    for (const a of audit) {
-      assert.equal(a.actor_id, w.platform.id);
-      assert.equal(a.actor_kind, "platform_admin");
-      assert.equal(a.grant_id, g);
-      assert.equal(a.metadata.previous_object_path, undefined, "metadata-only updates are not renames");
-    }
+    assert.equal(await asUser(w.db, w.platform, (q) => visible(q, path())), 1);
+    assert.equal(await asUser(w.db, w.platform, (q) => updateMeta(q, path(), "g1")), 0);
+    await assert.rejects(asUser(w.db, w.platform, (q) => upsert(q, path(), "g2")), /row-level security/);
+    await assert.rejects(asUser(w.db, w.platform, (q) => upsert(q, `${w.wsA}/granted-upsert.png`, "g3")), /row-level security/);
+    assert.equal(await asUser(w.db, w.platform, (q) => remove(q, path())), 0);
+    assert.equal(await storedVersion(path()), "v5");
+    assert.deepEqual(await auditSince(w.wsA, since, "storage.%"), []);
     await revoke(g);
   });
 
@@ -163,9 +154,10 @@ describe("Storage update and upsert follow the workspace write policy", () => {
 
 describe("Storage access ends with the grant or membership that conferred it", () => {
   test("after a write grant is revoked: no read, update, upsert, delete, or audit", async () => {
-    const g = await grant(w.wsA, "write", "storage revocation regression");
     const path = `${w.wsA}/revocation.png`;
-    await asUser(w.db, w.platform, (q) => upload(q, path));
+    await asUser(w.db, w.ownerA, (q) => upload(q, path));
+    const g = await grant(w.wsA, "write", "storage revocation regression");
+    assert.equal(await asUser(w.db, w.platform, (q) => visible(q, path)), 1);
     await revoke(g);
     const since = await lastAuditId();
     assert.equal(await asUser(w.db, w.platform, (q) => visible(q, path)), 0);

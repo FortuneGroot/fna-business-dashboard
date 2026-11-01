@@ -20,9 +20,10 @@ group by s.workspace_id, s.pipeline_id, s.id, s.name, s.position, s.kind;
 revoke all on public.pipeline_stage_summary from anon, authenticated;
 grant select on public.pipeline_stage_summary to authenticated;
 
--- Audits every workspace-assets object mutation made under a platform access grant (not as a
--- member): actor, workspace, grant, operation, and object path. Row data is read as jsonb so the
--- function compiles without the storage schema.
+-- Defense in depth: audits any workspace-assets object mutation made in a caller's own database
+-- context under a platform access grant (actor, workspace, grant, operation, object path). The
+-- write policies below are members-only, so this fires only if those policies are ever widened.
+-- Row data is read as jsonb so the function compiles without the storage schema.
 create function private.audit_grant_storage_write()
 returns trigger
 language plpgsql security definer set search_path = ''
@@ -79,23 +80,29 @@ begin
            and (storage.foldername(name))[1] = (select private.active_workspace_id())::text
            and (select private.has_permission('settings.read')))
   $p$;
+  -- Writes are members-only. The Storage API commits object rows as service_role without the
+  -- caller's identity, so a platform grant's Storage change could not be audited here; grant holders
+  -- may view assets, and platform Storage changes go through an audited server endpoint instead.
   execute $p$
     create policy workspace_assets_insert on storage.objects for insert to authenticated
     with check (bucket_id = 'workspace-assets'
                 and (storage.foldername(name))[1] = (select private.active_workspace_id())::text
-                and (select private.has_permission('settings.write')))
+                and (select private.has_permission('settings.write'))
+                and (select private.active_member_role(private.active_workspace_id())) is not null)
   $p$;
   execute $p$
     create policy workspace_assets_update on storage.objects for update to authenticated
     using (bucket_id = 'workspace-assets'
            and (storage.foldername(name))[1] = (select private.active_workspace_id())::text
-           and (select private.has_permission('settings.write')))
+           and (select private.has_permission('settings.write'))
+           and (select private.active_member_role(private.active_workspace_id())) is not null)
   $p$;
   execute $p$
     create policy workspace_assets_delete on storage.objects for delete to authenticated
     using (bucket_id = 'workspace-assets'
            and (storage.foldername(name))[1] = (select private.active_workspace_id())::text
-           and (select private.has_permission('settings.write')))
+           and (select private.has_permission('settings.write'))
+           and (select private.active_member_role(private.active_workspace_id())) is not null)
   $p$;
   execute $t$
     create trigger workspace_assets_audit_grant_write
