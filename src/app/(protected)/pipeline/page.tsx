@@ -2,7 +2,7 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { AddOpportunity, EditOpportunity } from "@/components/records/NativeBoard";
+import { AddOpportunity, EditOpportunity, StageMore } from "@/components/records/NativeBoard";
 import { getPageData } from "@/lib/data";
 import { pipelineColumns } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_STAGES, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
@@ -107,6 +107,16 @@ export default async function PipelinePage() {
                         ) : null}
                       </li>
                     ))}
+                    {native && col.count > Math.min(col.items.length, 8) ? (
+                      <StageMore
+                        stageId={col.key}
+                        hidden={col.count - Math.min(col.items.length, 8)}
+                        shownIds={col.items.slice(0, 8).map((o) => o.externalOpportunityId)}
+                        stages={boardStages}
+                        canEdit={canEdit}
+                        canDelete={data.can("opportunities.delete")}
+                      />
+                    ) : null}
                   </ul>
                 )}
               </Card>

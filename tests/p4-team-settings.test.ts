@@ -470,3 +470,22 @@ describe("P4 static guards", () => {
     assert.deepEqual(hosts, ["203.0.113.7", "example.com"]);
   });
 });
+
+describe("Settings permissions editor matches the database role tables", () => {
+  test("employee base and overridable permissions agree with migration M2 and exclude team.* / integrations.manage", async () => {
+    const { EMPLOYEE_BASE, OVERRIDABLE } = await import("../src/components/settings/NativeSettings");
+    const m2 = readFileSync(join(__dirname, "..", "supabase", "migrations", "20261101000200_identity_platform.sql"), "utf8");
+    const roleList = (role: string) => {
+      const m = new RegExp(`select '${role}', p from unnest\\(array\\[([\\s\\S]*?)\\]\\)`).exec(m2);
+      assert.ok(m, role);
+      return [...m![1].matchAll(/'([a-z_.]+)'/g)].map((x) => x[1]);
+    };
+    assert.deepEqual([...EMPLOYEE_BASE].sort(), roleList("employee").sort());
+    const owner = roleList("owner");
+    for (const [perm] of OVERRIDABLE) {
+      assert.ok(owner.includes(perm), `${perm} is a real permission`);
+      assert.ok(!perm.startsWith("team.") && perm !== "integrations.manage", `${perm} may not be overridden`);
+    }
+    assert.equal(new Set(OVERRIDABLE.map(([p]) => p)).size, OVERRIDABLE.length);
+  });
+});

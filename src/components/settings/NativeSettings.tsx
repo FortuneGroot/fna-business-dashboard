@@ -37,10 +37,95 @@ const PROFILE_FIELDS = [
   ["reviewUrl", "Review link", "url"],
 ] as const;
 
+const DAYS = [
+  ["mon", "Monday"], ["tue", "Tuesday"], ["wed", "Wednesday"], ["thu", "Thursday"],
+  ["fri", "Friday"], ["sat", "Saturday"], ["sun", "Sunday"],
+] as const;
+
 function hoursSummary(hours: Settings["businessHours"]): string {
   const days = Object.entries(hours).filter(([, v]) => v.length);
   if (!days.length) return "";
   return days.map(([d, v]) => `${d[0].toUpperCase()}${d.slice(1)} ${v.map((i) => `${i.start}–${i.end}`).join(", ")}`).join(" · ");
+}
+
+const LOGO_TYPES = "image/png,image/jpeg,image/webp";
+
+/** Workspace logo: shown through a short-lived signed URL; owners/admins upload or remove it. */
+function LogoField({ canEdit }: { canEdit: boolean }) {
+  const [url, setUrl] = useState<string | null | undefined>(undefined);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api("/api/settings/logo").then(({ body }) => {
+      if (body.ok) setUrl((body.logo as { url: string } | null)?.url ?? null);
+      else setUrl(null);
+    });
+  }, []);
+
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setMessage(null);
+    const res = await fetch("/api/settings/logo", { method: "PUT", headers: { "Content-Type": file.type }, body: file });
+    const body = await res.json().catch(() => ({ ok: false }));
+    setBusy(false);
+    if (body.ok) {
+      setUrl(body.logo?.url ?? null);
+      setMessage({ tone: "ok", text: "Logo updated." });
+    } else setMessage({ tone: "error", text: failure(body, "Could not upload the logo.") });
+  }
+
+  async function remove() {
+    setBusy(true);
+    setMessage(null);
+    const { body } = await api("/api/settings/logo", { method: "DELETE" });
+    setBusy(false);
+    if (body.ok) {
+      setUrl(null);
+      setMessage({ tone: "ok", text: "Logo removed." });
+    } else setMessage({ tone: "error", text: failure(body, "Could not remove the logo.") });
+  }
+
+  return (
+    <div aria-label="Business logo" role="group" style={{ marginBottom: "0.5rem" }}>
+      {message ? (
+        <div className={`banner ${message.tone === "error" ? "error" : "gold"}`} role={message.tone === "error" ? "alert" : "status"}>
+          {message.text}
+        </div>
+      ) : null}
+      <label htmlFor={canEdit ? "biz-logo" : undefined}>Logo</label>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+        {url ? (
+          // eslint-disable-next-line @next/next/no-img-element -- short-lived signed Storage URL
+          <img src={url} alt="Business logo" width={56} height={56} style={{ objectFit: "contain", borderRadius: 8, border: "1px solid var(--line, #e5e5e5)" }} />
+        ) : (
+          <span className="muted">{url === undefined ? "Loading…" : "No logo yet"}</span>
+        )}
+        {canEdit ? (
+          <>
+            <input
+              id="biz-logo"
+              type="file"
+              accept={LOGO_TYPES}
+              disabled={busy}
+              onChange={(e) => {
+                void upload(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+              style={{ width: "auto" }}
+            />
+            {url ? (
+              <button type="button" className="btn secondary sm" onClick={() => void remove()} disabled={busy}>
+                Remove logo
+              </button>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+      {canEdit ? <p className="muted" style={{ margin: "0.3rem 0 0" }}>PNG, JPEG, or WebP, under 2 MB.</p> : null}
+    </div>
+  );
 }
 
 export function NativeBusinessProfile({ canEdit }: { canEdit: boolean }) {
@@ -71,6 +156,7 @@ export function NativeBusinessProfile({ canEdit }: { canEdit: boolean }) {
         websiteUrl: blank(form.websiteUrl),
         bookingUrl: blank(form.bookingUrl),
         reviewUrl: blank(form.reviewUrl),
+        businessHours: Object.fromEntries(DAYS.map(([d]) => [d, form.businessHours[d] ?? []])),
       }),
     });
     setBusy(false);
@@ -88,6 +174,7 @@ export function NativeBusinessProfile({ canEdit }: { canEdit: boolean }) {
 
   return (
     <Card title="Business Profile">
+      <LogoField canEdit={canEdit} />
       <form onSubmit={save} aria-label="Business profile">
         {message ? (
           <div className={`banner ${message.tone === "error" ? "error" : "gold"}`} role={message.tone === "error" ? "alert" : "status"}>
@@ -98,16 +185,57 @@ export function NativeBusinessProfile({ canEdit }: { canEdit: boolean }) {
         <input id="biz-name" value={form?.businessName ?? ""} onChange={set("businessName")} disabled={disabled} required maxLength={120} />
         <label htmlFor="biz-tz">Timezone</label>
         <input id="biz-tz" value={form?.timezone ?? ""} onChange={set("timezone")} disabled={disabled} required maxLength={64} />
-        <label htmlFor="biz-hours">Business hours</label>
-        <input
-          id="biz-hours"
-          value={form ? hoursSummary(form.businessHours) : ""}
-          placeholder="Not set yet"
-          disabled
-          aria-disabled="true"
-          title="Editing business hours is not available yet"
-          readOnly
-        />
+        {canEdit && form ? (
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend style={{ padding: 0, fontSize: "0.9rem", margin: "0.85rem 0 0.3rem", color: "var(--ink)" }}>Business hours</legend>
+            {DAYS.map(([day, label]) => {
+              const first = form.businessHours[day]?.[0];
+              const setDay = (next: { start: string; end: string } | null) =>
+                setForm((f) => {
+                  if (!f) return f;
+                  const rest = f.businessHours[day]?.slice(1) ?? [];
+                  return { ...f, businessHours: { ...f.businessHours, [day]: next ? [next, ...rest] : [] } };
+                });
+              return (
+                <div key={day} style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.3rem 0" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", minWidth: "6.5rem", margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(first)}
+                      onChange={(e) => setDay(e.target.checked ? { start: "09:00", end: "17:00" } : null)}
+                      disabled={disabled}
+                      style={{ width: "auto" }}
+                    />
+                    {label}
+                  </label>
+                  {first ? (
+                    <>
+                      <input type="time" aria-label={`${label} opens`} value={first.start} required disabled={disabled}
+                        onChange={(e) => setDay({ ...first, start: e.target.value })} style={{ width: "auto" }} />
+                      <span aria-hidden="true">–</span>
+                      <input type="time" aria-label={`${label} closes`} value={first.end} required disabled={disabled}
+                        onChange={(e) => setDay({ ...first, end: e.target.value })} style={{ width: "auto" }} />
+                    </>
+                  ) : (
+                    <span className="muted">Closed</span>
+                  )}
+                </div>
+              );
+            })}
+          </fieldset>
+        ) : (
+          <>
+            <label htmlFor="biz-hours">Business hours</label>
+            <input
+              id="biz-hours"
+              value={form ? hoursSummary(form.businessHours) : ""}
+              placeholder="Not set yet"
+              disabled
+              aria-disabled="true"
+              readOnly
+            />
+          </>
+        )}
         {PROFILE_FIELDS.map(([key, label, type]) => (
           <div key={key}>
             <label htmlFor={`biz-${key}`}>{label}</label>
@@ -186,7 +314,107 @@ export function NativeIntegrations({ pipelineName, stagesCount }: { pipelineName
 // Team / Staff
 // ---------------------------------------------------------------------------
 
-export type TeamMember = { userId: string; name: string; email: string; role: Role; joinedAt: string };
+export type TeamMember = {
+  userId: string;
+  name: string;
+  email: string;
+  role: Role;
+  joinedAt: string;
+  overrides?: Record<string, boolean>;
+};
+
+/** Employee base permissions (role_permissions, migration M2); tests keep this in sync. */
+export const EMPLOYEE_BASE = [
+  "dashboard.read", "contacts.read", "contacts.write", "pipeline.read", "opportunities.write",
+  "calendar.read", "appointments.write", "conversations.read", "conversations.write", "tasks.read", "tasks.write",
+  "reviews.read", "reports.read", "automations.read", "marketing.read", "payments.read", "settings.read", "team.read",
+];
+
+/** Permissions an owner or admin may allow or deny for one employee (never team.* or integrations.manage). */
+export const OVERRIDABLE: [string, string][] = [
+  ["contacts.read", "View contacts"],
+  ["contacts.write", "Add and edit contacts"],
+  ["contacts.delete", "Delete contacts"],
+  ["pipeline.read", "View pipeline"],
+  ["opportunities.write", "Add and move opportunities"],
+  ["opportunities.delete", "Delete opportunities"],
+  ["pipeline.configure", "Configure the pipeline"],
+  ["calendar.read", "View calendars"],
+  ["appointments.write", "Book and change appointments"],
+  ["calendar.configure", "Configure calendars and availability"],
+  ["conversations.read", "View the inbox"],
+  ["conversations.write", "Reply in the inbox"],
+  ["tasks.read", "View tasks"],
+  ["tasks.write", "Add and complete tasks"],
+  ["reviews.read", "View reviews"],
+  ["reports.read", "View reports"],
+  ["settings.write", "Edit the business profile"],
+  ["ai_receptionist.read", "View AI receptionist settings"],
+  ["ai_receptionist.write", "Edit AI receptionist settings"],
+  ["integrations.read", "View integrations"],
+  ["audit.read", "View recent changes"],
+  ["onboarding.read", "View onboarding"],
+  ["library.read", "View the library"],
+];
+
+type OverrideChoice = "default" | "allow" | "deny";
+
+function PermissionsEditor({ member, onClose, onSaved }: { member: TeamMember; onClose: () => void; onSaved: (text: string) => void }) {
+  const initial = (perm: string): OverrideChoice =>
+    member.overrides?.[perm] === true ? "allow" : member.overrides?.[perm] === false ? "deny" : "default";
+  const [choice, setChoice] = useState<Record<string, OverrideChoice>>(() =>
+    Object.fromEntries(OVERRIDABLE.map(([p]) => [p, initial(p)])));
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    const changes = Object.fromEntries(
+      OVERRIDABLE.filter(([p]) => choice[p] !== initial(p))
+        .map(([p]) => [p, choice[p] === "default" ? null : choice[p] === "allow"]));
+    if (!Object.keys(changes).length) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const { body } = await api(`/api/team/${member.userId}`, { method: "PATCH", body: JSON.stringify({ overrides: changes }) });
+    setBusy(false);
+    if (body.ok) onSaved(`Permissions updated for ${member.name || member.email}.`);
+    else setError(failure(body, "Could not update the permissions."));
+  }
+
+  return (
+    <form onSubmit={save} aria-label={`Permissions for ${member.email}`}>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Adjust what {member.name || member.email} can do beyond the Employee role. Changes apply on their next request.
+      </p>
+      {error ? <div className="banner error" role="alert">{error}</div> : null}
+      <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+        {OVERRIDABLE.map(([perm, label]) => (
+          <div key={perm} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem" }}>
+            <label htmlFor={`ovr-${perm}`} style={{ margin: "0.35rem 0" }}>{label}</label>
+            <select
+              id={`ovr-${perm}`}
+              value={choice[perm]}
+              onChange={(e) => setChoice((c) => ({ ...c, [perm]: e.target.value as OverrideChoice }))}
+              disabled={busy}
+              style={{ width: "auto" }}
+            >
+              <option value="default">Role default ({EMPLOYEE_BASE.includes(perm) ? "allowed" : "not allowed"})</option>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </select>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1rem" }}>
+        <button type="button" className="btn secondary" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="submit" className="btn" disabled={busy}>{busy ? "Saving…" : "Save permissions"}</button>
+      </div>
+    </form>
+  );
+}
 type Invitation = { id: string; email: string; role: Role; expiresAt: string; status: string };
 
 export function useTeam(enabled: boolean) {
@@ -222,6 +450,7 @@ export function NativeTeam({
   const [role, setRole] = useState<Role>(invitable[0] ?? "employee");
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<TeamMember | null>(null);
+  const [editing, setEditing] = useState<TeamMember | null>(null);
 
   const loadInvites = useCallback(async () => {
     const { body } = await api("/api/team/invitations");
@@ -308,13 +537,18 @@ export function NativeTeam({
             ) : (
               <span key="role">{ROLE_LABEL[m.role]}{m.userId === myUserId ? " (you)" : ""}</span>
             ),
-            canRemove(m) ? (
-              <button key="rm" type="button" className="btn secondary sm" onClick={() => setRemoving(m)} aria-label={`Remove ${m.email}`}>
-                Remove
-              </button>
-            ) : (
-              ""
-            ),
+            <span key="actions" style={{ display: "inline-flex", gap: "0.4rem" }}>
+              {m.role === "employee" && m.userId !== myUserId && can("team.manage_overrides") ? (
+                <button type="button" className="btn secondary sm" onClick={() => setEditing(m)} aria-label={`Permissions for ${m.email}`}>
+                  Permissions{m.overrides && Object.keys(m.overrides).length ? ` (${Object.keys(m.overrides).length})` : ""}
+                </button>
+              ) : null}
+              {canRemove(m) ? (
+                <button type="button" className="btn secondary sm" onClick={() => setRemoving(m)} aria-label={`Remove ${m.email}`}>
+                  Remove
+                </button>
+              ) : null}
+            </span>,
           ])}
         />
       ) : (
@@ -377,6 +611,21 @@ export function NativeTeam({
           <button type="button" className="btn secondary" onClick={() => setRemoving(null)}>Cancel</button>
           <button type="button" className="btn" onClick={() => void confirmRemove()}>Remove</button>
         </div>
+      </Modal>
+
+      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title="Employee permissions">
+        {editing ? (
+          <PermissionsEditor
+            key={editing.userId}
+            member={editing}
+            onClose={() => setEditing(null)}
+            onSaved={(text) => {
+              setEditing(null);
+              setMessage({ tone: "ok", text });
+              void team.reload();
+            }}
+          />
+        ) : null}
       </Modal>
     </Card>
   );

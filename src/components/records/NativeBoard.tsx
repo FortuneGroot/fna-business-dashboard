@@ -207,3 +207,63 @@ export function EditOpportunity({ id, stages, canDelete }: { id: string; stages:
     </>
   );
 }
+
+type StageItem = { id: string; title: string; valueCents: number; contactName: string | null };
+
+/** Opportunities of one stage beyond those the board renders, paged from /api/opportunities?stageId=. */
+export function StageMore({
+  stageId,
+  hidden,
+  shownIds,
+  stages,
+  canEdit,
+  canDelete,
+}: {
+  stageId: string;
+  hidden: number;
+  shownIds: string[];
+  stages: BoardStage[];
+  canEdit: boolean;
+  canDelete: boolean;
+}) {
+  const [items, setItems] = useState<StageItem[] | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load(after: string | null) {
+    setBusy(true);
+    setError("");
+    const q = new URLSearchParams({ stageId, limit: "50" });
+    if (after) q.set("cursor", after);
+    const { body } = await api(`/api/opportunities?${q}`);
+    setBusy(false);
+    if (!body.ok) {
+      setError(failure(body, "Could not load more opportunities."));
+      return;
+    }
+    const page = (body.items as StageItem[]).filter((o) => !shownIds.includes(o.id));
+    setItems((prev) => [...(after && prev ? prev : []), ...page]);
+    setCursor((body.nextCursor as string | null) ?? null);
+  }
+
+  return (
+    <>
+      {items?.map((o) => (
+        <li key={o.id} className="muted">
+          {o.title} · {dollars(o.valueCents)}
+          {o.contactName ? ` · ${o.contactName}` : ""}
+          {canEdit ? <EditOpportunity id={o.id} stages={stages} canDelete={canDelete} /> : null}
+        </li>
+      ))}
+      {error ? <li className="muted" role="alert">{error}</li> : null}
+      {items === null || cursor ? (
+        <li style={{ listStyle: "none", marginLeft: "-1.1rem", marginTop: "0.4rem" }}>
+          <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void load(items === null ? null : cursor)}>
+            {busy ? "Loading…" : items === null ? `Show ${hidden} more` : "Show more"}
+          </button>
+        </li>
+      ) : null}
+    </>
+  );
+}

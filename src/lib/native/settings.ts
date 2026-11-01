@@ -143,8 +143,8 @@ export async function getWorkspaceSettings(scope: DataScope): Promise<WorkspaceS
 }
 
 /**
- * Updates through RLS with the caller's JWT (settings.write; column grants exclude logo and
- * attribution). The database stamps updated_by and records the change (M17).
+ * Updates through RLS with the caller's JWT (settings.write; column grants exclude attribution;
+ * logo_path is set only by /api/settings/logo). The database stamps updated_by and records the change (M17).
  */
 export async function updateWorkspaceSettings(
   scope: DataScope,
