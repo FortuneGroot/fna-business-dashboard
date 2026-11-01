@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import {
-  accept, adminCount, asAnon, asUser, buildWorld, createUser, invite, makePlatformAdmin, rpc, type TestUser, type World,
+  accept, adminCount, asAnon, asServiceRole, asUser, buildWorld, createUser, invite, makePlatformAdmin, rpc,
+  type TestUser, type World,
 } from "./harness";
 
 // P2 RPCs (migration 20261101001500): the session's workspace list and the audit RPCs behind the
@@ -24,8 +25,22 @@ const grant = (mode: "read" | "write", ws = w.wsA) =>
 const revoke = (id: string) => asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [id]));
 const requested = (u: TestUser, op: string, path: string) =>
   asUser(w.db, u, (q) => rpc<number>(q, "platform_storage_change_requested", [op, path]));
-const finished = (u: TestUser, id: number, ok: boolean) =>
-  asUser(w.db, u, (q) => rpc(q, "platform_storage_change_finished", [id, ok]));
+const claim = (id: number, actor: TestUser) =>
+  asServiceRole(w.db, (q) => rpc(q, "platform_storage_change_claimed", [id, actor.id]));
+/** What the server does: request (user JWT), claim (service role); returns the request id. */
+const start = async (op: string, path: string) => {
+  const id = Number(await requested(w.platform, op, path));
+  await claim(id, w.platform);
+  return id;
+};
+const finished = (id: number, actor: TestUser) =>
+  asServiceRole(w.db, (q) => rpc<string>(q, "platform_storage_change_finished", [id, actor.id]));
+const putObject = (path: string) =>
+  asServiceRole(w.db, (q) => q.query(
+    `insert into storage.objects (bucket_id, name) values ('workspace-assets', $1)
+     on conflict (bucket_id, name) do update set updated_at = clock_timestamp()`, [path]));
+const removeObject = (path: string) =>
+  asServiceRole(w.db, (q) => q.query("delete from storage.objects where bucket_id = 'workspace-assets' and name = $1", [path]));
 const lastAuditId = () => adminCount(w.db, "select coalesce(max(id), 0) n from public.workspace_audit_log");
 const auditSince = async (since: number) =>
   (await w.db.query<{ id: number; workspace_id: string; actor_id: string; actor_kind: string; grant_id: string | null;
@@ -119,47 +134,118 @@ describe("P2: audited platform Storage change RPCs", () => {
     }
   });
 
-  test("a request and its outcome are audited with actor, grant, operation, and object path", async () => {
+  test("outcomes are derived from Storage: request, write, and outcome audited with actor, grant, operation, path", async () => {
+    const g = await grant("write");
+    const since = await lastAuditId();
+    const ids: number[] = [];
+    try {
+      ids.push(await start("upsert", logo()));
+      await putObject(logo());
+      assert.equal(await finished(ids[0], w.platform), "succeeded", "object created after the request");
+      ids.push(await start("upsert", logo()));
+      await putObject(logo());
+      assert.equal(await finished(ids[1], w.platform), "succeeded", "existing object replaced after the request");
+      ids.push(await start("upsert", logo()));
+      assert.equal(await finished(ids[2], w.platform), "failed", "no Storage change → failed, whatever the caller claims");
+      ids.push(await start("delete", logo()));
+      await removeObject(logo());
+      assert.equal(await finished(ids[3], w.platform), "succeeded", "object removed after the request");
+      ids.push(await start("delete", logo()));
+      assert.equal(await finished(ids[4], w.platform), "failed", "deleting an absent object is not a success");
+    } finally {
+      await revoke(g.id);
+      await removeObject(logo());
+    }
+    const rows = (await auditSince(since)).filter((r) => r.action.startsWith("storage."));
+    const base = { bucket_id: "workspace-assets", object_path: logo(), via: "platform_endpoint" };
+    const expected = (op: string, outcome: string, i: number) => [
+      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: `storage.object_${op}`,
+        target: `workspace-assets/${logo()}`, metadata: { ...base, operation: op, outcome: "requested" } },
+      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: `storage.object_${op}`,
+        target: `workspace-assets/${logo()}`,
+        metadata: { ...base, operation: op, outcome, request_id: String(ids[i]), recorded_by: "server" } },
+    ];
+    assert.deepEqual(rows.map((r) => ({ ws: r.workspace_id, actor: r.actor_id, kind: r.actor_kind, grant: r.grant_id,
+      action: r.action, target: r.target, metadata: { ...r.metadata, object_before: undefined } })).map((r) =>
+      JSON.parse(JSON.stringify(r))), [
+      ...expected("upsert", "succeeded", 0), ...expected("upsert", "succeeded", 1), ...expected("upsert", "failed", 2),
+      ...expected("delete", "succeeded", 3), ...expected("delete", "failed", 4),
+    ]);
+    assert.equal((rows[0].metadata as Record<string, unknown>).object_before, null, "request rows snapshot the prior state");
+    assert.equal(typeof (rows[2].metadata as Record<string, unknown>).object_before, "object");
+  });
+
+  test("outcomes are server-only: platform admins, members, and anon cannot record or fabricate them", async () => {
     const g = await grant("write");
     const since = await lastAuditId();
     let id: number;
     try {
       id = Number(await requested(w.platform, "upsert", logo()));
-      await finished(w.platform, id, true);
-      const del = Number(await requested(w.platform, "delete", logo()));
-      await finished(w.platform, del, false);
     } finally {
       await revoke(g.id);
     }
-    const rows = (await auditSince(since)).filter((r) => r.action.startsWith("storage."));
-    const base = { operation: "upsert", bucket_id: "workspace-assets", object_path: logo(), via: "platform_endpoint" };
-    assert.deepEqual(rows.map((r) => ({ ws: r.workspace_id, actor: r.actor_id, kind: r.actor_kind, grant: r.grant_id,
-      action: r.action, target: r.target, metadata: r.metadata })), [
-      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: "storage.object_upsert",
-        target: `workspace-assets/${logo()}`, metadata: { ...base, outcome: "requested" } },
-      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: "storage.object_upsert",
-        target: `workspace-assets/${logo()}`, metadata: { ...base, outcome: "succeeded", request_id: String(id!) } },
-      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: "storage.object_delete",
-        target: `workspace-assets/${logo()}`, metadata: { ...base, operation: "delete", outcome: "requested" } },
-      { ws: w.wsA, actor: w.platform.id, kind: "platform_admin", grant: g.id, action: "storage.object_delete",
-        target: `workspace-assets/${logo()}`, metadata: { ...base, operation: "delete", outcome: "failed", request_id: String(rows[2]?.id) } },
-    ]);
+    for (const fn of ["platform_storage_change_claimed", "platform_storage_change_finished"]) {
+      for (const [who, call] of [
+        ["the requesting platform admin", () => asUser(w.db, w.platform, (q) => rpc(q, fn, [id, w.platform.id]))],
+        ["a member", () => asUser(w.db, w.ownerA, (q) => rpc(q, fn, [id, w.platform.id]))],
+        ["anon", () => asAnon(w.db, (q) => rpc(q, fn, [id, w.platform.id]))],
+      ] as const) {
+        await assert.rejects(call(), /permission denied/, `${fn}: ${who}`);
+      }
+    }
+    await assert.rejects(finished(id, w.platform), /not_found/, "an unclaimed request (no server write) never gets an outcome");
+    await assert.rejects(asUser(w.db, w.platform, (q) => q.query("select public.platform_storage_change_finished($1, true)", [id])),
+      /does not exist/, "the client-controlled (bigint, boolean) signature is gone");
+    await assert.rejects(asUser(w.db, w.platform, (q) => q.query(
+      `insert into public.workspace_audit_log (workspace_id, actor_id, actor_kind, action, metadata)
+       values ($1, $2, 'platform_admin', 'storage.object_upsert', '{"outcome":"succeeded"}')`, [w.wsA, w.platform.id])),
+      /permission denied/, "clients cannot insert audit rows directly");
+    assert.deepEqual((await auditSince(since)).filter((r) => r.metadata.outcome !== "requested" && r.action.startsWith("storage.")), []);
   });
 
-  test("each request gets exactly one outcome, only from its own requester; the outcome survives revocation", async () => {
+  test("completion is idempotent, bound to the requester, needs no live grant, and stays recoverable", async () => {
     const g = await grant("write");
-    const id = Number(await requested(w.platform, "upsert", logo()));
-    await revoke(g.id);
-    await assert.rejects(finished(w.ownerA, id, true), /forbidden/, "a non-platform user cannot record outcomes");
+    const id = await start("upsert", logo());
     const other = await createUser(w.db, "platform-other@example.test", "aal2");
     await makePlatformAdmin(w.db, other);
-    await assert.rejects(finished(other, id, true), /not_found/, "another platform admin cannot record this outcome");
-    await finished(w.platform, id, true);
-    await assert.rejects(finished(w.platform, id, true), /conflict/, "a second outcome is refused");
-    await assert.rejects(finished(w.platform, 987654321, true), /not_found/);
-    const outcomes = await adminCount(w.db,
-      "select count(*) n from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(id)]);
-    assert.equal(outcomes, 1);
+    try {
+      // One open change per object: a second claim waits until the first is recovered.
+      const second = Number(await requested(w.platform, "upsert", logo()));
+      await assert.rejects(claim(second, w.platform), /conflict/, "another change to the same object is pending");
+      await assert.rejects(claim(id, w.platform), /conflict/, "a request is claimed once");
+      await assert.rejects(claim(id, other), /not_found/, "only for the requester");
+      await putObject(logo());
+      await revoke(g.id);
+      await assert.rejects(finished(id, other), /not_found/, "another admin's id cannot complete this request");
+      await assert.rejects(finished(987654321, w.platform), /not_found/);
+      await assert.rejects(asServiceRole(w.db, (q) => rpc(q, "platform_storage_change_finished", [null, w.platform.id])), /validation_failed/);
+      // A pending request has no outcome until the server records one; it is not lost.
+      assert.equal(await adminCount(w.db,
+        "select count(*) n from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(id)]), 0);
+      assert.equal(await finished(id, w.platform), "succeeded", "recovered after revocation");
+      await removeObject(logo());
+      assert.equal(await finished(id, w.platform), "succeeded", "a retry returns the recorded outcome, not a new one");
+      assert.equal(await adminCount(w.db,
+        "select count(*) n from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(id)]), 1);
+    } finally {
+      await removeObject(logo());
+    }
+  });
+
+  test("a direct requested call is never completed, even if the object changes for another reason", async () => {
+    const g = await grant("write");
+    try {
+      const spoof = Number(await requested(w.platform, "upsert", logo()));
+      const real = await start("upsert", logo());
+      await putObject(logo());
+      assert.equal(await finished(real, w.platform), "succeeded");
+      await assert.rejects(finished(spoof, w.platform), /not_found/);
+      assert.equal(await adminCount(w.db,
+        "select count(*) n from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(spoof)]), 0);
+    } finally {
+      await revoke(g.id);
+      await removeObject(logo());
+    }
   });
 
   test("audit rows written by these RPCs are append-only for clients", async () => {

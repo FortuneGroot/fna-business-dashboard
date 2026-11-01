@@ -567,6 +567,40 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       assert.equal((await appFetch(app, "/api/auth/me", { cookie: ownerCookie })).body.user?.id, ownerA.id);
     });
 
+    test("refreshed sessions reach the browser: expired access token + valid refresh token (finding 3)", async () => {
+      for (const path of ["/api/auth/me", "/api/tenant/config", "/api/workspaces"]) {
+        const { name, session } = readSessionCookie(await appLogin(app, ownerA));
+        const now = Math.floor(Date.now() / 1000);
+        const expired = { ...session, expires_at: now - 3600,
+          access_token: signJwt(env.jwtSecret, { ...jwtPayload(session.access_token), iat: now - 7200, exp: now - 3600 }) };
+        const r = await appFetch(app, path, { cookie: sessionCookie(name, expired) });
+        assert.equal(r.status, 200, `${path}: ${r.status} ${r.text.slice(0, 160)}`);
+        if (path === "/api/auth/me") assert.equal(r.body.user?.id, ownerA.id);
+        assert.ok(r.setCookies.some((c) => /^sb-.+-auth-token/.test(c)), `${path}: the refreshed session cookie is sent`);
+        const fresh = readSessionCookie(cookieHeader(r.setCookies)).session;
+        assert.notEqual(fresh.refresh_token, session.refresh_token, `${path}: rotated refresh token`);
+        assert.ok(fresh.expires_at > now, `${path}: new access token is current`);
+        const next = await appFetch(app, "/api/auth/me", { cookie: cookieHeader(r.setCookies) });
+        assert.equal(next.body.user?.id, ownerA.id, `${path}: the browser's next request works with the new cookie`);
+      }
+    });
+
+    test("JSON bodies must be objects with correctly typed fields (finding 4)", async () => {
+      const raw = (path: string, body: string, cookie?: string) =>
+        appFetch(app, path, { method: "POST", body, contentType: "application/json", cookie });
+      for (const body of ["null", "[]", "42", "\"x\"", "{bad", JSON.stringify({ email: 1, password: "x" }),
+        JSON.stringify({ email: ownerA.email, password: { $ne: "" } }), JSON.stringify({ email: [ownerA.email], password: ownerA.password })]) {
+        const r = await raw("/api/auth/login", body);
+        assert.deepEqual([r.status, r.body?.code], [400, "validation_failed"], `login ${body}`);
+      }
+      const cookie = await appLogin(app, ownerA);
+      for (const body of ["null", "[]", "42", JSON.stringify({ workspaceId: 1 }), JSON.stringify({ workspaceId: null }),
+        JSON.stringify({ workspaceId: [wsA] })]) {
+        const r = await raw("/api/workspaces/active", body, cookie);
+        assert.deepEqual([r.status, r.body?.code], [422, "validation_failed"], `switch ${body}`);
+      }
+    });
+
     test("signed-out requests: protected pages 307 to /login?next=…, protected APIs 401 JSON", async () => {
       const page = await appFetch(app, "/contacts");
       assert.equal(page.status, 307);
@@ -755,7 +789,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
 
         const ok = await put(adminCookie);
         assert.equal(ok.status, 200, ok.text);
-        assert.deepEqual(ok.body, { ok: true, objectPath: logoPath });
+        assert.deepEqual(ok.body, { ok: true, objectPath: logoPath, requestId: ok.body.requestId, outcome: "succeeded" });
         const stored = await storage(env, ownerA.token, "GET", `workspace-assets/${logoPath}`);
         assert.equal(stored.status, 200, "the owner can read the logo the platform admin uploaded");
         const del = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
@@ -770,6 +804,59 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
           ["storage.object_delete", "requested", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
           ["storage.object_delete", "succeeded", `workspace-assets/${logoPath}`, admin.id, "platform_admin", "platform_endpoint"],
         ]);
+        assert.ok(audit.filter((a) => a.metadata.outcome !== "requested").every((a) => a.metadata.recorded_by === "server"));
+
+        // Finding 1: outcomes are server-only. The platform admin's own JWT cannot record or fabricate one,
+        // and the old client-controlled (bigint, boolean) signature no longer exists.
+        const fabricate = await rpc(env, aal2.access_token, "platform_storage_change_finished",
+          { p_request_id: ok.body.requestId, p_actor_id: admin.id });
+        assert.ok(fabricate.status === 401 || fabricate.status === 403, `direct completion: ${fabricate.status} ${fabricate.text}`);
+        const oldSignature = await rpc(env, aal2.access_token, "platform_storage_change_finished",
+          { p_request_id: ok.body.requestId, p_succeeded: true });
+        assert.equal(oldSignature.status, 404, oldSignature.text);
+        const spoofRequest = await rpc(env, aal2.access_token, "platform_storage_change_requested",
+          { p_operation: "upsert", p_object_path: logoPath });
+        assert.equal(spoofRequest.status, 200, "a request alone is allowed (it is only a request)");
+        const outcomeRows = async (id: number) => (await db.query(
+          "select metadata ->> 'outcome' o from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(id)])).rows;
+        assert.deepEqual(await outcomeRows(spoofRequest.body), [], "a client cannot complete it");
+        const directClaim = await rpc(env, aal2.access_token, "platform_storage_change_claimed",
+          { p_request_id: spoofRequest.body, p_actor_id: admin.id });
+        assert.ok(directClaim.status === 401 || directClaim.status === 403, `direct claim: ${directClaim.status}`);
+
+        // Finding 2: completion failure is explicit and recoverable. Make the completion RPC fail for the
+        // server, perform a real change, then restore it and recover the pending request.
+        let pendingId = 0;
+        await db.query("revoke execute on function public.platform_storage_change_finished(bigint, uuid) from service_role");
+        try {
+          const pending = await put(adminCookie);
+          assert.equal(pending.status, 503, pending.text);
+          assert.equal(pending.body.code, "audit_pending");
+          pendingId = pending.body.requestId;
+          assert.ok(Number.isSafeInteger(pendingId) && pendingId > 0);
+          assert.deepEqual(await outcomeRows(pendingId), [], "no outcome guessed while completion is down");
+          const stored2 = await db.query("select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and name = $1", [logoPath]);
+          assert.equal(stored2.rows[0].n, 1, "the change itself happened");
+          const stillDown = await appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId: pendingId } });
+          assert.deepEqual([stillDown.status, stillDown.body.code], [503, "audit_pending"]);
+          const blocked = await put(adminCookie);
+          assert.deepEqual([blocked.status, blocked.body.code], [409, "change_pending"], "no new change while one is pending");
+        } finally {
+          await db.query("grant execute on function public.platform_storage_change_finished(bigint, uuid) to service_role");
+        }
+        const recovered = await appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId: pendingId } });
+        assert.equal(recovered.status, 200, recovered.text);
+        assert.deepEqual(recovered.body, { ok: true, requestId: pendingId, outcome: "succeeded" });
+        const again = await appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId: pendingId } });
+        assert.deepEqual(again.body, recovered.body, "recovery is idempotent");
+        assert.deepEqual(await outcomeRows(pendingId), [{ o: "succeeded" }], "exactly one outcome");
+        const spoofDone = await appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId: spoofRequest.body } });
+        assert.deepEqual([spoofDone.status, spoofDone.body.code], [404, "not_found"],
+          "a request the server never claimed gets no outcome, although the object changed meanwhile");
+        assert.deepEqual(await outcomeRows(spoofRequest.body), []);
+        const cleanup = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
+        assert.equal(cleanup.status, 200, cleanup.text);
+        const auditCount = (await storageAudit(writeGrant)).length;
 
         // A password (AAL1) session of the same platform admin is not a platform admin.
         const aal1Cookie = await appLogin(app, admin);
@@ -781,13 +868,14 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.equal((await appFetch(app, "/api/auth/logout", { method: "POST", cookie: adminCookie })).status, 200);
         const loggedOut = await put(adminCookie);
         assert.deepEqual([loggedOut.status, loggedOut.body.code], [401, "unauthenticated"], loggedOut.text);
-        assert.equal((await storageAudit(writeGrant)).length, 4, "a logged-out session records nothing");
+        assert.equal((await storageAudit(writeGrant)).length, auditCount, "a logged-out session records nothing");
       } finally {
         await revoke(writeGrant);
       }
+      const total = (await storageAudit(writeGrant)).length;
       const afterRevoke = await put(adminCookie);
       assert.equal(afterRevoke.status, 403, afterRevoke.text);
-      assert.equal((await storageAudit(writeGrant)).length, 4, "nothing is recorded after revocation");
+      assert.equal((await storageAudit(writeGrant)).length, total, "nothing is recorded after revocation");
     });
 
     // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit

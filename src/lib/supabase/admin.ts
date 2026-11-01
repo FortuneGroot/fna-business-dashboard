@@ -10,6 +10,10 @@ import { createClient } from "@supabase/supabase-js";
  *    passed requireApiContext as a platform admin holding a live write grant, re-checked the session
  *    with getUser(), and rpc platform_storage_change_requested (run with the caller's JWT) authorized
  *    and audited this exact path. The workspace id comes from the request context, never the client.
+ * A5 claimPlatformStorageChange / completePlatformStorageChange — claim a request for execution and
+ *    record its outcome through the service-role-only rpcs platform_storage_change_claimed/_finished;
+ *    the outcome is derived from the Storage object itself. Guard: the actor id comes from the
+ *    caller's verified request context.
  */
 
 export const WORKSPACE_ASSETS_BUCKET = "workspace-assets";
@@ -27,10 +31,64 @@ function adminClient() {
   const url = (process.env.SUPABASE_URL || "").trim().replace(/\/$/, "");
   const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
   if (!url || !key) throw new Error("Supabase service role is not configured");
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    // Bounded, so a pending request is never still in flight when its outcome is recovered.
+    global: { fetch: (input, init) => fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS) }) },
+  });
 }
 
-/** A5. Upserts `{workspaceId}/logo.{ext}`. Returns false on failure; never throws key material. */
+const REQUEST_TIMEOUT_MS = 30_000;
+const COMPLETION_RETRY_DELAYS_MS = [100, 300];
+
+export type ClaimResult = { ok: true } | { ok: false; code: "conflict" | "not_found" | "unavailable" };
+
+/**
+ * A5. Claims request `requestId` by `actorId` for execution, immediately before the write. Only claimed
+ * requests can receive an outcome. `conflict`: another change to the same object is still pending.
+ */
+export async function claimPlatformStorageChange(requestId: number, actorId: string): Promise<ClaimResult> {
+  try {
+    const { error } = await adminClient().rpc("platform_storage_change_claimed", {
+      p_request_id: requestId,
+      p_actor_id: actorId,
+    });
+    if (!error) return { ok: true };
+    if (error.message === "conflict") return { ok: false, code: "conflict" };
+    if (error.message === "not_found") return { ok: false, code: "not_found" };
+  } catch {
+    // network failure or timeout
+  }
+  return { ok: false, code: "unavailable" };
+}
+
+export type CompletionResult =
+  | { ok: true; outcome: "succeeded" | "failed" }
+  | { ok: false; code: "not_found" | "unavailable" };
+
+/**
+ * A5. Records the outcome of pending request `requestId` by `actorId`. Retries transient failures;
+ * safe to repeat because the RPC returns an already-recorded outcome instead of writing a second one.
+ */
+export async function completePlatformStorageChange(requestId: number, actorId: string): Promise<CompletionResult> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const { data, error } = await adminClient().rpc("platform_storage_change_finished", {
+        p_request_id: requestId,
+        p_actor_id: actorId,
+      });
+      if (!error && (data === "succeeded" || data === "failed")) return { ok: true, outcome: data };
+      if (error?.message === "not_found") return { ok: false, code: "not_found" };
+    } catch {
+      // network failure or timeout: retried below
+    }
+    if (attempt >= COMPLETION_RETRY_DELAYS_MS.length) return { ok: false, code: "unavailable" };
+    await new Promise((resolve) => setTimeout(resolve, COMPLETION_RETRY_DELAYS_MS[attempt]));
+  }
+}
+
+/** A5. Upserts `{workspaceId}/logo.{ext}`. Returns false on failure; never throws key material. The
+ * audited outcome is decided by the database, not by this return value. */
 export async function platformWriteWorkspaceLogo(
   workspaceId: string,
   ext: LogoExtension,

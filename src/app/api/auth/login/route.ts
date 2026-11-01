@@ -9,6 +9,7 @@ import {
   sessionCookieOptions,
 } from "@/lib/auth";
 import { authProvider, supabaseAuthConfig } from "@/lib/auth/provider";
+import { readJsonObject } from "@/lib/http/json-body";
 import { applyPendingCookies, supabaseForRequest } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -22,14 +23,12 @@ async function supabaseLogin(req: NextRequest): Promise<NextResponse> {
       { status: 503 }
     );
   }
-  let body: { email?: string; password?: string } = {};
-  try {
-    body = await req.json();
-  } catch {
+  const body = await readJsonObject(req);
+  if (!body) {
     return NextResponse.json({ ok: false, error: "Invalid JSON", code: "validation_failed" }, { status: 400 });
   }
-  const email = String(body.email || "").trim();
-  const password = String(body.password || "");
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
   if (!email || !password) {
     return NextResponse.json(
       { ok: false, error: "Email and password required", code: "validation_failed" },
@@ -41,18 +40,21 @@ async function supabaseLogin(req: NextRequest): Promise<NextResponse> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.user) {
     if (error?.status === 429) {
-      return NextResponse.json(
+      return applyPendingCookies(NextResponse.json(
         { ok: false, error: "Too many attempts. Try again later.", code: "rate_limited" },
         { status: 429 }
-      );
+      ), pending);
     }
     if (error && (!error.status || error.status >= 500 || error.name === "AuthRetryableFetchError")) {
-      return NextResponse.json(
+      return applyPendingCookies(NextResponse.json(
         { ok: false, error: "Sign-in is temporarily unavailable. Try again shortly.", code: "unavailable" },
         { status: 503 }
-      );
+      ), pending);
     }
-    return NextResponse.json({ ok: false, error: "Invalid credentials", code: "unauthenticated" }, { status: 401 });
+    return applyPendingCookies(
+      NextResponse.json({ ok: false, error: "Invalid credentials", code: "unauthenticated" }, { status: 401 }),
+      pending
+    );
   }
   const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
   const name = typeof meta.full_name === "string" && meta.full_name.trim() ? meta.full_name.trim() : data.user.email ?? email;
@@ -85,15 +87,13 @@ export async function POST(req: NextRequest) {
     req.headers.get("x-real-ip") ||
     "unknown";
 
-  let body: { email?: string; password?: string } = {};
-  try {
-    body = await req.json();
-  } catch {
+  const body = await readJsonObject(req);
+  if (!body) {
     return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
   }
 
-  const email = String(body.email || "").trim();
-  const password = String(body.password || "");
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
   if (!email || !password) {
     return NextResponse.json({ ok: false, error: "Email and password required" }, { status: 400 });
   }

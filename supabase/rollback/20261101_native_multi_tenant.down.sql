@@ -9,7 +9,10 @@ begin;
 -- M16 (P2)
 drop function if exists public.list_my_workspaces();
 drop function if exists public.platform_storage_change_requested(text, text);
-drop function if exists public.platform_storage_change_finished(bigint, boolean);
+drop function if exists public.platform_storage_change_finished(bigint, uuid);
+drop function if exists public.platform_storage_change_claimed(bigint, uuid);
+drop table if exists private.platform_storage_changes;
+drop function if exists private.workspace_asset_state(text);
 
 -- M13
 do $$

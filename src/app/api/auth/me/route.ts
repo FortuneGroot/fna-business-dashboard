@@ -11,15 +11,18 @@ export const dynamic = "force-dynamic";
 /** AUTH_PROVIDER=supabase: §7.2 contract; signed-out callers get `user: null`. */
 async function supabaseMe(req: NextRequest): Promise<NextResponse> {
   const { requireApiContext, legacyRoleOf } = await import("@/lib/authz/context");
-  const { ctx, error } = await requireApiContext(req, { allowNoWorkspace: true });
+  const { applyPendingCookies } = await import("@/lib/supabase/server");
+  const { ctx, pending, error } = await requireApiContext(req, { allowNoWorkspace: true });
+  // /api/auth/me is public in middleware, so a session refreshed here must reach the browser.
+  const reply = (res: NextResponse) => applyPendingCookies(res, pending);
   if (error && error.status !== 401) {
     const body = await error.json();
     // Misconfigured or unavailable: the login page shows its "sign-in is not available" banner.
-    return NextResponse.json({ ...body, authEnforced: false, authFailClosed: true, user: null }, { status: error.status });
+    return reply(NextResponse.json({ ...body, authEnforced: false, authFailClosed: true, user: null }, { status: error.status }));
   }
   const headers = { "Cache-Control": "private, no-store" };
   if (!ctx) {
-    return NextResponse.json(
+    return reply(NextResponse.json(
       {
         ok: true,
         authEnforced: true,
@@ -32,9 +35,9 @@ async function supabaseMe(req: NextRequest): Promise<NextResponse> {
         grant: null,
       },
       { headers }
-    );
+    ));
   }
-  return NextResponse.json(
+  return reply(NextResponse.json(
     {
       ok: true,
       authEnforced: true,
@@ -47,7 +50,7 @@ async function supabaseMe(req: NextRequest): Promise<NextResponse> {
       grant: ctx.grant ? { mode: ctx.grant.mode, expiresAt: ctx.grant.expiresAt } : null,
     },
     { headers }
-  );
+  ));
 }
 
 export async function GET(req: NextRequest) {

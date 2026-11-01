@@ -5,6 +5,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAuthConfig } from "@/lib/auth/provider";
 import {
+  applyPendingCookies,
   supabaseForRequest,
   supabaseForServerComponent,
   type PendingCookies,
@@ -85,7 +86,11 @@ export type ApiContext = {
   error: NextResponse | null;
 };
 
-/** API variant of requireContext: returns a typed error response instead of redirecting. */
+/**
+ * API variant of requireContext: returns a typed error response instead of redirecting. Session
+ * cookie changes made while loading the context (refresh, sign-out) are already applied to `error`;
+ * handlers must apply `pending` to every other response they return.
+ */
 export async function requireApiContext(req: NextRequest, requirement: ContextRequirement = {}): Promise<ApiContext> {
   const config = supabaseAuthConfig();
   const empty: PendingCookies = { cookies: [], headers: {} };
@@ -95,10 +100,10 @@ export async function requireApiContext(req: NextRequest, requirement: ContextRe
   try {
     ctx = await loadRequestContext(supabase);
   } catch {
-    return { ctx: null, supabase, pending, error: unavailableResponse() };
+    return { ctx: null, supabase, pending, error: applyPendingCookies(unavailableResponse(), pending) };
   }
   const denial = evaluateContext(ctx, requirement);
-  return { ctx, supabase, pending, error: denial ? denialResponse(denial) : null };
+  return { ctx, supabase, pending, error: denial ? applyPendingCookies(denialResponse(denial), pending) : null };
 }
 
 /**

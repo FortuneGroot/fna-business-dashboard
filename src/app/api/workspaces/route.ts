@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const { supabase, pending, error } = await requireApiContext(req, { allowNoWorkspace: true });
   if (error) return error;
   const res = await supabase!.rpc("list_my_workspaces");
-  if (res.error) return unavailableResponse();
+  if (res.error) return applyPendingCookies(unavailableResponse(), pending);
   const workspaces = ((res.data as Item[] | null) ?? []).map((w) => ({
     id: w.id,
     name: w.name,
