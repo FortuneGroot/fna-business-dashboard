@@ -67,6 +67,7 @@ export function dbFailure(error: DbError): ApiError {
   if (code === "23503") return invalid({}, "A referenced record does not exist in this workspace or is not an active member");
   if (code === "23P01") return conflict("This time overlaps another booking on the same calendar", "overlap");
   if (message === "conflict" || code === "23505") return conflict();
+  console.error(`[native-api] unmapped database failure: code=${code || "none"} status=${error?.status ?? "none"}`);
   return new ApiError(503, "unavailable", "Service temporarily unavailable");
 }
 

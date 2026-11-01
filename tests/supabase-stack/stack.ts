@@ -383,7 +383,13 @@ export async function storage(
 // The real Next.js app (production build) running with AUTH_PROVIDER=supabase against the stack.
 // ---------------------------------------------------------------------------
 
-export type App = { url: string; stop: () => void; outbound: () => { host: string; port: number | null }[] };
+export type App = {
+  url: string;
+  stop: () => void;
+  outbound: () => { host: string; port: number | null }[];
+  /** Tail of the server's output with stack keys redacted. */
+  log: () => string;
+};
 
 const NET_GUARD = join(ROOT, "tests", "helpers", "net-guard.cjs");
 
@@ -448,7 +454,7 @@ export async function startApp(env: StackEnv, opts: { mode?: "supabase" | "legac
   for (;;) {
     try {
       const r = await fetch(`${url}/api/health`);
-      if (r.status < 500) return { url, stop, outbound };
+      if (r.status < 500) return { url, stop, outbound, log: () => redactKeys(output, env) };
     } catch {
       /* not listening yet */
     }
