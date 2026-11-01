@@ -350,8 +350,14 @@ describe("P2: static guards", () => {
       .filter((f) => readFileSync(f, "utf8").includes("SUPABASE_SERVICE_ROLE_KEY"))
       .map(rel);
     for (const f of readers) {
-      assert.ok(f === "src/lib/supabase/admin.ts" || LEGACY_UNTIL_T6.has(f), `${f} reads SUPABASE_SERVICE_ROLE_KEY`);
+      // A2: the operator CLI (spec §6.4) reads the key from its own environment, never from src.
+      assert.ok(f === "src/lib/supabase/admin.ts" || f === "scripts/bootstrap-platform-admin.ts" || LEGACY_UNTIL_T6.has(f),
+        `${f} reads SUPABASE_SERVICE_ROLE_KEY`);
     }
+    const script = readFileSync(join(ROOT, "scripts/bootstrap-platform-admin.ts"), "utf8");
+    assert.doesNotMatch(script, /eyJ[A-Za-z0-9_-]{10,}|sb_secret_[A-Za-z0-9]/, "A2 embeds no credential");
+    assert.equal(walk(join(ROOT, "src")).some((f) => readFileSync(f, "utf8").includes("bootstrap-platform-admin")), false,
+      "no app code imports the operator CLI");
     const importers = walk(join(ROOT, "src"))
       .filter((f) => /from\s+["'](@\/lib\/supabase\/admin|[./]+supabase\/admin)["']/.test(readFileSync(f, "utf8")))
       .map(rel);

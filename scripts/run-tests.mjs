@@ -34,7 +34,7 @@ const SUITES = {
       "tests/security-scan.test.ts", "tests/run-tests.test.ts", "tests/stack-helpers.test.ts",
       "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts", "tests/p3-data.test.ts",
       "tests/p3-display.test.ts", "tests/p4-team-settings.test.ts", "tests/p5-crm.test.ts",
-      "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts",
+      "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
     ],
     timeoutMs: 60_000,
     // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1.
