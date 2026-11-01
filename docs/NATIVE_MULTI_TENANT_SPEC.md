@@ -1286,7 +1286,7 @@ Grant expiry is evaluated with `now()`, i.e. at transaction start; a single Post
 
 | Check | Environment | Result |
 | --- | --- | --- |
-| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 155/155, db 168/168, realpg 24/24 PASS; stack 17 tests BLOCKED |
+| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 1 — unit 155/155, db 168/168, realpg 24/24 PASS; stack 15/17 (2 FAIL: R2-3 on the real Storage API, below) |
 | Unit suite (original 137 + 9 runner self-tests + 9 stack-helper tests: TOTP vectors, HS256, disposable-stack guards) | Node | PASS 155/155 |
 | DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38, review round 2 19, review coverage 19 | PGlite + shim (incl. storage tables) | PASS 168/168 |
 | Concurrency suite: owner/role/override races 13, provisioning 3, invitations/rotation 7, clock expiry 1 | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 24/24 (incl. two negative controls; expiry test waits ~62 s on the database clock) |
@@ -1294,17 +1294,21 @@ Grant expiry is evaluated with `now()`, i.e. at transaction start; a single Post
 | `tsc` over `tests/db`, `tests/db-real`, `tests/supabase-stack`, runner tests (bundler resolution, strict) | — | PASS |
 | `npm run build` | Next.js 15.5.25 | PASS |
 | Lint | — | Not available (no lint script/config) |
-| `supabase start` + `supabase db reset --local` (CLI applies all 16 migrations) | Real Supabase local stack | **BLOCKED** (Docker engine cannot start) |
-| GoTrue sign-up → profile trigger; forged/expired/unsigned JWTs; AAL1 vs TOTP AAL2 platform RPCs | Real Supabase local stack | **BLOCKED** |
-| RLS isolation, forged attribution, revoked membership, suspension, platform grants over PostgREST | Real Supabase local stack | **BLOCKED** |
-| Storage bucket and `storage.objects` policies (M13); platform-grant Storage audit through the Storage API | Real Supabase local stack | **BLOCKED** (policies and audit trigger PGlite-verified on shim tables only) |
-| Legacy tables closed to anon/authenticated over PostgREST; service role retained | Real Supabase local stack | **BLOCKED** (PGlite-verified only) |
+| `supabase start` + `supabase db reset --local` (CLI applies all 16 migrations) | Real Supabase local stack (disposable, Docker 29.9.2) | PASS |
+| GoTrue sign-up → profile trigger; forged/expired/unsigned JWTs; AAL1 vs TOTP AAL2 platform RPCs | Real Supabase local stack | PASS |
+| RLS isolation, forged attribution, revoked membership, suspension, platform grants, exact contact-write audit over PostgREST | Real Supabase local stack | PASS |
+| Storage policies: workspace folder isolation, PUT/upsert, removed member, suspension, overrides | Real Supabase local stack | PASS |
+| Permission overrides, concurrent provisioning and double acceptance, one-minute clock expiry (isolated workspace) | Real Supabase local stack | PASS |
+| Legacy tables closed to anon/authenticated over PostgREST; service role retained | Real Supabase local stack | PASS |
+| Platform-grant Storage audit through the Storage API (insert/delete; PUT/upsert) | Real Supabase local stack | **FAIL** (2 tests) — see R2-3 reopened |
 
-`npm test` exit codes: 0 all suites pass; 1 any failure, cancellation, skip/todo, missing summary, or fewer tests than the suite minimum; 2 nothing failed but a suite was BLOCKED (never reported as PASS). The stack suite has never run on this machine; expect first-run fixes once Docker works.
+`npm test` exit codes: 0 all suites pass; 1 any failure, cancellation, skip/todo, missing summary, or fewer tests than the suite minimum; 2 nothing failed but a suite was BLOCKED (never reported as PASS).
+
+**R2-3 reopened (real Storage API).** A diagnostic trigger on a disposable stack showed that the Storage API checks permissions with the caller's JWT in a transaction it rolls back, then commits the row write as `service_role` (session `supabase_storage_admin`, claims `role = service_role`, no `sub`). In the committed write `auth.uid()` is null, so `audit_grant_storage_write` skips it, and anything written during the permission check is rolled back. Storage stamps `owner_id` from the verified JWT on insert and update, so those can be attributed; on delete the deleter's identity is not present (`old.owner_id` is the last writer). RLS enforcement itself is correct (other workspaces, employees, read and revoked grants are refused). Remediation needs a design decision and is not yet applied.
 
 ### 15.5 Remaining blockers before P2 / staging
 
-1. **Docker cannot start (D1).** Installed: Supabase CLI 2.122.0 (pinned devDependency), WSL 2.7.14, Docker Desktop 4.97 (engine 29.9.2), VC++ 2015-2022 x64 14.51.36247. Still required on the machine: enable **SVM Mode** (AMD virtualization) in the ASUS UEFI, enable the Windows **Virtual Machine Platform** feature (elevated `wsl --install --no-distribution`), restart, then start Docker Desktop and run `npm run test:stack`.
+1. **R2-3 on the real Storage API** (above): platform-granted Storage mutations are not audited through the Storage API; needs a remediation decision.
 2. **Legacy migration history reconciliation** (cutover prerequisite): files renamed to unique versions (`docs/MIGRATION_VERSION_MAPPING.md`); history of any existing database is unknown and must be reconciled with `supabase migration list` on staging before any push. No remote repair was performed.
 3. **Staging project (D4) and paid plan (D5)** not created/purchased — by instruction.
 4. Phone number change (D7) and all theme/navigation-preserving UI work wait for the UI phase.

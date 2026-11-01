@@ -4,11 +4,11 @@
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+import { after, afterEach, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
   adminDb, jwtPayload, rest, rpc, serviceRest, signJwt, signUp, startStack, storage, upgradeToAal2,
-  type Identity, type Stack, type StackEnv,
+  type HttpResult, type Identity, type Stack, type StackEnv,
 } from "./stack";
 
 const MIGRATIONS_DIR = join(__dirname, "..", "..", "supabase", "migrations");
@@ -41,11 +41,55 @@ async function contacts(token: string) {
   return r.body as { id: string; workspace_id: string; first_name: string; created_by: string }[];
 }
 
+/** PostgREST answers a successful call to a function returning void with 204 No Content. */
+function assertVoidOk(r: HttpResult, what: string) {
+  assert.equal(r.status, 204, `${what}: ${r.status} ${r.text}`);
+}
+
+async function voidRpc(token: string, fn: string, args: Record<string, unknown>) {
+  const r = await rpc(env, token, fn, args);
+  assertVoidOk(r, fn);
+}
+
+// Every grant issued by a test is tracked and revoked in afterEach, even when an assertion fails,
+// so no grant leaks into later tests.
+const liveGrants = new Set<string>();
+
+async function grantAccess(ws: string, mode: "read" | "write", reason: string, minutes = 15) {
+  const r = await rpc(env, platformAal2, "platform_grant_access", {
+    p_workspace_id: ws, p_mode: mode, p_reason: reason, p_minutes: minutes,
+  });
+  if (r.status === 200) liveGrants.add(r.body.id);
+  return r;
+}
+
+async function revokeGrant(id: string) {
+  liveGrants.delete(id);
+  await voidRpc(platformAal2, "platform_revoke_access", { p_grant_id: id });
+}
+
+/** Grants still live for the platform admin, from the database (verification only). */
+async function activeGrants(ws?: string): Promise<string[]> {
+  const r = await db.query<{ id: string }>(
+    `select id from public.platform_access_grants
+     where admin_user_id = $1 and revoked_at is null and expires_at > now() and ($2::uuid is null or workspace_id = $2)`,
+    [platform.id, ws ?? null]);
+  return r.rows.map((x) => x.id);
+}
+
 describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)", () => {
   before(async () => {
     stack = startStack();
     env = stack.env;
     db = await adminDb(env);
+  });
+
+  afterEach(async () => {
+    for (const id of [...liveGrants]) {
+      liveGrants.delete(id);
+      const r = await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: id });
+      if (r.status !== 204 && !/not_found/.test(r.text)) console.error(`cleanup: revoking grant failed: ${r.status} ${r.text}`);
+    }
   });
 
   after(async () => {
@@ -197,7 +241,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     const logoA = `workspace-assets/${wsA}/logo-${run}.txt`;
     assert.equal((await storage(env, employeeA.token, "GET", logoA)).status, 200);
 
-    assert.equal((await rpc(env, ownerA.token, "remove_member", { p_user_id: employeeA.id })).status, 200);
+    await voidRpc(ownerA.token, "remove_member", { p_user_id: employeeA.id });
     assert.deepEqual(await contacts(employeeA.token), []);
     const write = await rest(env, employeeA.token, "POST", "contacts", { workspace_id: wsA, first_name: "After removal" });
     assert.ok(denied(write.status), `removed member insert returned ${write.status}`);
@@ -207,17 +251,13 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
   test("platform access requires an explicit, attributed grant", async () => {
     assert.equal((await contacts(platformAal2)).filter((c) => c.workspace_id === wsA).length, 0);
 
-    const read = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsA, p_mode: "read", p_reason: "stack test read access", p_minutes: 15,
-    });
+    const read = await grantAccess(wsA, "read", "stack test read access");
     assert.equal(read.status, 200, read.text);
     assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [contactA]);
     const readWrite = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "Read grant" });
     assert.ok(denied(readWrite.status), `read grant insert returned ${readWrite.status}`);
 
-    const write = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test write access", p_minutes: 15,
-    });
+    const write = await grantAccess(wsA, "write", "stack test write access");
     assert.equal(write.status, 200, write.text);
     const ins = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "Write grant" });
     assert.equal(ins.status, 201, ins.text);
@@ -229,23 +269,19 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     );
     assert.deepEqual(audit.rows, [{ actor_id: platform.id, actor_kind: "platform_admin", action: "contacts.insert", target: ins.body[0].id }]);
 
-    for (const g of [read.body.id, write.body.id]) {
-      assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: g })).status, 200);
-    }
+    for (const g of [read.body.id, write.body.id]) await revokeGrant(g);
     assert.deepEqual(await contacts(platformAal2), []);
   });
 
   test("Storage API mutations under a platform write grant are audited with grant and object path", async () => {
-    const grant = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test storage audit", p_minutes: 15,
-    });
+    const grant = await grantAccess(wsA, "write", "stack test storage audit");
     assert.equal(grant.status, 200, grant.text);
     const objectPath = `${wsA}/granted-${run}.txt`;
     const up = await storage(env, platformAal2, "POST", `workspace-assets/${objectPath}`, "granted upload");
     assert.equal(up.status, 200, up.text);
     const del = await storage(env, platformAal2, "DELETE", `workspace-assets/${objectPath}`);
     assert.equal(del.status, 200, del.text);
-    assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: grant.body.id })).status, 200);
+    await revokeGrant(grant.body.id);
 
     const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string; metadata: any }>(
       `select actor_id, actor_kind, grant_id, action, target, metadata from public.workspace_audit_log
@@ -265,28 +301,30 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
   });
 
   test("suspension blocks members; only read grants still work", async () => {
-    const s = await rpc(env, platformAal2, "platform_suspend_workspace", { p_workspace_id: wsB, p_reason: "stack test suspension" });
-    assert.equal(s.status, 200, s.text);
-    assert.deepEqual(await contacts(ownerB.token), []);
-    const w = await rest(env, ownerB.token, "POST", "contacts", { workspace_id: wsB, first_name: "While suspended" });
-    assert.ok(denied(w.status), `suspended member insert returned ${w.status}`);
-    const asset = await storage(env, ownerB.token, "GET", `workspace-assets/${wsB}/logo-${run}.txt`);
-    assert.notEqual(asset.status, 200, "suspended workspace asset still readable");
+    await voidRpc(platformAal2, "platform_suspend_workspace", { p_workspace_id: wsB, p_reason: "stack test suspension" });
+    let reactivated = false;
+    try {
+      assert.deepEqual(await contacts(ownerB.token), []);
+      const w = await rest(env, ownerB.token, "POST", "contacts", { workspace_id: wsB, first_name: "While suspended" });
+      assert.ok(denied(w.status), `suspended member insert returned ${w.status}`);
+      const asset = await storage(env, ownerB.token, "GET", `workspace-assets/${wsB}/logo-${run}.txt`);
+      assert.notEqual(asset.status, 200, "suspended workspace asset still readable");
 
-    const writeGrant = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsB, p_mode: "write", p_reason: "stack test suspended write", p_minutes: 15,
-    });
-    assert.notEqual(writeGrant.status, 200, "write grant issued for a suspended workspace");
-    const readGrant = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsB, p_mode: "read", p_reason: "stack test suspended read", p_minutes: 15,
-    });
-    assert.equal(readGrant.status, 200, readGrant.text);
-    assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [contactB]);
-    await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: readGrant.body.id });
+      const writeGrant = await grantAccess(wsB, "write", "stack test suspended write");
+      assert.notEqual(writeGrant.status, 200, "write grant issued for a suspended workspace");
+      const readGrant = await grantAccess(wsB, "read", "stack test suspended read");
+      assert.equal(readGrant.status, 200, readGrant.text);
+      assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [contactB]);
+      await revokeGrant(readGrant.body.id);
 
-    const r = await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "stack test reactivation" });
-    assert.equal(r.status, 200, r.text);
-    assert.deepEqual((await contacts(ownerB.token)).map((c) => c.id), [contactB]);
+      await voidRpc(platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "stack test reactivation" });
+      reactivated = true;
+      assert.deepEqual((await contacts(ownerB.token)).map((c) => c.id), [contactB]);
+    } finally {
+      if (!reactivated) {
+        await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "stack test cleanup reactivation" });
+      }
+    }
   });
 
   test("Storage update (PUT) and upsert follow the write policy; granted ones are audited exactly", async () => {
@@ -300,13 +338,11 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.notEqual((await storage(env, ownerB.token, "POST", obj, "intruder", { upsert: true })).status, 200, "other workspace upserted");
     assert.equal((await storage(env, ownerA.token, "GET", obj)).text, "owner v3");
 
-    const grant = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test storage update audit", p_minutes: 15,
-    });
+    const grant = await grantAccess(wsA, "write", "stack test storage update audit");
     assert.equal(grant.status, 200, grant.text);
     assert.equal((await storage(env, platformAal2, "PUT", obj, "granted v4")).status, 200);
     assert.equal((await storage(env, platformAal2, "POST", obj, "granted v5", { upsert: true })).status, 200);
-    assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: grant.body.id })).status, 200);
+    await revokeGrant(grant.body.id);
     assert.notEqual((await storage(env, platformAal2, "PUT", obj, "after revoke")).status, 200, "revoked grant still updates");
 
     const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string }>(
@@ -331,16 +367,21 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     const setOverride = (permission: string, allowed: boolean | null) =>
       rpc(env, ownerA.token, "set_member_permission", { p_user_id: emp.id, p_permission: permission, p_allowed: allowed });
 
-    assert.notEqual((await storage(env, emp.token, "POST", obj, "no override")).status, 200);
-    assert.equal((await setOverride("settings.write", true)).status, 200);
-    assert.equal((await storage(env, emp.token, "POST", obj, "with override")).status, 200);
-    assert.equal((await setOverride("settings.write", null)).status, 200);
-    assert.notEqual((await storage(env, emp.token, "PUT", obj, "override cleared")).status, 200);
+    try {
+      assert.notEqual((await storage(env, emp.token, "POST", obj, "no override")).status, 200);
+      assertVoidOk(await setOverride("settings.write", true), "allow settings.write");
+      assert.equal((await storage(env, emp.token, "POST", obj, "with override")).status, 200);
+      assertVoidOk(await setOverride("settings.write", null), "clear settings.write");
+      assert.notEqual((await storage(env, emp.token, "PUT", obj, "override cleared")).status, 200);
 
-    assert.equal((await setOverride("contacts.write", false)).status, 200);
-    const blocked = await rest(env, emp.token, "POST", "contacts", { workspace_id: wsA, first_name: "Denied by override" });
-    assert.ok(denied(blocked.status), `deny override insert returned ${blocked.status}`);
-    assert.equal((await setOverride("contacts.write", null)).status, 200);
+      assertVoidOk(await setOverride("contacts.write", false), "deny contacts.write");
+      const blocked = await rest(env, emp.token, "POST", "contacts", { workspace_id: wsA, first_name: "Denied by override" });
+      assert.ok(denied(blocked.status), `deny override insert returned ${blocked.status}`);
+      assertVoidOk(await setOverride("contacts.write", null), "clear contacts.write");
+    } finally {
+      await setOverride("settings.write", null);
+      await setOverride("contacts.write", null);
+    }
     const allowed = await rest(env, emp.token, "POST", "contacts", { workspace_id: wsA, first_name: "Override cleared" });
     assert.equal(allowed.status, 201, allowed.text);
 
@@ -382,12 +423,25 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
   });
 
   test("a one-minute platform grant expires by the clock across PostgREST and Storage", async () => {
-    const grant = await rpc(env, platformAal2, "platform_grant_access", {
-      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test clock expiry", p_minutes: 1,
+    // A workspace of its own, so no other grant (live or leaked) can keep access open.
+    const owner = await signUp(env, email("expiry-owner"), "Expiry Owner");
+    const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+      p_provisioning_key: `synthetic-expiry-${run}`, p_name: "Expiry (synthetic)",
+      p_slug: `expiry-synthetic-${run}`, p_owner_email: owner.email,
     });
+    assert.equal(prov.status, 200, prov.text);
+    const ws: string = prov.body.workspace_id;
+    assert.equal((await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token })).status, 200);
+    const seeded = await rest(env, owner.token, "POST", "contacts", { workspace_id: ws, first_name: "Expiry fixture" });
+    assert.equal(seeded.status, 201, seeded.text);
+    const logo = `workspace-assets/${ws}/logo-${run}.txt`;
+    assert.equal((await storage(env, owner.token, "POST", logo, "expiry asset")).status, 200);
+    assert.deepEqual(await activeGrants(ws), [], "the expiry workspace must start with no grants");
+
+    const grant = await grantAccess(ws, "write", "stack test clock expiry", 1);
     assert.equal(grant.status, 200, grant.text);
-    const logo = `workspace-assets/${wsA}/logo-${run}.txt`;
-    assert.ok((await contacts(platformAal2)).some((c) => c.id === contactA));
+    assert.deepEqual(await activeGrants(ws), [grant.body.id], "only the one-minute grant may be live");
+    assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [seeded.body[0].id]);
     assert.equal((await storage(env, platformAal2, "GET", logo)).status, 200);
 
     const deadline = Date.now() + 120_000;
@@ -398,16 +452,19 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       await new Promise((res) => setTimeout(res, 2000));
     }
 
+    assert.deepEqual(await activeGrants(ws), []);
     assert.deepEqual(await contacts(platformAal2), []);
-    const ins = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "After expiry" });
+    const ins = await rest(env, platformAal2, "POST", "contacts", { workspace_id: ws, first_name: "After expiry" });
     assert.ok(denied(ins.status), `expired grant insert returned ${ins.status}`);
     assert.notEqual((await storage(env, platformAal2, "GET", logo)).status, 200, "expired grant still reads assets");
-    assert.notEqual((await storage(env, platformAal2, "POST", `workspace-assets/${wsA}/expired-${run}.txt`, "x")).status, 200);
+    assert.notEqual((await storage(env, platformAal2, "POST", `workspace-assets/${ws}/expired-${run}.txt`, "x")).status, 200);
     const ctx = await rpc(env, platformAal2, "request_context");
     assert.equal(ctx.status, 200, ctx.text);
     assert.equal(ctx.body.grant, null);
+    assert.equal(ctx.body.workspace, null);
     const row = await db.query("select revoked_at from public.platform_access_grants where id = $1", [grant.body.id]);
     assert.equal(row.rows[0].revoked_at, null, "expiry must not depend on revocation");
+    liveGrants.delete(grant.body.id);
   });
 
   test("legacy tables are closed to anon and authenticated, open to the service role", async () => {
