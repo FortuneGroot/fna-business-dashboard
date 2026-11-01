@@ -16,7 +16,8 @@
     "qa": "python qa/run_static_audit.py",
     "verify:auth": "node scripts/verify-auth-runtime.mjs",
     "test:unit": "node scripts/run-tests.mjs --suite unit",
-    "test:db:concurrency": "node scripts/run-tests.mjs --suite realpg"
+    "test:db:concurrency": "node scripts/run-tests.mjs --suite realpg",
+    "test:stack": "node scripts/run-tests.mjs --suite stack"
   },
   "dependencies": {
     "next": "^15.5.25",
@@ -32,6 +33,7 @@
     "@types/react-dom": "18.3.0",
     "embedded-postgres": "18.6.0-beta.19",
     "pg": "8.23.1",
+    "supabase": "2.122.0",
     "tsx": "^4.23.13",
     "typescript": "5.6.2"
   }

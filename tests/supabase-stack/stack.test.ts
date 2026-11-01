@@ -1,0 +1,283 @@
+// End-to-end checks against a disposable local Supabase stack. Every isolation assertion uses a real
+// GoTrue identity and its own JWT through PostgREST or Storage. The superuser connection is used only
+// for setup that stands in for the platform-admin bootstrap script and for verifying outcomes.
+import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, describe, test } from "node:test";
+import type pg from "pg";
+import {
+  adminDb, jwtPayload, rest, rpc, serviceRest, signJwt, signUp, startStack, storage, upgradeToAal2,
+  type Identity, type Stack, type StackEnv,
+} from "./stack";
+
+const MIGRATIONS_DIR = join(__dirname, "..", "..", "supabase", "migrations");
+const LEGACY_TABLES = [
+  "auth_sessions", "sync_contacts", "sync_contact_tags", "sync_opportunities", "sync_appointments",
+  "sync_conversation_events", "sync_tasks", "sync_review_events", "sync_events", "sync_idempotency",
+];
+const run = Date.now().toString(36);
+const email = (who: string) => `${who}-${run}@example.test`;
+
+let stack: Stack;
+let env: StackEnv;
+let db: pg.Client;
+let platform: Identity;
+let platformAal2 = "";
+let ownerA: Identity;
+let ownerB: Identity;
+let employeeA: Identity;
+let outsider: Identity;
+let wsA = "";
+let wsB = "";
+let contactA = "";
+let contactB = "";
+
+const denied = (status: number) => status === 401 || status === 403;
+
+async function contacts(token: string) {
+  const r = await rest(env, token, "GET", "contacts?select=id,workspace_id,first_name,created_by");
+  assert.equal(r.status, 200, r.text);
+  return r.body as { id: string; workspace_id: string; first_name: string; created_by: string }[];
+}
+
+describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)", () => {
+  before(async () => {
+    stack = startStack();
+    env = stack.env;
+    db = await adminDb(env);
+  });
+
+  after(async () => {
+    await db?.end();
+    stack?.stop();
+  });
+
+  test("the Supabase CLI applied every repository migration", async () => {
+    const local = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).map((f) => f.slice(0, 14)).sort();
+    const applied = (await db.query<{ version: string }>(
+      "select version from supabase_migrations.schema_migrations order by version"
+    )).rows.map((r) => r.version);
+    assert.deepEqual(applied, local);
+  });
+
+  test("GoTrue sign-up creates a profile visible only to its owner", async () => {
+    platform = await signUp(env, email("platform"), "Platform Admin");
+    ownerA = await signUp(env, email("owner-a"), "Owner A");
+    ownerB = await signUp(env, email("owner-b"), "Owner B");
+    employeeA = await signUp(env, email("employee-a"), "Employee A");
+    outsider = await signUp(env, email("outsider"), "Outsider");
+
+    const own = await rest(env, ownerA.token, "GET", "profiles?select=user_id,full_name");
+    assert.equal(own.status, 200, own.text);
+    assert.deepEqual(own.body, [{ user_id: ownerA.id, full_name: "Owner A" }]);
+    const count = await db.query("select count(*)::int as n from public.profiles where user_id = any($1)", [
+      [platform.id, ownerA.id, ownerB.id, employeeA.id, outsider.id],
+    ]);
+    assert.equal(count.rows[0].n, 5);
+    const anon = await rest(env, null, "GET", "profiles?select=user_id");
+    assert.ok(denied(anon.status) || (anon.status === 200 && anon.body.length === 0), anon.text);
+  });
+
+  test("PostgREST rejects forged, expired, and unsigned JWTs", async () => {
+    const [h, p] = ownerA.token.split(".");
+    const forged = `${h}.${p}.${Buffer.from("not-the-signature").toString("base64url")}`;
+    assert.equal((await rest(env, forged, "GET", "profiles?select=user_id")).status, 401);
+
+    const claims = jwtPayload(ownerA.token);
+    const expired = signJwt(env.jwtSecret, { ...claims, iat: 1_700_000_000, exp: 1_700_000_600 });
+    assert.equal((await rest(env, expired, "GET", "profiles?select=user_id")).status, 401);
+
+    const none = `${Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url")}.${p}.`;
+    assert.equal((await rest(env, none, "GET", "profiles?select=user_id")).status, 401);
+
+    const wrongKey = signJwt("x".repeat(40), { ...claims, aal: "aal2" });
+    assert.equal((await rest(env, wrongKey, "GET", "profiles?select=user_id")).status, 401);
+  });
+
+  test("platform RPCs refuse an AAL1 session and accept a verified TOTP (AAL2) session", async () => {
+    // Stands in for scripts/bootstrap-platform-admin: the only privileged setup step.
+    await db.query("insert into public.platform_admins (user_id) values ($1)", [platform.id]);
+
+    const aal1 = await rpc(env, platform.token, "platform_list_workspaces");
+    assert.ok(denied(aal1.status), `AAL1 platform call returned ${aal1.status}`);
+
+    platformAal2 = await upgradeToAal2(env, platform);
+    assert.equal(jwtPayload(platformAal2).aal, "aal2");
+    const ok = await rpc(env, platformAal2, "platform_list_workspaces");
+    assert.equal(ok.status, 200, ok.text);
+
+    const notAdmin = await upgradeToAal2(env, outsider);
+    const refused = await rpc(env, notAdmin, "platform_list_workspaces");
+    assert.ok(denied(refused.status), `non-admin AAL2 call returned ${refused.status}`);
+  });
+
+  test("provisioning and invitation acceptance run with each user's own JWT", async () => {
+    const provA = await rpc(env, platformAal2, "platform_provision_workspace", {
+      p_provisioning_key: `synthetic-tj-towing-${run}`, p_name: "TJ Towing (synthetic)",
+      p_slug: `tj-towing-synthetic-${run}`, p_owner_email: ownerA.email,
+    });
+    assert.equal(provA.status, 200, provA.text);
+    const provB = await rpc(env, platformAal2, "platform_provision_workspace", {
+      p_provisioning_key: `synthetic-vinny-moving-${run}`, p_name: "Vinny Moving (synthetic)",
+      p_slug: `vinny-moving-synthetic-${run}`, p_owner_email: ownerB.email,
+    });
+    assert.equal(provB.status, 200, provB.text);
+    wsA = provA.body.workspace_id;
+    wsB = provB.body.workspace_id;
+
+    const wrongUser = await rpc(env, ownerB.token, "accept_invitation", { p_token: provA.body.invite_token });
+    assert.notEqual(wrongUser.status, 200, "invitation accepted by the wrong identity");
+    assert.equal((await rpc(env, ownerA.token, "accept_invitation", { p_token: provA.body.invite_token })).status, 200);
+    assert.equal((await rpc(env, ownerB.token, "accept_invitation", { p_token: provB.body.invite_token })).status, 200);
+
+    const stages = await rest(env, ownerA.token, "GET", "pipeline_stages?select=id");
+    assert.equal(stages.status, 200, stages.text);
+    assert.equal(stages.body.length, 12);
+  });
+
+  test("RLS isolates workspaces over PostgREST and stamps the creator", async () => {
+    const insA = await rest(env, ownerA.token, "POST", "contacts", { workspace_id: wsA, first_name: "Alpha" });
+    assert.equal(insA.status, 201, insA.text);
+    contactA = insA.body[0].id;
+    assert.equal(insA.body[0].created_by, ownerA.id);
+    const insB = await rest(env, ownerB.token, "POST", "contacts", { workspace_id: wsB, first_name: "Bravo" });
+    assert.equal(insB.status, 201, insB.text);
+    contactB = insB.body[0].id;
+
+    assert.deepEqual((await contacts(ownerA.token)).map((c) => c.id), [contactA]);
+    assert.deepEqual((await contacts(ownerB.token)).map((c) => c.id), [contactB]);
+    assert.deepEqual(await contacts(outsider.token), []);
+
+    const cross = await rest(env, ownerB.token, "POST", "contacts", { workspace_id: wsA, first_name: "Intruder" });
+    assert.ok(denied(cross.status), `cross-workspace insert returned ${cross.status}`);
+    const crossUpdate = await rest(env, ownerB.token, "PATCH", `contacts?id=eq.${contactA}`, { first_name: "Hijacked" });
+    assert.equal(crossUpdate.status, 200, crossUpdate.text);
+    assert.deepEqual(crossUpdate.body, []);
+    const anon = await rest(env, null, "GET", "contacts?select=id");
+    assert.ok(denied(anon.status), `anon contacts read returned ${anon.status}`);
+  });
+
+  test("forged actor attribution is rejected", async () => {
+    const forged = await rest(env, ownerA.token, "POST", "contacts", {
+      workspace_id: wsA, first_name: "Forged", created_by: ownerB.id,
+    });
+    assert.ok(denied(forged.status), `forged created_by returned ${forged.status}`);
+    assert.equal(forged.body?.code, "42501");
+  });
+
+  test("Storage policies confine objects to the active workspace folder", async () => {
+    const objA = `workspace-assets/${wsA}/logo-${run}.txt`;
+    const up = await storage(env, ownerA.token, "POST", objA, "workspace A asset");
+    assert.equal(up.status, 200, up.text);
+    const down = await storage(env, ownerA.token, "GET", objA);
+    assert.equal(down.status, 200, down.text);
+    assert.equal(down.text, "workspace A asset");
+
+    const otherRead = await storage(env, ownerB.token, "GET", objA);
+    assert.notEqual(otherRead.status, 200, "workspace B read workspace A's object");
+    const otherWrite = await storage(env, ownerB.token, "POST", `workspace-assets/${wsA}/evil-${run}.txt`, "x");
+    assert.notEqual(otherWrite.status, 200, "workspace B wrote into workspace A's folder");
+    const anonRead = await storage(env, null, "GET", objA);
+    assert.notEqual(anonRead.status, 200, "anonymous read of a private object");
+    const ownB = await storage(env, ownerB.token, "POST", `workspace-assets/${wsB}/logo-${run}.txt`, "workspace B asset");
+    assert.equal(ownB.status, 200, ownB.text);
+
+    const stored = await db.query(
+      "select name from storage.objects where bucket_id = 'workspace-assets' and name like $1", [`%-${run}.txt`]
+    );
+    assert.deepEqual(stored.rows.map((r) => r.name).sort(), [`${wsA}/logo-${run}.txt`, `${wsB}/logo-${run}.txt`].sort());
+  });
+
+  test("a removed member loses access immediately", async () => {
+    const inv = await rpc(env, ownerA.token, "create_invitation", { p_email: employeeA.email, p_role: "employee", p_ttl_hours: 72 });
+    assert.equal(inv.status, 200, inv.text);
+    assert.equal((await rpc(env, employeeA.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+    assert.deepEqual((await contacts(employeeA.token)).map((c) => c.id), [contactA]);
+
+    assert.equal((await rpc(env, ownerA.token, "remove_member", { p_user_id: employeeA.id })).status, 200);
+    assert.deepEqual(await contacts(employeeA.token), []);
+    const write = await rest(env, employeeA.token, "POST", "contacts", { workspace_id: wsA, first_name: "After removal" });
+    assert.ok(denied(write.status), `removed member insert returned ${write.status}`);
+  });
+
+  test("platform access requires an explicit, attributed grant", async () => {
+    assert.equal((await contacts(platformAal2)).filter((c) => c.workspace_id === wsA).length, 0);
+
+    const read = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsA, p_mode: "read", p_reason: "stack test read access", p_minutes: 15,
+    });
+    assert.equal(read.status, 200, read.text);
+    assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [contactA]);
+    const readWrite = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "Read grant" });
+    assert.ok(denied(readWrite.status), `read grant insert returned ${readWrite.status}`);
+
+    const write = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test write access", p_minutes: 15,
+    });
+    assert.equal(write.status, 200, write.text);
+    const ins = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "Write grant" });
+    assert.equal(ins.status, 201, ins.text);
+    assert.equal(ins.body[0].created_by, platform.id);
+    const audit = await db.query(
+      "select count(*)::int as n from public.workspace_audit_log where workspace_id = $1 and grant_id = $2",
+      [wsA, write.body.id]
+    );
+    assert.ok(audit.rows[0].n >= 1);
+
+    for (const g of [read.body.id, write.body.id]) {
+      assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: g })).status, 200);
+    }
+    assert.deepEqual(await contacts(platformAal2), []);
+  });
+
+  test("suspension blocks members; only read grants still work", async () => {
+    const s = await rpc(env, platformAal2, "platform_suspend_workspace", { p_workspace_id: wsB, p_reason: "stack test suspension" });
+    assert.equal(s.status, 200, s.text);
+    assert.deepEqual(await contacts(ownerB.token), []);
+    const w = await rest(env, ownerB.token, "POST", "contacts", { workspace_id: wsB, first_name: "While suspended" });
+    assert.ok(denied(w.status), `suspended member insert returned ${w.status}`);
+    const asset = await storage(env, ownerB.token, "GET", `workspace-assets/${wsB}/logo-${run}.txt`);
+    assert.notEqual(asset.status, 200, "suspended workspace asset still readable");
+
+    const writeGrant = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsB, p_mode: "write", p_reason: "stack test suspended write", p_minutes: 15,
+    });
+    assert.notEqual(writeGrant.status, 200, "write grant issued for a suspended workspace");
+    const readGrant = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsB, p_mode: "read", p_reason: "stack test suspended read", p_minutes: 15,
+    });
+    assert.equal(readGrant.status, 200, readGrant.text);
+    assert.deepEqual((await contacts(platformAal2)).map((c) => c.id), [contactB]);
+    await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: readGrant.body.id });
+
+    const r = await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "stack test reactivation" });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual((await contacts(ownerB.token)).map((c) => c.id), [contactB]);
+  });
+
+  test("legacy tables are closed to anon and authenticated, open to the service role", async () => {
+    for (const t of LEGACY_TABLES) {
+      const anon = await rest(env, null, "GET", `${t}?select=*&limit=1`);
+      assert.ok(denied(anon.status), `anon ${t} returned ${anon.status}`);
+      const user = await rest(env, ownerA.token, "GET", `${t}?select=*&limit=1`);
+      assert.ok(denied(user.status), `authenticated ${t} returned ${user.status}`);
+      const svc = await serviceRest(env, `${t}?select=*&limit=1`);
+      assert.equal(svc.status, 200, `service role ${t} returned ${svc.status}`);
+    }
+    const privs = await db.query(
+      `select c.relname, c.relrowsecurity,
+              has_table_privilege('anon', c.oid, 'select,insert,update,delete') as anon_any,
+              has_table_privilege('authenticated', c.oid, 'select,insert,update,delete') as auth_any
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = any($1)`,
+      [LEGACY_TABLES]
+    );
+    assert.equal(privs.rows.length, LEGACY_TABLES.length);
+    for (const r of privs.rows) {
+      assert.equal(r.relrowsecurity, true, `${r.relname} RLS`);
+      assert.equal(r.anon_any, false, `${r.relname} anon privileges`);
+      assert.equal(r.auth_any, false, `${r.relname} authenticated privileges`);
+    }
+  });
+});

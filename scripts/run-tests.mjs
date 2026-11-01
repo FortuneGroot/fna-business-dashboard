@@ -6,7 +6,7 @@
 // a summary is present, fail = 0, cancelled = 0, skipped = 0, todo = 0, and at least MIN tests ran.
 // A suite that cannot run because the environment is missing something reports BLOCKED (never PASS).
 //
-// Usage: node scripts/run-tests.mjs [--suite unit|db|realpg]... [--files a.ts,b.ts --min N --name X]
+// Usage: node scripts/run-tests.mjs [--suite unit|db|realpg|stack]... [--files a.ts,b.ts --min N --name X]
 // Exit codes: 0 all passed, 1 any failure, 2 nothing failed but something was BLOCKED.
 
 import { spawnSync } from "node:child_process";
@@ -31,22 +31,28 @@ const SUITES = {
     files: () => [
       "tests/sync.test.ts", "tests/onboarding.test.ts", "tests/tenant.test.ts", "tests/auth.test.ts",
       "tests/client-facing-copy.test.ts", "tests/supabase-rest-auth.test.ts", "tests/authorization.test.ts",
-      "tests/security-scan.test.ts", "tests/run-tests.test.ts",
+      "tests/security-scan.test.ts", "tests/run-tests.test.ts", "tests/stack-helpers.test.ts",
     ],
     timeoutMs: 60_000,
-    min: 143,
+    min: 145,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
     timeoutMs: 60_000,
-    min: 129,
+    min: 130,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
     timeoutMs: 120_000,
     min: 7,
+  },
+  stack: {
+    label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
+    files: () => list("tests/supabase-stack"),
+    timeoutMs: 1_200_000,
+    min: 12,
   },
 };
 

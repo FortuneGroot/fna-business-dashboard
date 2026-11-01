@@ -20,6 +20,18 @@ const LEGACY_TABLES = [
 ];
 
 describe("migrations apply to a clean local database", () => {
+  test("every migration has a unique 14-digit Supabase CLI version", () => {
+    const files = migrationFiles();
+    const versions = files.map((f) => {
+      const m = /^(\d{14})_[a-z0-9_]+\.sql$/.exec(f);
+      assert.ok(m, `${f} must be named <14-digit version>_<name>.sql`);
+      return m[1];
+    });
+    assert.equal(new Set(versions).size, versions.length, "duplicate migration versions");
+    assert.deepEqual([...versions].sort(), versions, "filename order must match version order");
+    assert.deepEqual(files.slice(0, 2), ["20260917121316_sync_store.sql", "20260917185155_auth_sessions.sql"]);
+  });
+
   test("all migrations apply in order", async () => {
     const files = migrationFiles();
     assert.ok(files.length >= 15, `expected legacy + 13 new migrations, found ${files.length}`);

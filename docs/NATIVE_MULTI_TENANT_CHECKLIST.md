@@ -1,7 +1,7 @@
 # Native Multi-Tenant — P1 Checklist
 
 Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 implementation record).
-Status as of 2026-11-01. Branch `feat/native-multi-tenant`, all changes uncommitted, nothing pushed or deployed.
+Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
 **Stop point: end of P1. P2 (authentication) and UI work have not started.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
@@ -26,30 +26,41 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] 7. Same-workspace composite FKs for audit `grant_id` and author `author_grant_id`.
 - [x] 8. Clients cannot mark integrations verified/connected; AI receptionist enablement blocked by constraint until trusted verification and a runtime exist.
 - [x] Regression tests for every finding.
-- [x] `npm test` runs unit + database + concurrency suites and fails on failed, cancelled, skipped, or missing tests.
+- [x] `npm test` runs unit + database + concurrency + real-stack suites and fails on failed, cancelled, skipped, or missing tests.
+
+## P1 verification round
+
+- [x] Diff reviewed (no secrets; only intended files); P1 committed locally (`a1fe8b3`), not pushed.
+- [x] VC++ 2015-2022 x64 redistributable installed (official winget package); Edge workaround removed.
+- [x] Supabase CLI 2.122.0 installed (exact-pinned devDependency); `supabase/config.toml` created.
+- [x] WSL 2.7.14 and Docker Desktop 4.97 installed.
+- [ ] Docker engine running — needs SVM Mode in UEFI, Virtual Machine Platform feature, restart.
+- [x] Legacy migration versions made unique and ordered; mapping in `docs/MIGRATION_VERSION_MAPPING.md`; enforced by test.
+- [ ] Remote migration history reconciled — cutover prerequisite (history unknown; no blind repair).
+- [x] Real-stack suite written (`tests/supabase-stack/`, 12 tests) — **not yet run**.
 
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (unit 143, db 129, realpg 7) | [x] PASS |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 129/129 |
+| `npm test` | runner (unit 145, db 130, realpg 7, stack 12) | exit 2: three suites PASS, stack **BLOCKED** |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 130/130 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 7/7 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
 | Lint | — | not available (no script) |
-| `supabase start` / `supabase db reset` | real Supabase local stack | **BLOCKED** — Docker/WSL/Supabase CLI not installed |
-| PostgREST + real JWT checks (anon key, user JWT, forged/expired JWT, AAL2) | real Supabase local stack | **BLOCKED** |
+| `npm run test:stack`: CLI `db reset` applies all migrations | real Supabase local stack | **BLOCKED** — Docker engine cannot start |
+| GoTrue sign-up → profile; forged/expired/unsigned JWT; AAL1 vs TOTP AAL2 | real Supabase local stack | **BLOCKED** |
+| RLS isolation, forged attribution, revoked membership, suspension, platform grants | real Supabase local stack | **BLOCKED** |
 | Storage bucket + policies | real Supabase local stack | **BLOCKED** |
-| GoTrue sign-up → profile trigger | real Supabase local stack | **BLOCKED** |
+| Legacy tables closed to anon/authenticated over PostgREST | real Supabase local stack | **BLOCKED** |
 
 ## Remaining blockers / before P2
 
-- [ ] Install Docker Desktop + Supabase CLI (D1), then run the BLOCKED rows above.
-- [ ] Install the Microsoft VC++ 2015-2022 x64 runtime (the real-PostgreSQL suite currently borrows the copy shipped with Microsoft Edge via its own PATH).
-- [ ] Resolve the legacy migration version collision (`20260917_auth_sessions.sql` and `20260917_sync_store.sql` share version `20260917`) on the staging project before any push.
+- [ ] Enable SVM Mode (ASUS UEFI → Advanced → CPU Configuration), enable Virtual Machine Platform (elevated `wsl --install --no-distribution`), restart, start Docker Desktop, run `npm run test:stack`.
+- [ ] Reconcile legacy migration history on the staging project before any push (`docs/MIGRATION_VERSION_MAPPING.md`).
 - [ ] Staging Supabase project (D4) and paid plan (D5) — later, by instruction.
 
 ## Not done by instruction
 
-No production access, deployment, push, commit, real invitations, outbound communications, purchases, authentication changes, or UI changes.
+No production access, deployment, push, real invitations, outbound communications, purchases, authentication changes, or UI changes.

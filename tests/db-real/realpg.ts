@@ -1,7 +1,7 @@
 // Real local PostgreSQL (embedded-postgres binaries, no Docker) for checks that need independent
 // sessions, which single-connection PGlite cannot provide. This is plain PostgreSQL with the test
 // shim, NOT a Supabase stack: no PostgREST, GoTrue/JWT verification, or Storage.
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,32 +25,12 @@ export class BlockedError extends Error {
 
 const VC_DLLS = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"];
 
-/**
- * The Windows PostgreSQL binaries need the Microsoft Visual C++ runtime. If it is not installed
- * system-wide, use an existing Microsoft-signed app-local copy (FNA_VC_RUNTIME_DIR, or the newest
- * Microsoft Edge directory) by prepending it to this process's PATH. Nothing is installed or copied.
- */
+/** The Windows PostgreSQL binaries need the system-wide Microsoft Visual C++ 2015-2022 x64 runtime. */
 function ensureVcRuntime(): string {
   if (process.platform !== "win32") return "not required";
   const system32 = join(process.env.WINDIR ?? "C:\\Windows", "System32");
   if (VC_DLLS.every((d) => existsSync(join(system32, d)))) return "system";
-  const candidates: string[] = [];
-  if (process.env.FNA_VC_RUNTIME_DIR) candidates.push(process.env.FNA_VC_RUNTIME_DIR);
-  const edgeRoot = join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Microsoft", "Edge", "Application");
-  if (existsSync(edgeRoot)) {
-    const versions = readdirSync(edgeRoot)
-      .filter((d) => /^\d+(\.\d+)+$/.test(d))
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    candidates.push(...versions.map((v) => join(edgeRoot, v)));
-  }
-  const dir = candidates.find((c) => VC_DLLS.every((d) => existsSync(join(c, d))));
-  if (!dir) {
-    throw new BlockedError(
-      "Microsoft Visual C++ 2015-2022 x64 runtime not found (install it, or set FNA_VC_RUNTIME_DIR)."
-    );
-  }
-  process.env.PATH = `${dir};${process.env.PATH ?? ""}`;
-  return dir;
+  throw new BlockedError("Microsoft Visual C++ 2015-2022 x64 runtime is not installed.");
 }
 
 async function freePort(): Promise<number> {

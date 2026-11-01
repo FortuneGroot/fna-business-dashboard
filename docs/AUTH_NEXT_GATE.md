@@ -10,5 +10,5 @@ Owner must set:
 - `AUTH_OWNER_EMAIL` / `AUTH_OWNER_PASSWORD`
 - optional Admin/Client credentials
 
-Apply `supabase/migrations/20260917_auth_sessions.sql` manually before relying on multi-instance revocation.
+Apply `supabase/migrations/20260917185155_auth_sessions.sql` manually before relying on multi-instance revocation.
 Do not require HighLevel $497 OAuth for dashboard login.

@@ -1,0 +1,235 @@
+// Real local Supabase stack (Docker + Supabase CLI) for checks that need GoTrue, PostgREST, real
+// JWT verification, and Storage. Migrations are applied by the Supabase CLI (`db reset --local`).
+// Refuses to run against anything other than 127.0.0.1/localhost. Keys are never printed.
+import { spawnSync } from "node:child_process";
+import { createHmac, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import pg from "pg";
+import { BlockedError } from "../db-real/realpg";
+
+const ROOT = join(__dirname, "..", "..");
+const CLI = join(ROOT, "node_modules", "supabase", "dist", "supabase.js");
+const DOCKER_DIRS = process.platform === "win32" ? ["C:\\Program Files\\Docker\\Docker\\resources\\bin"] : [];
+
+export type StackEnv = {
+  apiUrl: string;
+  dbUrl: string;
+  anonKey: string;
+  serviceRoleKey: string;
+  jwtSecret: string;
+};
+
+function run(cmd: string, args: string[], timeoutMs: number) {
+  const env = { ...process.env, PATH: [...DOCKER_DIRS, process.env.PATH ?? ""].join(process.platform === "win32" ? ";" : ":") };
+  return spawnSync(cmd, args, { cwd: ROOT, env, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
+}
+
+function supabase(args: string[], timeoutMs = 120_000) {
+  return run(process.execPath, [CLI, ...args], timeoutMs);
+}
+
+function isLocal(url: string): boolean {
+  const host = new URL(url).hostname;
+  return host === "127.0.0.1" || host === "localhost";
+}
+
+function readStatus(): StackEnv | null {
+  const res = supabase(["status", "-o", "json"], 60_000);
+  if (res.status !== 0) return null;
+  const start = res.stdout.indexOf("{");
+  if (start < 0) return null;
+  const s = JSON.parse(res.stdout.slice(start)) as Record<string, string>;
+  const env: StackEnv = {
+    apiUrl: s.API_URL,
+    dbUrl: s.DB_URL,
+    anonKey: s.ANON_KEY,
+    serviceRoleKey: s.SERVICE_ROLE_KEY,
+    jwtSecret: s.JWT_SECRET,
+  };
+  for (const [k, v] of Object.entries(env)) {
+    if (!v) throw new Error(`supabase status did not report ${k}`);
+  }
+  if (!isLocal(env.apiUrl) || !isLocal(env.dbUrl.replace(/^postgres(ql)?:/, "http:"))) {
+    throw new Error("Refusing to run: the Supabase stack is not local.");
+  }
+  return env;
+}
+
+export type Stack = { env: StackEnv; startedHere: boolean; stop: () => void };
+
+/** Starts (if needed) and resets the local stack so every migration is applied by the CLI. */
+export function startStack(): Stack {
+  if (process.env.VERCEL_ENV) throw new Error("Stack tests refuse to run when VERCEL_ENV is set.");
+  if (!existsSync(CLI)) throw new BlockedError("Supabase CLI is not installed (npm devDependency `supabase`).");
+  const docker = run("docker", ["info", "--format", "{{.ServerVersion}}"], 30_000);
+  if (docker.error || docker.status !== 0) {
+    throw new BlockedError("Docker engine is not running (Docker Desktop requires WSL2 and firmware virtualization).");
+  }
+
+  let startedHere = false;
+  if (!readStatus()) {
+    const started = supabase(["start"], 900_000);
+    if (started.status !== 0) {
+      throw new BlockedError(`supabase start failed: ${(started.stderr || started.stdout).trim().split(/\r?\n/).slice(-3).join(" | ")}`);
+    }
+    startedHere = true;
+  }
+  const reset = supabase(["db", "reset", "--local", "--no-seed"], 600_000);
+  if (reset.status !== 0) {
+    throw new Error(`supabase db reset failed: ${(reset.stderr || reset.stdout).trim().split(/\r?\n/).slice(-8).join(" | ")}`);
+  }
+  const env = readStatus();
+  if (!env) throw new Error("supabase status failed after db reset");
+  return {
+    env,
+    startedHere,
+    stop: () => {
+      if (startedHere) supabase(["stop", "--no-backup"], 300_000);
+    },
+  };
+}
+
+/** Superuser connection for test setup and outcome verification only — never to demonstrate RLS. */
+export async function adminDb(env: StackEnv): Promise<pg.Client> {
+  const client = new pg.Client({ connectionString: env.dbUrl });
+  await client.connect();
+  return client;
+}
+
+export type HttpResult = { status: number; body: any; text: string };
+
+async function http(url: string, init: RequestInit): Promise<HttpResult> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  return { status: res.status, body, text };
+}
+
+export type Identity = { id: string; email: string; password: string; token: string };
+
+export function newPassword(): string {
+  return `Local-${randomBytes(18).toString("hex")}`;
+}
+
+/** Real GoTrue sign-up (email confirmations are disabled in the local config). */
+export async function signUp(env: StackEnv, email: string, fullName: string): Promise<Identity> {
+  const password = newPassword();
+  const r = await http(`${env.apiUrl}/auth/v1/signup`, {
+    method: "POST",
+    headers: { apikey: env.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, data: { full_name: fullName } }),
+  });
+  if (r.status !== 200 || !r.body?.access_token) throw new Error(`sign-up failed for ${email}: ${r.status} ${r.text.slice(0, 200)}`);
+  return { id: r.body.user.id, email, password, token: r.body.access_token };
+}
+
+export function jwtPayload(token: string): Record<string, any> {
+  return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+}
+
+function base32Decode(input: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const c of input.replace(/=+$/, "").toUpperCase()) {
+    const v = alphabet.indexOf(c);
+    if (v < 0) throw new Error("invalid base32");
+    bits += v.toString(2).padStart(5, "0");
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+/** RFC 6238 TOTP (SHA-1, 30 s, 6 digits), as used by GoTrue. */
+export function totp(secret: string, now = Date.now()): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(now / 1000 / 30)));
+  const h = createHmac("sha1", base32Decode(secret)).update(counter).digest();
+  const offset = h[h.length - 1] & 0xf;
+  const code = (h.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
+  return code.toString().padStart(6, "0");
+}
+
+/** Enrolls a TOTP factor and verifies it, returning an AAL2 access token. */
+export async function upgradeToAal2(env: StackEnv, user: Identity): Promise<string> {
+  const auth = { apikey: env.anonKey, Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
+  const enroll = await http(`${env.apiUrl}/auth/v1/factors`, {
+    method: "POST", headers: auth, body: JSON.stringify({ factor_type: "totp", friendly_name: "stack-test" }),
+  });
+  if (enroll.status !== 200) throw new Error(`MFA enroll failed: ${enroll.status} ${enroll.text.slice(0, 200)}`);
+  const factorId: string = enroll.body.id;
+  const secret: string = enroll.body.totp.secret;
+  const challenge = await http(`${env.apiUrl}/auth/v1/factors/${factorId}/challenge`, { method: "POST", headers: auth, body: "{}" });
+  if (challenge.status !== 200) throw new Error(`MFA challenge failed: ${challenge.status} ${challenge.text.slice(0, 200)}`);
+  const verify = await http(`${env.apiUrl}/auth/v1/factors/${factorId}/verify`, {
+    method: "POST", headers: auth, body: JSON.stringify({ challenge_id: challenge.body.id, code: totp(secret) }),
+  });
+  if (verify.status !== 200 || !verify.body?.access_token) throw new Error(`MFA verify failed: ${verify.status} ${verify.text.slice(0, 200)}`);
+  return verify.body.access_token;
+}
+
+/** PostgREST request with a user's own JWT (or no JWT for anon). */
+export async function rest(
+  env: StackEnv,
+  token: string | null,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {}
+): Promise<HttpResult> {
+  return http(`${env.apiUrl}/rest/v1/${path}`, {
+    method,
+    headers: {
+      apikey: env.anonKey,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export async function rpc(env: StackEnv, token: string | null, fn: string, args: Record<string, unknown> = {}): Promise<HttpResult> {
+  return rest(env, token, "POST", `rpc/${fn}`, args);
+}
+
+/** Service-role request — used only to show the legacy app's server-side access is retained. */
+export async function serviceRest(env: StackEnv, path: string): Promise<HttpResult> {
+  return http(`${env.apiUrl}/rest/v1/${path}`, {
+    headers: { apikey: env.serviceRoleKey, Authorization: `Bearer ${env.serviceRoleKey}` },
+  });
+}
+
+export async function storage(
+  env: StackEnv,
+  token: string | null,
+  method: "GET" | "POST",
+  objectPath: string,
+  content?: string
+): Promise<HttpResult> {
+  return http(`${env.apiUrl}/storage/v1/object/${objectPath}`, {
+    method,
+    headers: {
+      apikey: env.anonKey,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(content !== undefined ? { "Content-Type": "text/plain" } : {}),
+    },
+    body: content,
+  });
+}
+
+/** HS256 JWT signed with the local stack's JWT secret (for expired/forged token checks). */
+export function signJwt(secret: string, payload: Record<string, unknown>): string {
+  const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const head = enc({ alg: "HS256", typ: "JWT" });
+  const body = enc(payload);
+  const sig = createHmac("sha256", secret).update(`${head}.${body}`).digest("base64url");
+  return `${head}.${body}.${sig}`;
+}

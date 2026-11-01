@@ -1,6 +1,6 @@
 # Native Multi-Tenant Migration — Technical Specification
 
-Status: **P0 + P1 (database schema and isolation tests) implemented locally on `feat/native-multi-tenant`, uncommitted, never applied to any Supabase project. P1 security-review findings 1–8 resolved (§15). P2 (authentication) and all UI work not started.**
+Status: **P0 + P1 (database schema and isolation tests) implemented locally on `feat/native-multi-tenant`, committed locally (not pushed), never applied to any hosted Supabase project. P1 security-review findings 1–8 resolved (§15). Real local Supabase stack verification written but BLOCKED until Docker can run (§15.5). P2 (authentication) and all UI work not started.**
 Branch: `feat/native-multi-tenant` (created from `release` @ `9c189f8`).
 Scope: convert the single-tenant, GHL-fed dashboard into a native multi-tenant SaaS on Supabase while preserving every sidebar item, route, layout, and style, and the existing theme and navigation.
 
@@ -1037,7 +1037,7 @@ docs/GHL_SYNC_WEBHOOK_CONTRACT.md  docs/GHL_WORKFLOW_SYNC_MAP.md  docs/WEBHOOK_S
 
 M1–M13 are additive and leave the legacy tables' structure and data untouched. M14 changes only privileges and RLS on the legacy tables; the legacy app reaches them exclusively with the server-side service-role key, which keeps full access. Rollback (`supabase/rollback/20261101_native_multi_tenant.down.sql`) reverts M1–M13 and deliberately does **not** revert M14.
 
-The existing migrations use an 8-digit prefix (`20260917_*`), and **both legacy files share the version `20260917`**, which the Supabase CLI treats as one version. Before any staging push, run `supabase migration list` against staging and repair history (rename or `migration repair`) — see §15.5.
+The legacy migrations originally shared the 8-digit version `20260917`. They are now `20260917121316_sync_store.sql` and `20260917185155_auth_sessions.sql` (contents unchanged; mapping and reconciliation steps in `docs/MIGRATION_VERSION_MAPPING.md`). Any existing database's history is unknown: reconcile with `supabase migration list` on staging before any push — never repair remote history blindly.
 
 ### 9.2 Delivery phases
 
@@ -1200,7 +1200,7 @@ Standard fixture: workspaces **A** and **B**. Users: `ownerA`, `adminA`, `employ
 | JWT remains valid after removal or suspension | Stale access | DB-evaluated `active_workspace_id()` per statement (MEM-1, SUSP-1); `getUser()` on sensitive mutations |
 | No local Docker / Supabase CLI today | PostgREST, GoTrue/JWT, and Storage behaviour unverified | P0 prerequisite (D1). Meanwhile: PGlite shim suite + real local PostgreSQL concurrency suite (§15) |
 | Supabase project pauses on the free tier (happened before) | Outage | D5: paid Supabase plan required before production cutover (no purchase made) |
-| Migration history mismatch (8-digit legacy prefixes; both legacy files are version `20260917`) | Failed `db push` | `supabase migration list` + repair on the separate staging project (D4) first |
+| Migration history mismatch (legacy files renamed from shared version `20260917`; remote history unknown) | Failed `db push` | Reconcile per `docs/MIGRATION_VERSION_MAPPING.md` on the separate staging project (D4) first |
 | Legacy `sync_*` tables were reachable through the public Data API (RLS off, default grants) | Data exposure | M14 legacy lockdown (finding 1) |
 | Visual regressions while adding create/edit | UI drift | UI-2 visual diff; reuse `src/components/ui.tsx` primitives only |
 | Auth cutover locks users out | Downtime | Flag rollback; staging rehearsal T3–T4; legacy creds retained until T6 |
@@ -1228,17 +1228,17 @@ AI receptionist runtime and telephony, outbound SMS/email/calls, real invitation
 
 ### 15.1 Files
 
-Migrations `supabase/migrations/20261101000100…001400_*.sql` (M1–M14, §9.1); rollback `supabase/rollback/20261101_native_multi_tenant.down.sql`; tests `tests/db/` (PGlite + Supabase shim), `tests/db-real/` (real local PostgreSQL), `tests/run-tests.test.ts` + `tests/fixtures/runner/` (runner self-test); runner `scripts/run-tests.mjs`. Dev dependencies (exact versions): `@electric-sql/pglite` 0.5.14, `embedded-postgres` 18.6.0-beta.19 (PostgreSQL 18.6 binaries; every published version carries a beta tag), `pg` 8.23.1, `@types/pg` 8.23.1. No application, auth, UI, sidebar, or production files changed.
+Migrations `supabase/migrations/20261101000100…001400_*.sql` (M1–M14, §9.1); rollback `supabase/rollback/20261101_native_multi_tenant.down.sql`; tests `tests/db/` (PGlite + Supabase shim), `tests/db-real/` (real local PostgreSQL), `tests/supabase-stack/` (real local Supabase stack), `tests/stack-helpers.test.ts`, `tests/run-tests.test.ts` + `tests/fixtures/runner/` (runner self-test); runner `scripts/run-tests.mjs`; local stack config `supabase/config.toml` (TOTP MFA on, seed off, unused services off). Dev dependencies (exact versions): `@electric-sql/pglite` 0.5.14, `embedded-postgres` 18.6.0-beta.19 (PostgreSQL 18.6 binaries; every published version carries a beta tag), `pg` 8.23.1, `@types/pg` 8.23.1, `supabase` 2.122.0 (CLI). No application, auth, UI, sidebar, or production files changed.
 
 ### 15.2 Test environments (reported separately; never conflated)
 
 | Environment | What it is | What it proves | What it cannot prove |
 | --- | --- | --- | --- |
 | **PGlite + shim** (`npm run test:db`) | PostgreSQL 18.6 in WASM, one connection. `tests/db/supabase-local-shim.sql` creates `anon`/`authenticated`/`service_role`, `auth.users`, `auth.uid()/jwt()`, Supabase default privileges, and a non-superuser `migration_owner` with BYPASSRLS (like Supabase's `postgres`). Requests are simulated with `set local role` + `request.jwt.claims`. | Migrations apply/roll back; RLS, grants, constraints, triggers, RPC logic, attribution | Concurrency; real PostgREST, GoTrue JWT verification, Storage |
-| **Real local PostgreSQL** (`npm run test:db:concurrency`) | Plain PostgreSQL 18.6 (embedded binaries, `127.0.0.1`, random port, throwaway data dir), same shim and migrations, independent `pg` sessions. On this machine the Visual C++ runtime is not installed system-wide, so the harness prepends an existing Microsoft Edge directory that ships it to its own PATH (nothing installed or copied; override with `FNA_VC_RUNTIME_DIR`). | Membership-lock serialization under true concurrency (finding 2), including a negative control | Anything Supabase-specific |
-| **Real Supabase local stack** | `supabase start` (Docker) | PostgREST, JWT/AAL, Storage, `supabase db reset` | — **BLOCKED**: Docker, WSL, and Supabase CLI are not installed |
+| **Real local PostgreSQL** (`npm run test:db:concurrency`) | Plain PostgreSQL 18.6 (embedded binaries, `127.0.0.1`, random port, throwaway data dir), same shim and migrations, independent `pg` sessions. Requires the system-wide Microsoft VC++ 2015-2022 x64 runtime (reports BLOCKED without it). | Membership-lock serialization under true concurrency (finding 2), including a negative control | Anything Supabase-specific |
+| **Real Supabase local stack** (`npm run test:stack`, `tests/supabase-stack/`) | Supabase CLI 2.122.0 (`supabase start` on Docker, PostgreSQL 17 per `supabase/config.toml`); migrations applied by `supabase db reset --local`; real GoTrue sign-ups, TOTP MFA, JWTs through PostgREST and Storage; refuses non-local URLs; stops with `--no-backup` if it started the stack | CLI migration apply; profile trigger; forged/expired/unsigned JWT rejection; AAL1 vs AAL2 platform access; RLS isolation; forged attribution; revoked membership; suspension; platform grants; Storage policies; legacy lockdown | — **BLOCKED** on this machine: Docker engine cannot start (firmware virtualization off; Virtual Machine Platform not enabled) |
 
-Supabase PostgreSQL versions are 15/17; the local suites ran on 18.6. Version-specific differences are covered only once the Supabase stack runs.
+Supabase PostgreSQL versions are 15/17; the PGlite and real-PostgreSQL suites ran on 18.6. The stack suite runs on 17 (config `major_version = 17`) and covers version-specific differences once Docker works.
 
 ### 15.3 Security review findings (Codex) — resolution and regression tests
 
@@ -1261,25 +1261,25 @@ Also added: architecture guard (no `organizations`/`organization_id`/`org_id` in
 
 | Check | Environment | Result |
 | --- | --- | --- |
-| `npm test` (runner: unit + db + realpg) | Node 24.20.0 | **PASS** — unit 143/143, db 129/129, realpg 7/7; 0 failed, 0 cancelled, 0 skipped |
-| Unit suite (original 137 + 6 runner self-tests) | Node | PASS 143/143 |
-| DB suite: migrations 8, isolation 42, membership 19, platform 22, security findings 38 | PGlite + shim | PASS 129/129 |
-| Concurrency suite | Real local PostgreSQL 18.6, independent sessions | PASS 7/7 (incl. negative control) |
+| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 145/145, db 130/130, realpg 7/7 PASS; stack 12 tests BLOCKED |
+| Unit suite (original 137 + 6 runner self-tests + 2 stack-helper tests: RFC 6238 TOTP vectors, HS256 signing) | Node | PASS 145/145 |
+| DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38 | PGlite + shim | PASS 130/130 |
+| Concurrency suite | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 7/7 (incl. negative control) |
 | `tsc --noEmit -p .` (app) | — | PASS |
-| `tsc` over `tests/db`, `tests/db-real`, runner tests (bundler resolution, strict) | — | PASS |
+| `tsc` over `tests/db`, `tests/db-real`, `tests/supabase-stack`, runner tests (bundler resolution, strict) | — | PASS |
 | `npm run build` | Next.js 15.5.25 | PASS |
 | Lint | — | Not available (no lint script/config) |
-| `supabase start` / `supabase db reset` | Real Supabase local stack | **BLOCKED** (no Docker/WSL/Supabase CLI) |
-| PostgREST HTTP requests with real JWTs (anon key, user JWT, forged/expired JWT, AAL2 claim) | Real Supabase local stack | **BLOCKED** |
-| Storage bucket and `storage.objects` policies (M13) | Real Supabase local stack | **BLOCKED** (M13 skips storage when `storage.buckets` is absent) |
-| GoTrue sign-up trigger (`handle_new_user` on real `auth.users`) | Real Supabase local stack | **BLOCKED** (verified only against the shim's `auth.users`) |
+| `supabase start` + `supabase db reset --local` (CLI applies all 16 migrations) | Real Supabase local stack | **BLOCKED** (Docker engine cannot start) |
+| GoTrue sign-up → profile trigger; forged/expired/unsigned JWTs; AAL1 vs TOTP AAL2 platform RPCs | Real Supabase local stack | **BLOCKED** |
+| RLS isolation, forged attribution, revoked membership, suspension, platform grants over PostgREST | Real Supabase local stack | **BLOCKED** |
+| Storage bucket and `storage.objects` policies (M13) | Real Supabase local stack | **BLOCKED** |
+| Legacy tables closed to anon/authenticated over PostgREST; service role retained | Real Supabase local stack | **BLOCKED** (PGlite-verified only) |
 
-`npm test` exit codes: 0 all suites pass; 1 any failure, cancellation, skip/todo, missing summary, or fewer tests than the suite minimum; 2 nothing failed but a suite was BLOCKED (never reported as PASS).
+`npm test` exit codes: 0 all suites pass; 1 any failure, cancellation, skip/todo, missing summary, or fewer tests than the suite minimum; 2 nothing failed but a suite was BLOCKED (never reported as PASS). The stack suite has never run on this machine; expect first-run fixes once Docker works.
 
 ### 15.5 Remaining blockers before P2 / staging
 
-1. **Docker + Supabase CLI (D1)** not installed: PostgREST/JWT, Storage, GoTrue, and `supabase db reset` checks remain BLOCKED.
-2. **Visual C++ runtime** not installed system-wide; the real-PostgreSQL suite depends on the Edge-supplied copy (or `FNA_VC_RUNTIME_DIR`). Installing the Microsoft VC++ 2015-2022 x64 redistributable removes this dependency.
-3. **Legacy migration versions collide** (`20260917_auth_sessions.sql` and `20260917_sync_store.sql` are both version `20260917` to the Supabase CLI). Must be resolved with `supabase migration list` / repair on the separate staging project before any push (D4).
-4. **Staging project (D4) and paid plan (D5)** not created/purchased — by instruction.
-5. Phone number change (D7) and all theme/navigation-preserving UI work wait for the UI phase.
+1. **Docker cannot start (D1).** Installed: Supabase CLI 2.122.0 (pinned devDependency), WSL 2.7.14, Docker Desktop 4.97 (engine 29.9.2), VC++ 2015-2022 x64 14.51.36247. Still required on the machine: enable **SVM Mode** (AMD virtualization) in the ASUS UEFI, enable the Windows **Virtual Machine Platform** feature (elevated `wsl --install --no-distribution`), restart, then start Docker Desktop and run `npm run test:stack`.
+2. **Legacy migration history reconciliation** (cutover prerequisite): files renamed to unique versions (`docs/MIGRATION_VERSION_MAPPING.md`); history of any existing database is unknown and must be reconciled with `supabase migration list` on staging before any push. No remote repair was performed.
+3. **Staging project (D4) and paid plan (D5)** not created/purchased — by instruction.
+4. Phone number change (D7) and all theme/navigation-preserving UI work wait for the UI phase.
