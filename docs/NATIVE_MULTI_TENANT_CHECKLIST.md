@@ -37,7 +37,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [ ] Docker engine running — needs SVM Mode in UEFI, Virtual Machine Platform feature, restart.
 - [x] Legacy migration versions made unique and ordered; mapping in `docs/MIGRATION_VERSION_MAPPING.md`; enforced by test.
 - [ ] Remote migration history reconciled — cutover prerequisite (history unknown; no blind repair).
-- [x] Real-stack suite written (`tests/supabase-stack/`, 13 tests) — **not yet run**.
+- [x] Real-stack suite written (`tests/supabase-stack/`, 17 tests) — **not yet run**.
 
 ## Second review (Codex) findings
 
@@ -47,13 +47,22 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] R2-4 (P2): stack suite resets only an isolated, explicitly disposable project it started (guards unit-tested).
 - [ ] R2-3 and storage policies through the real Storage API — **BLOCKED** (Docker).
 
+## Second review coverage follow-up
+
+- [x] Real (clock-driven) grant expiry: real PostgreSQL, grant row untouched.
+- [x] Storage update/upsert; Storage access after grant revocation, member removal, and suspension (PGlite).
+- [x] Permission overrides: RLS, RPCs, Storage, workspace scoping, promotion/removal clearing, who may set them, audit (PGlite); override races (real PostgreSQL).
+- [x] Concurrent provisioning, invitation acceptance/revocation, and bootstrap rotation (real PostgreSQL).
+- [x] Contact-write audit asserts the exact action, actor, and target (PGlite and stack suite).
+- [ ] The same coverage through GoTrue/PostgREST/Storage — **BLOCKED** (Docker); P1 stays on hold until it runs.
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (unit 155, db 149, realpg 10, stack 13) | exit 2: three suites PASS, stack **BLOCKED** |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 149/149 |
-| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 10/10 |
+| `npm test` | runner (unit 155, db 168, realpg 24, stack 17) | exit 2: three suites PASS, stack **BLOCKED** |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 168/168 |
+| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 24/24 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
 | Lint | — | not available (no script) |

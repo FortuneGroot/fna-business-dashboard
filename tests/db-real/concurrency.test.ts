@@ -55,6 +55,53 @@ async function roleOf(ws: string, userId: string): Promise<string> {
   return r.rows[0]?.role ?? "none";
 }
 
+async function overrides(ws: string, userId: string): Promise<number> {
+  const r = await admin.query<{ n: number }>(
+    "select count(*)::int n from public.member_permission_overrides where workspace_id = $1 and user_id = $2", [ws, userId]);
+  return r.rows[0].n;
+}
+
+/** Provisions a workspace whose bootstrap owner invitation has not been accepted. */
+async function unclaimedWorkspace() {
+  seq += 1;
+  const owner = await createUser(`unclaimed-owner-${seq}@example.test`);
+  const c = await server.connect();
+  try {
+    const [prov] = await requestAs<{ r: { workspace_id: string; invite_token: string; invitation_id: string } }>(c, platform,
+      "select public.platform_provision_workspace($1, $2, $3, $4) r",
+      [`synthetic-unclaimed-${seq}`, `Unclaimed ${seq} (synthetic)`, `unclaimed-${seq}`, owner.email]);
+    return { ws: prov.r.workspace_id, token: prov.r.invite_token, invitationId: prov.r.invitation_id, owner };
+  } finally {
+    await c.end();
+  }
+}
+
+async function openOwnerInvitations(ws: string): Promise<number> {
+  const r = await admin.query<{ n: number }>(
+    `select count(*)::int n from public.workspace_invitations
+     where workspace_id = $1 and role = 'owner' and accepted_at is null and revoked_at is null`, [ws]);
+  return r.rows[0].n;
+}
+
+async function membersOf(ws: string): Promise<number> {
+  const r = await admin.query<{ n: number }>(
+    "select count(*)::int n from public.workspace_members where workspace_id = $1 and status = 'active'", [ws]);
+  return r.rows[0].n;
+}
+
+/** One complete request in a fresh session; returns the RPC result or the error. */
+async function attempt<T>(user: RealUser, sql: string, params: unknown[] = []) {
+  const c = await server.connect();
+  try {
+    return await settle(requestAs<{ r: T }>(c, user, sql, params).then((rows) => rows[0]?.r));
+  } finally {
+    await c.end();
+  }
+}
+
+const errorOf = (o: { ok: boolean }) => (o as unknown as { error?: Error }).error?.message ?? "";
+const valueOf = <T>(o: { ok: boolean }) => (o as unknown as { value: pg.QueryResult }).value.rows[0].r as T;
+
 async function waitingOnLock(): Promise<number> {
   const r = await admin.query<{ n: number }>(
     "select count(*)::int n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'");
@@ -81,7 +128,7 @@ async function race(
   const b = await server.connect();
   try {
     await beginAs(a, first.user);
-    await a.query(first.sql, first.params);
+    const firstResult = await a.query(first.sql, first.params);
 
     await beginAs(b, second.user);
     const pending = settle(b.query(second.sql, second.params));
@@ -92,7 +139,7 @@ async function race(
     await a.query("commit");
     const outcome = await pending;
     await b.query(outcome.ok ? "commit" : "rollback");
-    return { blocked, raced, outcome };
+    return { blocked, raced, outcome, first: firstResult.rows[0]?.r };
   } finally {
     await a.end();
     await b.end();
@@ -238,6 +285,40 @@ describe("real PostgreSQL: concurrent owner changes serialize on the workspace l
     assert.equal(invites.rows[0].n, 0);
   });
 
+  test("an owner demoted to employee while waiting cannot set a permission override", async () => {
+    const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
+    const r = await race(
+      { user: owner1, sql: "select public.set_member_role($1, 'employee')", params: [owner2.id] },
+      { user: owner2, sql: "select public.set_member_permission($1, 'contacts.delete', true)", params: [employee.id] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match((r.outcome as { error: Error }).error.message, /forbidden/);
+    assert.equal(await overrides(ws, employee.id), 0);
+  });
+
+  test("an override racing a promotion never survives on a non-employee (promotion first)", async () => {
+    const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
+    const r = await race(
+      { user: owner1, sql: "select public.set_member_role($1, 'admin')", params: [employee.id] },
+      { user: owner2, sql: "select public.set_member_permission($1, 'contacts.delete', true)", params: [employee.id] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match((r.outcome as { error: Error }).error.message, /employees only/);
+    assert.equal(await roleOf(ws, employee.id), "admin");
+    assert.equal(await overrides(ws, employee.id), 0);
+  });
+
+  test("an override racing a promotion never survives on a non-employee (override first)", async () => {
+    const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
+    const r = await race(
+      { user: owner2, sql: "select public.set_member_permission($1, 'contacts.delete', true)", params: [employee.id] },
+      { user: owner1, sql: "select public.set_member_role($1, 'admin')", params: [employee.id] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, true);
+    assert.equal(await roleOf(ws, employee.id), "admin");
+    assert.equal(await overrides(ws, employee.id), 0, "promotion must clear the override committed just before it");
+  });
+
   test("holding the membership lock does not block ordinary writes in the same workspace", async () => {
     const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
     const a = await server.connect();
@@ -253,6 +334,244 @@ describe("real PostgreSQL: concurrent owner changes serialize on the workspace l
     } finally {
       await a.end();
       await e.end();
+    }
+  });
+});
+
+describe("real PostgreSQL: concurrent provisioning", () => {
+  const PROVISION = "select public.platform_provision_workspace($1, $2, $3, $4) r";
+
+  test("the same key and inputs from two sessions create one workspace; the replay reveals no token", async () => {
+    const key = `synthetic-concurrent-${++seq}`;
+    const args = [key, `Concurrent ${seq} (synthetic)`, `concurrent-${seq}`, `concurrent-owner-${seq}@example.test`];
+    const r = await race({ user: platform, sql: PROVISION, params: args }, { user: platform, sql: PROVISION, params: args });
+    assert.equal(r.raced, "pending", "the second provisioning must wait for the first");
+    assert.ok(r.blocked >= 1);
+    assert.equal(r.outcome.ok, true, errorOf(r.outcome));
+    const first = r.first as { workspace_id: string; created: boolean; invite_token: string };
+    const second = valueOf<{ workspace_id: string; created: boolean; invite_token: string | null }>(r.outcome);
+    assert.equal(first.created, true);
+    assert.match(first.invite_token, /^[0-9a-f]{64}$/);
+    assert.equal(second.created, false);
+    assert.equal(second.workspace_id, first.workspace_id);
+    assert.equal(second.invite_token, null);
+    const counts = await admin.query<{ ws: number; stages: number; invites: number }>(
+      `select (select count(*)::int from public.workspaces where provisioning_key = $1) ws,
+              (select count(*)::int from public.pipeline_stages where workspace_id = $2) stages,
+              (select count(*)::int from public.workspace_invitations where workspace_id = $2) invites`, [key, first.workspace_id]);
+    assert.deepEqual(counts.rows[0], { ws: 1, stages: 12, invites: 1 });
+  });
+
+  test("the same key with different inputs: the waiting session gets a conflict and changes nothing", async () => {
+    const key = `synthetic-concurrent-${++seq}`;
+    const r = await race(
+      { user: platform, sql: PROVISION, params: [key, `First ${seq} (synthetic)`, `first-${seq}`, `first-${seq}@example.test`] },
+      { user: platform, sql: PROVISION, params: [key, `Second ${seq} (synthetic)`, `first-${seq}`, `first-${seq}@example.test`] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /conflict/);
+    const ws = await admin.query<{ name: string }>("select name from public.workspaces where provisioning_key = $1", [key]);
+    assert.deepEqual(ws.rows.map((x) => x.name), [`First ${seq} (synthetic)`]);
+  });
+
+  test("different keys claiming the same slug: the waiting session gets a conflict and leaves no partial workspace", async () => {
+    seq += 1;
+    const slug = `contested-${seq}`;
+    const r = await race(
+      { user: platform, sql: PROVISION, params: [`synthetic-slug-a-${seq}`, `Slug A ${seq}`, slug, `slug-a-${seq}@example.test`] },
+      { user: platform, sql: PROVISION, params: [`synthetic-slug-b-${seq}`, `Slug B ${seq}`, slug, `slug-b-${seq}@example.test`] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /conflict/);
+    const ws = await admin.query<{ provisioning_key: string }>("select provisioning_key from public.workspaces where slug = $1", [slug]);
+    assert.deepEqual(ws.rows.map((x) => x.provisioning_key), [`synthetic-slug-a-${seq}`]);
+    const orphans = await admin.query<{ n: number }>(
+      "select count(*)::int n from public.workspaces where provisioning_key = $1", [`synthetic-slug-b-${seq}`]);
+    assert.equal(orphans.rows[0].n, 0);
+  });
+});
+
+describe("real PostgreSQL: concurrent invitation acceptance, revocation, and rotation", () => {
+  const ACCEPT = "select public.accept_invitation($1) r";
+
+  async function invitee(owner: RealUser, role = "employee") {
+    seq += 1;
+    const u = await createUser(`invitee-${seq}@example.test`);
+    const c = await server.connect();
+    try {
+      const [inv] = await requestAs<{ r: { token: string; invitation_id: string } }>(c, owner,
+        "select public.create_invitation($1, $2, 72) r", [u.email, role]);
+      return { user: u, token: inv.r.token, invitationId: inv.r.invitation_id };
+    } finally {
+      await c.end();
+    }
+  }
+
+  test("the same invitation accepted from two sessions: one membership, the other gets invitation_used", async () => {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const inv = await invitee(owner1);
+    const r = await race({ user: inv.user, sql: ACCEPT, params: [inv.token] }, { user: inv.user, sql: ACCEPT, params: [inv.token] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /invitation_used/);
+    assert.equal(await roleOf(ws, inv.user.id), "employee");
+    const audits = await admin.query<{ n: number }>(
+      "select count(*)::int n from public.workspace_audit_log where workspace_id = $1 and action = 'invitation.accepted' and target = $2",
+      [ws, inv.invitationId]);
+    assert.equal(audits.rows[0].n, 1);
+  });
+
+  test("two different invitees accepting at the same time both join", async () => {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const before = await membersOf(ws);
+    const a = await invitee(owner1);
+    const b = await invitee(owner1, "admin");
+    const r = await race({ user: a.user, sql: ACCEPT, params: [a.token] }, { user: b.user, sql: ACCEPT, params: [b.token] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, true, errorOf(r.outcome));
+    assert.equal(await roleOf(ws, a.user.id), "employee");
+    assert.equal(await roleOf(ws, b.user.id), "admin");
+    assert.equal(await membersOf(ws), before + 2);
+  });
+
+  test("revocation first: the waiting acceptance is refused as revoked", async () => {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const inv = await invitee(owner1);
+    const r = await race(
+      { user: owner1, sql: "select public.revoke_invitation($1)", params: [inv.invitationId] },
+      { user: inv.user, sql: ACCEPT, params: [inv.token] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /invitation_revoked/);
+    assert.equal(await roleOf(ws, inv.user.id), "none");
+  });
+
+  test("acceptance first: the waiting revocation is refused and the membership stands", async () => {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const inv = await invitee(owner1);
+    const r = await race(
+      { user: inv.user, sql: ACCEPT, params: [inv.token] },
+      { user: owner1, sql: "select public.revoke_invitation($1)", params: [inv.invitationId] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /conflict/);
+    assert.equal(await roleOf(ws, inv.user.id), "employee");
+  });
+
+  const ROTATE = "select public.platform_rotate_bootstrap_invitation($1, 'lost bootstrap token (concurrency test)') r";
+
+  test("rotation first: the old bootstrap token is refused; only the new token works", async () => {
+    const { ws, token, owner } = await unclaimedWorkspace();
+    const r = await race({ user: platform, sql: ROTATE, params: [ws] }, { user: owner, sql: ACCEPT, params: [token] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /invitation_revoked/);
+    assert.equal(await roleOf(ws, owner.id), "none");
+    const fresh = (r.first as { invite_token: string }).invite_token;
+    const ok = await attempt(owner, ACCEPT, [fresh]);
+    assert.equal(ok.ok, true, errorOf(ok));
+    assert.equal(await roleOf(ws, owner.id), "owner");
+    assert.equal(await openOwnerInvitations(ws), 0);
+  });
+
+  test("acceptance first: the waiting rotation is refused and issues no new invitation", async () => {
+    const { ws, token, owner } = await unclaimedWorkspace();
+    const r = await race({ user: owner, sql: ACCEPT, params: [token] }, { user: platform, sql: ROTATE, params: [ws] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match(errorOf(r.outcome), /conflict/);
+    assert.equal(await roleOf(ws, owner.id), "owner");
+    const total = await admin.query<{ n: number }>("select count(*)::int n from public.workspace_invitations where workspace_id = $1", [ws]);
+    assert.equal(total.rows[0].n, 1);
+  });
+
+  test("two concurrent rotations leave exactly one open owner invitation, and only the last token works", async () => {
+    const { ws, token, owner } = await unclaimedWorkspace();
+    const r = await race({ user: platform, sql: ROTATE, params: [ws] }, { user: platform, sql: ROTATE, params: [ws] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, true, errorOf(r.outcome));
+    assert.equal(await openOwnerInvitations(ws), 1);
+    const firstToken = (r.first as { invite_token: string }).invite_token;
+    const lastToken = valueOf<{ invite_token: string; revoked_invitation_ids: string[] }>(r.outcome).invite_token;
+    for (const stale of [token, firstToken]) {
+      const refused = await attempt(owner, ACCEPT, [stale]);
+      assert.match(errorOf(refused), /invitation_revoked/);
+    }
+    const ok = await attempt(owner, ACCEPT, [lastToken]);
+    assert.equal(ok.ok, true, errorOf(ok));
+    assert.equal(await roleOf(ws, owner.id), "owner");
+  });
+});
+
+describe("real PostgreSQL: platform grants expire by the clock", () => {
+  test("a one-minute write grant ends reads, writes, Storage access, and context at expiry with no intervention", async () => {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const c = await server.connect();
+    try {
+      await requestAs(c, owner1, "insert into public.contacts (workspace_id, first_name) values ($1, 'Expiry fixture')", [ws]);
+      await requestAs(c, owner1, "insert into storage.objects (bucket_id, name, owner_id) values ('workspace-assets', $1, auth.uid()::text)",
+        [`${ws}/owner-logo.png`]);
+
+      const [g] = await requestAs<{ r: { id: string; expires_at: string } }>(c, platform,
+        "select public.platform_grant_access($1, 'write', 'clock expiry regression', 1) r", [ws]);
+      const grantId = g.r.id;
+      const before = (await admin.query("select created_at, expires_at, revoked_at from public.platform_access_grants where id = $1", [grantId])).rows[0];
+
+      const granted = `${ws}/granted-before-expiry.png`;
+      const [contact] = await requestAs<{ id: string }>(c, platform,
+        "insert into public.contacts (workspace_id, first_name) values ($1, 'Before expiry') returning id", [ws]);
+      await requestAs(c, platform,
+        "insert into storage.objects (bucket_id, name, owner_id) values ('workspace-assets', $1, auth.uid()::text)", [granted]);
+      await requestAs(c, platform,
+        "update storage.objects set metadata = '{\"v\":2}' where bucket_id = 'workspace-assets' and name = $1", [granted]);
+      const [seen] = await requestAs<{ n: number }>(c, platform, "select count(*)::int n from public.contacts");
+      assert.equal(seen.n, 2);
+
+      // Wait on the database clock, not the test clock; nothing touches the grant row.
+      const deadline = Date.now() + 120_000;
+      for (;;) {
+        const r = await admin.query<{ expired: boolean }>("select now() > $1::timestamptz + interval '1 second' expired", [before.expires_at]);
+        if (r.rows[0].expired) break;
+        if (Date.now() > deadline) throw new Error("grant did not reach its expiry time");
+        await sleep(2000);
+      }
+
+      const [after] = await requestAs<{ n: number }>(c, platform, "select count(*)::int n from public.contacts");
+      assert.equal(after.n, 0, "expired grant still reads contacts");
+      await assert.rejects(requestAs(c, platform,
+        "insert into public.contacts (workspace_id, first_name) values ($1, 'After expiry')", [ws]), /row-level security/);
+      const updated = await requestAs(c, platform, "update public.contacts set first_name = 'x' where id = $1 returning id", [contact.id]);
+      assert.equal(updated.length, 0);
+      const [assets] = await requestAs<{ n: number }>(c, platform,
+        "select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and name like $1", [`${ws}/%`]);
+      assert.equal(assets.n, 0, "expired grant still reads assets");
+      assert.equal((await requestAs(c, platform,
+        "update storage.objects set metadata = '{\"v\":3}' where name = $1 returning id", [granted])).length, 0);
+      assert.equal((await requestAs(c, platform, "delete from storage.objects where name = $1 returning id", [granted])).length, 0);
+      await assert.rejects(requestAs(c, platform,
+        "insert into storage.objects (bucket_id, name, owner_id) values ('workspace-assets', $1, auth.uid()::text)",
+        [`${ws}/after-expiry.png`]), /row-level security/);
+      const [ctx] = await requestAs<{ r: { workspace: unknown; grant: unknown } }>(c, platform, "select public.request_context() r");
+      assert.equal(ctx.r.grant, null);
+      assert.equal(ctx.r.workspace, null);
+      await assert.rejects(requestAs(c, platform, "select public.switch_workspace($1)", [ws]), /forbidden/);
+
+      const row = (await admin.query("select created_at, expires_at, revoked_at from public.platform_access_grants where id = $1", [grantId])).rows[0];
+      assert.deepEqual(row, before, "the grant row must be untouched; expiry is purely time-based");
+      assert.equal(row.revoked_at, null);
+
+      const audit = await admin.query<{ action: string; target: string | null }>(
+        "select action, target from public.workspace_audit_log where workspace_id = $1 and grant_id = $2 order by id", [ws, grantId]);
+      assert.deepEqual(audit.rows, [
+        { action: "platform.access_granted", target: null },
+        { action: "contacts.insert", target: contact.id },
+        { action: "storage.object_insert", target: `workspace-assets/${granted}` },
+        { action: "storage.object_update", target: `workspace-assets/${granted}` },
+      ]);
+      const objects = await admin.query<{ n: number }>("select count(*)::int n from storage.objects where name = $1", [granted]);
+      assert.equal(objects.rows[0].n, 1);
+    } finally {
+      await c.end();
     }
   });
 });

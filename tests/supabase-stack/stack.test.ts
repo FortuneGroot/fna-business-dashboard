@@ -194,11 +194,14 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.equal(inv.status, 200, inv.text);
     assert.equal((await rpc(env, employeeA.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
     assert.deepEqual((await contacts(employeeA.token)).map((c) => c.id), [contactA]);
+    const logoA = `workspace-assets/${wsA}/logo-${run}.txt`;
+    assert.equal((await storage(env, employeeA.token, "GET", logoA)).status, 200);
 
     assert.equal((await rpc(env, ownerA.token, "remove_member", { p_user_id: employeeA.id })).status, 200);
     assert.deepEqual(await contacts(employeeA.token), []);
     const write = await rest(env, employeeA.token, "POST", "contacts", { workspace_id: wsA, first_name: "After removal" });
     assert.ok(denied(write.status), `removed member insert returned ${write.status}`);
+    assert.notEqual((await storage(env, employeeA.token, "GET", logoA)).status, 200, "removed member still reads assets");
   });
 
   test("platform access requires an explicit, attributed grant", async () => {
@@ -220,10 +223,11 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.equal(ins.status, 201, ins.text);
     assert.equal(ins.body[0].created_by, platform.id);
     const audit = await db.query(
-      "select count(*)::int as n from public.workspace_audit_log where workspace_id = $1 and grant_id = $2",
+      `select actor_id, actor_kind, action, target from public.workspace_audit_log
+       where workspace_id = $1 and grant_id = $2 and action <> 'platform.access_granted' order by id`,
       [wsA, write.body.id]
     );
-    assert.ok(audit.rows[0].n >= 1);
+    assert.deepEqual(audit.rows, [{ actor_id: platform.id, actor_kind: "platform_admin", action: "contacts.insert", target: ins.body[0].id }]);
 
     for (const g of [read.body.id, write.body.id]) {
       assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: g })).status, 200);
@@ -283,6 +287,127 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     const r = await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsB, p_reason: "stack test reactivation" });
     assert.equal(r.status, 200, r.text);
     assert.deepEqual((await contacts(ownerB.token)).map((c) => c.id), [contactB]);
+  });
+
+  test("Storage update (PUT) and upsert follow the write policy; granted ones are audited exactly", async () => {
+    const objectPath = `${wsA}/logo-${run}.txt`;
+    const obj = `workspace-assets/${objectPath}`;
+    assert.equal((await storage(env, ownerA.token, "PUT", obj, "owner v2")).status, 200);
+    assert.equal((await storage(env, ownerA.token, "POST", obj, "owner v3", { upsert: true })).status, 200);
+    assert.equal((await storage(env, ownerA.token, "GET", obj)).text, "owner v3");
+
+    assert.notEqual((await storage(env, ownerB.token, "PUT", obj, "intruder")).status, 200, "other workspace updated the object");
+    assert.notEqual((await storage(env, ownerB.token, "POST", obj, "intruder", { upsert: true })).status, 200, "other workspace upserted");
+    assert.equal((await storage(env, ownerA.token, "GET", obj)).text, "owner v3");
+
+    const grant = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test storage update audit", p_minutes: 15,
+    });
+    assert.equal(grant.status, 200, grant.text);
+    assert.equal((await storage(env, platformAal2, "PUT", obj, "granted v4")).status, 200);
+    assert.equal((await storage(env, platformAal2, "POST", obj, "granted v5", { upsert: true })).status, 200);
+    assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: grant.body.id })).status, 200);
+    assert.notEqual((await storage(env, platformAal2, "PUT", obj, "after revoke")).status, 200, "revoked grant still updates");
+
+    const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string }>(
+      `select actor_id, actor_kind, grant_id, action, target from public.workspace_audit_log
+       where workspace_id = $1 and action like 'storage.%' and grant_id = $2 order by id`, [wsA, grant.body.id]);
+    assert.deepEqual(audit.rows.map((r) => [r.action, r.target]), [
+      ["storage.object_update", obj],
+      ["storage.object_update", obj],
+    ]);
+    for (const r of audit.rows) {
+      assert.equal(r.actor_id, platform.id);
+      assert.equal(r.actor_kind, "platform_admin");
+    }
+  });
+
+  test("permission overrides change what an employee can do through PostgREST and Storage", async () => {
+    const emp = await signUp(env, email("employee-override"), "Override Employee");
+    const inv = await rpc(env, ownerA.token, "create_invitation", { p_email: emp.email, p_role: "employee", p_ttl_hours: 72 });
+    assert.equal(inv.status, 200, inv.text);
+    assert.equal((await rpc(env, emp.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+    const obj = `workspace-assets/${wsA}/override-${run}.txt`;
+    const setOverride = (permission: string, allowed: boolean | null) =>
+      rpc(env, ownerA.token, "set_member_permission", { p_user_id: emp.id, p_permission: permission, p_allowed: allowed });
+
+    assert.notEqual((await storage(env, emp.token, "POST", obj, "no override")).status, 200);
+    assert.equal((await setOverride("settings.write", true)).status, 200);
+    assert.equal((await storage(env, emp.token, "POST", obj, "with override")).status, 200);
+    assert.equal((await setOverride("settings.write", null)).status, 200);
+    assert.notEqual((await storage(env, emp.token, "PUT", obj, "override cleared")).status, 200);
+
+    assert.equal((await setOverride("contacts.write", false)).status, 200);
+    const blocked = await rest(env, emp.token, "POST", "contacts", { workspace_id: wsA, first_name: "Denied by override" });
+    assert.ok(denied(blocked.status), `deny override insert returned ${blocked.status}`);
+    assert.equal((await setOverride("contacts.write", null)).status, 200);
+    const allowed = await rest(env, emp.token, "POST", "contacts", { workspace_id: wsA, first_name: "Override cleared" });
+    assert.equal(allowed.status, 201, allowed.text);
+
+    const team = await rpc(env, emp.token, "set_member_permission", { p_user_id: ownerA.id, p_permission: "contacts.read", p_allowed: false });
+    assert.ok(denied(team.status), `employee set an override: ${team.status}`);
+    const escalate = await setOverride("team.change_role", true);
+    assert.notEqual(escalate.status, 200, "override granted a team power");
+  });
+
+  test("concurrent provisioning and double invitation acceptance over PostgREST settle to one outcome", async () => {
+    const key = `synthetic-concurrent-${run}`;
+    const owner = email("concurrent-owner");
+    const args = { p_provisioning_key: key, p_name: "Concurrent (synthetic)", p_slug: `concurrent-synthetic-${run}`, p_owner_email: owner };
+    const [p1, p2] = await Promise.all([
+      rpc(env, platformAal2, "platform_provision_workspace", args),
+      rpc(env, platformAal2, "platform_provision_workspace", args),
+    ]);
+    assert.equal(p1.status, 200, p1.text);
+    assert.equal(p2.status, 200, p2.text);
+    assert.equal(p1.body.workspace_id, p2.body.workspace_id);
+    assert.deepEqual([p1.body.created, p2.body.created].sort(), [false, true]);
+    const creator = p1.body.created ? p1.body : p2.body;
+    assert.equal((p1.body.created ? p2.body : p1.body).invite_token, null);
+    const ws = await db.query<{ n: number }>("select count(*)::int n from public.workspaces where provisioning_key = $1", [key]);
+    assert.equal(ws.rows[0].n, 1);
+
+    const user = await signUp(env, owner, "Concurrent Owner");
+    const [a1, a2] = await Promise.all([
+      rpc(env, user.token, "accept_invitation", { p_token: creator.invite_token }),
+      rpc(env, user.token, "accept_invitation", { p_token: creator.invite_token }),
+    ]);
+    const statuses = [a1.status, a2.status].sort();
+    assert.equal(statuses[0], 200);
+    assert.notEqual(statuses[1], 200, "the same invitation was accepted twice");
+    assert.match((a1.status === 200 ? a2 : a1).text, /invitation_used|already_member/);
+    const members = await db.query<{ n: number }>(
+      "select count(*)::int n from public.workspace_members where workspace_id = $1 and status = 'active'", [creator.workspace_id]);
+    assert.equal(members.rows[0].n, 1);
+  });
+
+  test("a one-minute platform grant expires by the clock across PostgREST and Storage", async () => {
+    const grant = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test clock expiry", p_minutes: 1,
+    });
+    assert.equal(grant.status, 200, grant.text);
+    const logo = `workspace-assets/${wsA}/logo-${run}.txt`;
+    assert.ok((await contacts(platformAal2)).some((c) => c.id === contactA));
+    assert.equal((await storage(env, platformAal2, "GET", logo)).status, 200);
+
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      const r = await db.query<{ expired: boolean }>("select now() > $1::timestamptz + interval '1 second' expired", [grant.body.expires_at]);
+      if (r.rows[0].expired) break;
+      if (Date.now() > deadline) throw new Error("grant did not reach its expiry time");
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+
+    assert.deepEqual(await contacts(platformAal2), []);
+    const ins = await rest(env, platformAal2, "POST", "contacts", { workspace_id: wsA, first_name: "After expiry" });
+    assert.ok(denied(ins.status), `expired grant insert returned ${ins.status}`);
+    assert.notEqual((await storage(env, platformAal2, "GET", logo)).status, 200, "expired grant still reads assets");
+    assert.notEqual((await storage(env, platformAal2, "POST", `workspace-assets/${wsA}/expired-${run}.txt`, "x")).status, 200);
+    const ctx = await rpc(env, platformAal2, "request_context");
+    assert.equal(ctx.status, 200, ctx.text);
+    assert.equal(ctx.body.grant, null);
+    const row = await db.query("select revoked_at from public.platform_access_grants where id = $1", [grant.body.id]);
+    assert.equal(row.rows[0].revoked_at, null, "expiry must not depend on revocation");
   });
 
   test("legacy tables are closed to anon and authenticated, open to the service role", async () => {

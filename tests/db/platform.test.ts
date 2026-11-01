@@ -73,11 +73,12 @@ describe("super-admin workspace access is explicit, time-boxed, and audited", ()
   test("a write grant allows writes, each audited with the grant id, but never role changes", async () => {
     const grant = await asUser(w.db, w.platform, (q) =>
       rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "write", "Data correction requested by owner", 30]));
-    await asUser(w.db, w.platform, (q) => q.query(
-      "insert into public.contacts (workspace_id, first_name) values ($1, 'Support fix')", [w.wsA]));
-    assert.equal(await adminCount(w.db,
-      "select count(*) n from public.workspace_audit_log where grant_id = $1 and action = 'contacts.insert' and actor_kind = 'platform_admin'",
-      [grant.id]), 1);
+    const contact = await asUser(w.db, w.platform, async (q) => (await rows<{ id: string }>(q,
+      "insert into public.contacts (workspace_id, first_name) values ($1, 'Support fix') returning id", [w.wsA]))[0].id);
+    const audit = await w.db.query<{ actor_id: string; actor_kind: string; action: string; target: string }>(
+      `select actor_id, actor_kind, action, target from public.workspace_audit_log
+       where workspace_id = $1 and grant_id = $2 and action <> 'platform.access_granted' order by id`, [w.wsA, grant.id]);
+    assert.deepEqual(audit.rows, [{ actor_id: w.platform.id, actor_kind: "platform_admin", action: "contacts.insert", target: contact }]);
     await assert.rejects(asUser(w.db, w.platform, (q) => rpc(q, "set_member_role", [w.employeeA.id, "owner"])), /forbidden/);
     await assert.rejects(asUser(w.db, w.platform, (q) => rpc(q, "remove_member", [w.employeeA.id])), /forbidden/);
     await assert.rejects(asUser(w.db, w.platform, (q) => rpc(q, "create_invitation", ["x@example.test", "admin", 72])), /forbidden/);

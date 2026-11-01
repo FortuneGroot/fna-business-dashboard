@@ -1266,14 +1266,30 @@ Also added: architecture guard (no `organizations`/`organization_id`/`org_id` in
 | R2-3 | P2 | Platform-granted Storage mutations unaudited | `private.audit_grant_storage_write()` trigger on `storage.objects` (insert/update/delete, `workspace-assets` only): when the caller is not a member but holds a live grant, writes `workspace_audit_log` with actor, workspace, `grant_id`, action `storage.object_<op>`, target `bucket/path`, metadata `{operation, bucket_id, object_path[, previous_object_path]}`. Rollback drops the trigger | **PGlite** (shim now has Supabase-shaped `storage.buckets/objects/foldername`): insert/rename/delete under a write grant audited with all fields; member uploads not audited; read grant can view, cannot mutate, nothing audited; revoked grant refused. Storage policy isolation (owner, other workspace, employee, anon, outsider, no-folder path). **Stack suite**: same audit through the Storage API (BLOCKED) |
 | R2-4 | P2 | Stack suite could reset an existing (developer) local stack | Suite builds an isolated disposable copy in the OS temp dir: random `fna-disposable-*` project id (own Docker volumes), ports +1000, marker file, only config + migrations copied (no link/env). `assertDisposable` (started by this run, temp location, marker, project id, no remote link, shifted local ports) must pass before `db reset`; volumes destroyed only for the run's own project | Unit tests for every guard (wrong ports, non-local host, missing/mismatched marker, real project id, linked project, workdir outside temp, not started here) and a source check that reset follows the guard and every CLI call uses the disposable workdir |
 
+#### Second review — coverage follow-up (Codex rerun confirmed unit 155, PGlite 149, concurrency 10)
+
+No schema or RPC changes; tests only.
+
+| Area | PGlite + shim | Real PostgreSQL (independent sessions, real clock) | Real Supabase stack |
+| --- | --- | --- | --- |
+| Grant expiry | Existing timestamp-shifted test | One-minute write grant issued by RPC; after the database clock passes `expires_at` (grant row untouched, never revoked): no contact reads/writes, no Storage read/update/delete/insert, `request_context` has no grant or workspace, switching refused; audit holds exactly the four in-window actions | Same through PostgREST and the Storage API (BLOCKED) |
+| Storage update/upsert | Owner update and `insert … on conflict do update`; employee, other workspace, read grant refused; write-grant update/upsert audited with exact action, target, grant, path (no `previous_object_path`); member changes not audited | Write-grant insert and update audited exactly (expiry test) | `PUT` and `x-upsert` by owner; other workspace refused; write-grant update/upsert audited exactly; refused after revocation (BLOCKED) |
+| Storage after revocation | Revoked write grant: no read/update/upsert/delete/insert, nothing audited; removed admin loses read and write; removed employee loses read; suspension ends member access, read grant still views, reactivation restores | — | Removed employee can no longer read the workspace asset (BLOCKED) |
+| Permission overrides | Allow `settings.write` → employee writes assets, cleared → refused; deny `contacts.write`/`contacts.read` enforced in RLS; allow `contacts.delete` honoured by `soft_delete_contact`; overrides scoped to their workspace; promotion clears them and demotion does not restore; removal clears them and re-invite starts at base; only `team.manage_overrides` holders in the target's workspace (not employees, other workspaces, or platform grants); no direct client writes; other workspaces cannot read them; changes audited with target and exact permission | Owner demoted to employee while waiting cannot set an override; override vs promotion in either order never leaves an override on an admin | Allow/clear `settings.write` and deny/clear `contacts.write` through Storage and PostgREST; employee cannot set overrides; `team.*` override refused (BLOCKED) |
+| Concurrent provisioning | — | Same key + inputs: second waits, returns the same workspace with `created = false` and no token (1 workspace, 12 stages, 1 invitation); same key + different inputs → `conflict`; same slug + different keys → `conflict`, no partial workspace | Two simultaneous identical requests settle to one workspace (BLOCKED) |
+| Concurrent invitations | — | Same token from two sessions → one membership, other `invitation_used`; two invitees both join; revoke-first → `invitation_revoked`; accept-first → revoke `conflict`; rotate-first → old token revoked, new token works; accept-first → rotation `conflict`, no new invitation; two rotations → exactly one open owner invitation, only the last token works | Simultaneous double acceptance → one membership (BLOCKED) |
+| Contact-write audit | Exactly one grant-linked row besides `platform.access_granted`: `contacts.insert`, actor, `platform_admin`, target = the new contact id | Exact (expiry test) | Same exact assertion (BLOCKED) |
+
+Grant expiry is evaluated with `now()`, i.e. at transaction start; a single PostgREST request is one short transaction, so a grant cannot outlive its expiry by more than one in-flight request.
+
 ### 15.4 Results (2026-11-01, this machine)
 
 | Check | Environment | Result |
 | --- | --- | --- |
-| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 155/155, db 149/149, realpg 10/10 PASS; stack 13 tests BLOCKED |
+| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 155/155, db 168/168, realpg 24/24 PASS; stack 17 tests BLOCKED |
 | Unit suite (original 137 + 9 runner self-tests + 9 stack-helper tests: TOTP vectors, HS256, disposable-stack guards) | Node | PASS 155/155 |
-| DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38, review round 2 19 | PGlite + shim (incl. storage tables) | PASS 149/149 |
-| Concurrency suite | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 10/10 (incl. two negative controls) |
+| DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38, review round 2 19, review coverage 19 | PGlite + shim (incl. storage tables) | PASS 168/168 |
+| Concurrency suite: owner/role/override races 13, provisioning 3, invitations/rotation 7, clock expiry 1 | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 24/24 (incl. two negative controls; expiry test waits ~62 s on the database clock) |
 | `tsc --noEmit -p .` (app) | — | PASS |
 | `tsc` over `tests/db`, `tests/db-real`, `tests/supabase-stack`, runner tests (bundler resolution, strict) | — | PASS |
 | `npm run build` | Next.js 15.5.25 | PASS |

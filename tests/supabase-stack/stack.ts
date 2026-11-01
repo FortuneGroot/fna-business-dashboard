@@ -319,9 +319,10 @@ export async function serviceRest(env: StackEnv, path: string): Promise<HttpResu
 export async function storage(
   env: StackEnv,
   token: string | null,
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   objectPath: string,
-  content?: string
+  content?: string,
+  options: { upsert?: boolean } = {}
 ): Promise<HttpResult> {
   return http(`${env.apiUrl}/storage/v1/object/${objectPath}`, {
     method,
@@ -329,6 +330,7 @@ export async function storage(
       apikey: env.anonKey,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(content !== undefined ? { "Content-Type": "text/plain" } : {}),
+      ...(options.upsert ? { "x-upsert": "true" } : {}),
     },
     body: content,
   });
