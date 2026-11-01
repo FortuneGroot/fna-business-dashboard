@@ -1234,9 +1234,9 @@ Migrations `supabase/migrations/20261101000100…001400_*.sql` (M1–M14, §9.1)
 
 | Environment | What it is | What it proves | What it cannot prove |
 | --- | --- | --- | --- |
-| **PGlite + shim** (`npm run test:db`) | PostgreSQL 18.6 in WASM, one connection. `tests/db/supabase-local-shim.sql` creates `anon`/`authenticated`/`service_role`, `auth.users`, `auth.uid()/jwt()`, Supabase default privileges, and a non-superuser `migration_owner` with BYPASSRLS (like Supabase's `postgres`). Requests are simulated with `set local role` + `request.jwt.claims`. | Migrations apply/roll back; RLS, grants, constraints, triggers, RPC logic, attribution | Concurrency; real PostgREST, GoTrue JWT verification, Storage |
+| **PGlite + shim** (`npm run test:db`) | PostgreSQL 18.6 in WASM, one connection. `tests/db/supabase-local-shim.sql` creates `anon`/`authenticated`/`service_role`, `auth.users`, `auth.uid()/jwt()`, Supabase-shaped `storage.buckets`/`storage.objects`/`storage.foldername` (owned by a separate storage admin role), Supabase default privileges, and a non-superuser `migration_owner` with BYPASSRLS (like Supabase's `postgres`). Requests are simulated with `set local role` + `request.jwt.claims`. | Migrations apply/roll back; RLS, grants, constraints, triggers, RPC logic, attribution | Concurrency; real PostgREST, GoTrue JWT verification, Storage |
 | **Real local PostgreSQL** (`npm run test:db:concurrency`) | Plain PostgreSQL 18.6 (embedded binaries, `127.0.0.1`, random port, throwaway data dir), same shim and migrations, independent `pg` sessions. Requires the system-wide Microsoft VC++ 2015-2022 x64 runtime (reports BLOCKED without it). | Membership-lock serialization under true concurrency (finding 2), including a negative control | Anything Supabase-specific |
-| **Real Supabase local stack** (`npm run test:stack`, `tests/supabase-stack/`) | Supabase CLI 2.122.0 (`supabase start` on Docker, PostgreSQL 17 per `supabase/config.toml`); migrations applied by `supabase db reset --local`; real GoTrue sign-ups, TOTP MFA, JWTs through PostgREST and Storage; refuses non-local URLs; stops with `--no-backup` if it started the stack | CLI migration apply; profile trigger; forged/expired/unsigned JWT rejection; AAL1 vs AAL2 platform access; RLS isolation; forged attribution; revoked membership; suspension; platform grants; Storage policies; legacy lockdown | — **BLOCKED** on this machine: Docker engine cannot start (firmware virtualization off; Virtual Machine Platform not enabled) |
+| **Real Supabase local stack** (`npm run test:stack`, `tests/supabase-stack/`) | Supabase CLI 2.122.0 on Docker, PostgreSQL 17; each run creates an isolated disposable project copy in the OS temp dir (random `fna-disposable-*` id, ports +1000, marker), applies migrations with `supabase start` + `db reset --local` only after `assertDisposable` passes, and destroys only its own volumes; real GoTrue sign-ups, TOTP MFA, JWTs through PostgREST and Storage | CLI migration apply; profile trigger; forged/expired/unsigned JWT rejection; AAL1 vs AAL2 platform access; RLS isolation; forged attribution; revoked membership; suspension; platform grants; Storage policies; legacy lockdown | — **BLOCKED** on this machine: Docker engine cannot start (firmware virtualization off; Virtual Machine Platform not enabled) |
 
 Supabase PostgreSQL versions are 15/17; the PGlite and real-PostgreSQL suites ran on 18.6. The stack suite runs on 17 (config `major_version = 17`) and covers version-specific differences once Docker works.
 
@@ -1257,14 +1257,23 @@ All in `tests/db/security-findings.test.ts` unless noted.
 
 Also added: architecture guard (no `organizations`/`organization_id`/`org_id` in migrations); synthetic fixture names; runner self-tests.
 
+#### Second review (Codex) — four remaining findings
+
+| # | Sev | Finding | Resolution | Regression tests |
+| --- | --- | --- | --- | --- |
+| R2-1 | P1 | Authorization evaluated before the workspace lock (stale authority after a concurrent demotion/removal) | `private.recheck_authority(ws, permission, member_only)` runs immediately after `lock_workspace_membership` in `set_member_role`, `remove_member`, `leave_workspace`, `set_member_permission`, `create_invitation`, `revoke_invitation` (the latter three now also take the lock); bootstrap rotation re-checks platform admin after its lock. Pre-lock checks remain as a fast fail | **Real PostgreSQL**: demotion-versus-promotion race refused with `forbidden` (caller ends as admin, target stays employee, one owner); control with only the re-check removed reproduces the bug (demoted caller promotes to owner); removed owner cannot create an invitation after waiting. **PGlite**: each RPC's re-check directly follows the lock and precedes all membership reads/writes; helper not client-callable |
+| R2-2 | P2 | A real failure could be reported as BLOCKED when output also contained `BLOCKED:` | Runner classifies each TAP root-cause failure (`failureType` other than `cancelledByParent`/`subtestsFailed`); BLOCKED only when every root cause's error starts with `BLOCKED:` and is not an assertion. Any real failure → FAIL | Fixtures: blocked + failing test → FAIL; blocked + failing hook (all cancelled, fail 0) → FAIL; assertion message containing `BLOCKED:` → FAIL; pure blocker → BLOCKED. The previous runner reported all three as BLOCKED |
+| R2-3 | P2 | Platform-granted Storage mutations unaudited | `private.audit_grant_storage_write()` trigger on `storage.objects` (insert/update/delete, `workspace-assets` only): when the caller is not a member but holds a live grant, writes `workspace_audit_log` with actor, workspace, `grant_id`, action `storage.object_<op>`, target `bucket/path`, metadata `{operation, bucket_id, object_path[, previous_object_path]}`. Rollback drops the trigger | **PGlite** (shim now has Supabase-shaped `storage.buckets/objects/foldername`): insert/rename/delete under a write grant audited with all fields; member uploads not audited; read grant can view, cannot mutate, nothing audited; revoked grant refused. Storage policy isolation (owner, other workspace, employee, anon, outsider, no-folder path). **Stack suite**: same audit through the Storage API (BLOCKED) |
+| R2-4 | P2 | Stack suite could reset an existing (developer) local stack | Suite builds an isolated disposable copy in the OS temp dir: random `fna-disposable-*` project id (own Docker volumes), ports +1000, marker file, only config + migrations copied (no link/env). `assertDisposable` (started by this run, temp location, marker, project id, no remote link, shifted local ports) must pass before `db reset`; volumes destroyed only for the run's own project | Unit tests for every guard (wrong ports, non-local host, missing/mismatched marker, real project id, linked project, workdir outside temp, not started here) and a source check that reset follows the guard and every CLI call uses the disposable workdir |
+
 ### 15.4 Results (2026-11-01, this machine)
 
 | Check | Environment | Result |
 | --- | --- | --- |
-| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 145/145, db 130/130, realpg 7/7 PASS; stack 12 tests BLOCKED |
-| Unit suite (original 137 + 6 runner self-tests + 2 stack-helper tests: RFC 6238 TOTP vectors, HS256 signing) | Node | PASS 145/145 |
-| DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38 | PGlite + shim | PASS 130/130 |
-| Concurrency suite | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 7/7 (incl. negative control) |
+| `npm test` (runner: unit + db + realpg + stack) | Node 24.20.0 | Exit 2 (**BLOCKED**, nothing failed) — unit 155/155, db 149/149, realpg 10/10 PASS; stack 13 tests BLOCKED |
+| Unit suite (original 137 + 9 runner self-tests + 9 stack-helper tests: TOTP vectors, HS256, disposable-stack guards) | Node | PASS 155/155 |
+| DB suite: migrations 9, isolation 42, membership 19, platform 22, security findings 38, review round 2 19 | PGlite + shim (incl. storage tables) | PASS 149/149 |
+| Concurrency suite | Real local PostgreSQL 18.6, independent sessions, system VC++ runtime | PASS 10/10 (incl. two negative controls) |
 | `tsc --noEmit -p .` (app) | — | PASS |
 | `tsc` over `tests/db`, `tests/db-real`, `tests/supabase-stack`, runner tests (bundler resolution, strict) | — | PASS |
 | `npm run build` | Next.js 15.5.25 | PASS |
@@ -1272,7 +1281,7 @@ Also added: architecture guard (no `organizations`/`organization_id`/`org_id` in
 | `supabase start` + `supabase db reset --local` (CLI applies all 16 migrations) | Real Supabase local stack | **BLOCKED** (Docker engine cannot start) |
 | GoTrue sign-up → profile trigger; forged/expired/unsigned JWTs; AAL1 vs TOTP AAL2 platform RPCs | Real Supabase local stack | **BLOCKED** |
 | RLS isolation, forged attribution, revoked membership, suspension, platform grants over PostgREST | Real Supabase local stack | **BLOCKED** |
-| Storage bucket and `storage.objects` policies (M13) | Real Supabase local stack | **BLOCKED** |
+| Storage bucket and `storage.objects` policies (M13); platform-grant Storage audit through the Storage API | Real Supabase local stack | **BLOCKED** (policies and audit trigger PGlite-verified on shim tables only) |
 | Legacy tables closed to anon/authenticated over PostgREST; service role retained | Real Supabase local stack | **BLOCKED** (PGlite-verified only) |
 
 `npm test` exit codes: 0 all suites pass; 1 any failure, cancellation, skip/todo, missing summary, or fewer tests than the suite minimum; 2 nothing failed but a suite was BLOCKED (never reported as PASS). The stack suite has never run on this machine; expect first-run fixes once Docker works.

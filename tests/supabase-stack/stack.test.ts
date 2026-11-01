@@ -231,6 +231,35 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
     assert.deepEqual(await contacts(platformAal2), []);
   });
 
+  test("Storage API mutations under a platform write grant are audited with grant and object path", async () => {
+    const grant = await rpc(env, platformAal2, "platform_grant_access", {
+      p_workspace_id: wsA, p_mode: "write", p_reason: "stack test storage audit", p_minutes: 15,
+    });
+    assert.equal(grant.status, 200, grant.text);
+    const objectPath = `${wsA}/granted-${run}.txt`;
+    const up = await storage(env, platformAal2, "POST", `workspace-assets/${objectPath}`, "granted upload");
+    assert.equal(up.status, 200, up.text);
+    const del = await storage(env, platformAal2, "DELETE", `workspace-assets/${objectPath}`);
+    assert.equal(del.status, 200, del.text);
+    assert.equal((await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: grant.body.id })).status, 200);
+
+    const audit = await db.query<{ actor_id: string; actor_kind: string; grant_id: string; action: string; target: string; metadata: any }>(
+      `select actor_id, actor_kind, grant_id, action, target, metadata from public.workspace_audit_log
+       where workspace_id = $1 and action like 'storage.%' and metadata ->> 'object_path' = $2 order by id`,
+      [wsA, objectPath]);
+    assert.deepEqual(audit.rows.map((r) => r.action), ["storage.object_insert", "storage.object_delete"]);
+    for (const r of audit.rows) {
+      assert.equal(r.actor_id, platform.id);
+      assert.equal(r.actor_kind, "platform_admin");
+      assert.equal(r.grant_id, grant.body.id);
+      assert.equal(r.target, `workspace-assets/${objectPath}`);
+    }
+    const memberUploads = await db.query(
+      "select count(*)::int n from public.workspace_audit_log where action like 'storage.%' and metadata ->> 'object_path' like $1",
+      [`%/logo-${run}.txt`]);
+    assert.equal(memberUploads.rows[0].n, 0, "member uploads must not be recorded as platform actions");
+  });
+
   test("suspension blocks members; only read grants still work", async () => {
     const s = await rpc(env, platformAal2, "platform_suspend_workspace", { p_workspace_id: wsB, p_reason: "stack test suspension" });
     assert.equal(s.status, 200, s.text);

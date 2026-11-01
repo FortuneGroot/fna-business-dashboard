@@ -37,15 +37,23 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [ ] Docker engine running — needs SVM Mode in UEFI, Virtual Machine Platform feature, restart.
 - [x] Legacy migration versions made unique and ordered; mapping in `docs/MIGRATION_VERSION_MAPPING.md`; enforced by test.
 - [ ] Remote migration history reconciled — cutover prerequisite (history unknown; no blind repair).
-- [x] Real-stack suite written (`tests/supabase-stack/`, 12 tests) — **not yet run**.
+- [x] Real-stack suite written (`tests/supabase-stack/`, 13 tests) — **not yet run**.
+
+## Second review (Codex) findings
+
+- [x] R2-1 (P1): authority re-checked immediately after the workspace lock in every membership RPC; demotion-versus-promotion race reproduced and refused on real PostgreSQL (with negative control).
+- [x] R2-2 (P2): runner keeps real failures FAIL even when output contains `BLOCKED:` (per-root-cause classification; fixtures).
+- [x] R2-3 (P2): platform-granted Storage mutations audited (actor, workspace, grant, operation, object path); Storage policy isolation covered on shim tables.
+- [x] R2-4 (P2): stack suite resets only an isolated, explicitly disposable project it started (guards unit-tested).
+- [ ] R2-3 and storage policies through the real Storage API — **BLOCKED** (Docker).
 
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (unit 145, db 130, realpg 7, stack 12) | exit 2: three suites PASS, stack **BLOCKED** |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 130/130 |
-| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 7/7 |
+| `npm test` | runner (unit 155, db 149, realpg 10, stack 13) | exit 2: three suites PASS, stack **BLOCKED** |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 149/149 |
+| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 10/10 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
 | Lint | — | not available (no script) |

@@ -49,6 +49,12 @@ async function activeOwners(ws: string): Promise<number> {
   return r.rows[0].n;
 }
 
+async function roleOf(ws: string, userId: string): Promise<string> {
+  const r = await admin.query<{ role: string }>(
+    "select role from public.workspace_members where workspace_id = $1 and user_id = $2 and status = 'active'", [ws, userId]);
+  return r.rows[0]?.role ?? "none";
+}
+
 async function waitingOnLock(): Promise<number> {
   const r = await admin.query<{ n: number }>(
     "select count(*)::int n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'");
@@ -181,6 +187,55 @@ describe("real PostgreSQL: concurrent owner changes serialize on the workspace l
     const restored = (await admin.query<{ def: string }>(
       "select pg_get_functiondef('private.lock_workspace_membership(uuid)'::regprocedure) def")).rows[0].def;
     assert.match(restored, /for no key update/);
+  });
+
+  test("review 2: an owner demoted while waiting for the lock cannot promote someone to owner", async () => {
+    const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
+    const r = await race(
+      { user: owner1, sql: "select public.set_member_role($1, 'admin')", params: [owner2.id] },
+      { user: owner2, sql: "select public.set_member_role($1, 'owner')", params: [employee.id] });
+    assert.equal(r.raced, "pending", "the promotion must wait for the demotion");
+    assert.ok(r.blocked >= 1, "the promotion must be waiting on the workspace lock");
+    assert.equal(r.outcome.ok, false, "stale owner authority must not be honoured");
+    assert.match((r.outcome as { error: Error }).error.message, /forbidden/);
+    assert.equal(await roleOf(ws, owner2.id), "admin");
+    assert.equal(await roleOf(ws, employee.id), "employee");
+    assert.equal(await activeOwners(ws), 1);
+  });
+
+  test("review 2 control: without the post-lock re-check the same race promotes with stale authority", async () => {
+    const sig = "public.set_member_role(uuid, text)";
+    const original = (await admin.query<{ def: string }>("select pg_get_functiondef($1::regprocedure) def", [sig])).rows[0].def;
+    const recheck = "perform private.recheck_authority(v_ws, 'team.change_role', true);";
+    assert.ok(original.includes(recheck));
+    await admin.query(original.replace(recheck, ""));
+    try {
+      const { ws, owner1, owner2, employee } = await twoOwnerWorkspace();
+      const r = await race(
+        { user: owner1, sql: "select public.set_member_role($1, 'admin')", params: [owner2.id] },
+        { user: owner2, sql: "select public.set_member_role($1, 'owner')", params: [employee.id] });
+      assert.equal(r.raced, "pending");
+      assert.equal(r.outcome.ok, true, "pre-lock checks alone accept the stale caller");
+      assert.equal(await roleOf(ws, owner2.id), "admin");
+      assert.equal(await roleOf(ws, employee.id), "owner", "the demoted caller promoted someone to owner");
+    } finally {
+      await admin.query(original);
+    }
+    const restored = (await admin.query<{ def: string }>("select pg_get_functiondef($1::regprocedure) def", [sig])).rows[0].def;
+    assert.ok(restored.includes(recheck));
+  });
+
+  test("review 2: an owner removed while waiting for the lock cannot create an invitation", async () => {
+    const { ws, owner1, owner2 } = await twoOwnerWorkspace();
+    const r = await race(
+      { user: owner1, sql: "select public.remove_member($1)", params: [owner2.id] },
+      { user: owner2, sql: "select public.create_invitation($1, 'owner', 72)", params: [`race-late-invite-${seq}@example.test`] });
+    assert.equal(r.raced, "pending");
+    assert.equal(r.outcome.ok, false);
+    assert.match((r.outcome as { error: Error }).error.message, /forbidden/);
+    const invites = await admin.query<{ n: number }>(
+      "select count(*)::int n from public.workspace_invitations where workspace_id = $1 and created_by = $2", [ws, owner2.id]);
+    assert.equal(invites.rows[0].n, 0);
   });
 
   test("holding the membership lock does not block ordinary writes in the same workspace", async () => {

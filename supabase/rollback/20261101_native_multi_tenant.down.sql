@@ -10,6 +10,7 @@ begin;
 do $$
 begin
   if to_regclass('storage.objects') is not null then
+    drop trigger if exists workspace_assets_audit_grant_write on storage.objects;
     drop policy if exists workspace_assets_read on storage.objects;
     drop policy if exists workspace_assets_insert on storage.objects;
     drop policy if exists workspace_assets_update on storage.objects;

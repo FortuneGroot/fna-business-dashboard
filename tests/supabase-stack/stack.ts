@@ -1,16 +1,25 @@
 // Real local Supabase stack (Docker + Supabase CLI) for checks that need GoTrue, PostgREST, real
-// JWT verification, and Storage. Migrations are applied by the Supabase CLI (`db reset --local`).
-// Refuses to run against anything other than 127.0.0.1/localhost. Keys are never printed.
+// JWT verification, and Storage. Migrations are applied by the Supabase CLI.
+//
+// The suite never touches the developer's own local stack. It builds an isolated, explicitly
+// disposable copy of the project in a temp directory (random `fna-disposable-*` project id, its
+// own Docker volumes, ports shifted by PORT_OFFSET, marker file), starts it, and only resets or
+// destroys a stack that passes assertDisposable. Keys are never printed.
 import { spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, sep } from "node:path";
 import pg from "pg";
 import { BlockedError } from "../db-real/realpg";
 
 const ROOT = join(__dirname, "..", "..");
 const CLI = join(ROOT, "node_modules", "supabase", "dist", "supabase.js");
 const DOCKER_DIRS = process.platform === "win32" ? ["C:\\Program Files\\Docker\\Docker\\resources\\bin"] : [];
+
+export const DISPOSABLE_PREFIX = "fna-disposable-";
+export const DISPOSABLE_MARKER = ".fna-disposable-stack.json";
+export const PORT_OFFSET = 1000;
 
 export type StackEnv = {
   apiUrl: string;
@@ -20,13 +29,21 @@ export type StackEnv = {
   jwtSecret: string;
 };
 
+export type DisposableProject = {
+  workdir: string;
+  projectId: string;
+  token: string;
+  apiPort: number;
+  dbPort: number;
+};
+
 function run(cmd: string, args: string[], timeoutMs: number) {
   const env = { ...process.env, PATH: [...DOCKER_DIRS, process.env.PATH ?? ""].join(process.platform === "win32" ? ";" : ":") };
   return spawnSync(cmd, args, { cwd: ROOT, env, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
 }
 
-function supabase(args: string[], timeoutMs = 120_000) {
-  return run(process.execPath, [CLI, ...args], timeoutMs);
+function supabase(project: DisposableProject, args: string[], timeoutMs = 120_000) {
+  return run(process.execPath, [CLI, ...args, "--workdir", project.workdir], timeoutMs);
 }
 
 function isLocal(url: string): boolean {
@@ -34,8 +51,92 @@ function isLocal(url: string): boolean {
   return host === "127.0.0.1" || host === "localhost";
 }
 
-function readStatus(): StackEnv | null {
-  const res = supabase(["status", "-o", "json"], 60_000);
+function portOf(url: string): number {
+  return Number(new URL(url.replace(/^postgres(ql)?:/, "http:")).port);
+}
+
+/**
+ * Copies config.toml and migrations into a fresh temp directory with a random disposable project
+ * id and shifted ports. Nothing else (no `.temp`, no linked project ref, no env files) is copied.
+ */
+export function createDisposableProject(sourceDir = join(ROOT, "supabase")): DisposableProject {
+  const workdir = mkdtempSync(join(tmpdir(), "fna-disposable-stack-"));
+  const token = randomBytes(6).toString("hex");
+  const projectId = `${DISPOSABLE_PREFIX}${token}`;
+  const dest = join(workdir, "supabase");
+  mkdirSync(join(dest, "migrations"), { recursive: true });
+  for (const f of readdirSync(join(sourceDir, "migrations")).filter((x) => x.endsWith(".sql"))) {
+    copyFileSync(join(sourceDir, "migrations", f), join(dest, "migrations", f));
+  }
+  let apiPort = 0;
+  let dbPort = 0;
+  let section = "";
+  const config = readFileSync(join(sourceDir, "config.toml"), "utf8")
+    .split(/\r?\n/)
+    .map((line) => {
+      const header = /^\s*\[([^\]]+)\]/.exec(line);
+      if (header) section = header[1];
+      if (/^project_id\s*=/.test(line)) return `project_id = "${projectId}"`;
+      const port = /^(\s*(?:port|shadow_port|inspector_port)\s*=\s*)(\d+)(.*)$/.exec(line);
+      if (!port) return line;
+      const shifted = Number(port[2]) + PORT_OFFSET;
+      if (section === "api" && /^\s*port/.test(port[1])) apiPort = shifted;
+      if (section === "db" && /^\s*port/.test(port[1])) dbPort = shifted;
+      return `${port[1]}${shifted}${port[3]}`;
+    })
+    .join("\n");
+  if (!apiPort || !dbPort) throw new Error("config.toml has no [api] or [db] port");
+  writeFileSync(join(dest, "config.toml"), config);
+  writeFileSync(join(workdir, DISPOSABLE_MARKER), JSON.stringify({ projectId, token, disposable: true }));
+  return { workdir, projectId, token, apiPort, dbPort };
+}
+
+/**
+ * Throws unless `env` is the stack this run created for `project`: started by this run, inside the
+ * OS temp directory, carrying the matching marker and project id, and serving on the shifted local
+ * ports. Called before every reset and before destroying volumes.
+ */
+export function assertDisposable(project: DisposableProject, env: StackEnv | null, startedHere: boolean): void {
+  const problems = disposableProjectProblems(project);
+  if (!startedHere) problems.push("the stack was not started by this run");
+  if (!env) {
+    problems.push("stack status is unavailable");
+  } else {
+    if (!isLocal(env.apiUrl) || portOf(env.apiUrl) !== project.apiPort) problems.push("API is not on the disposable local port");
+    if (!isLocal(env.dbUrl.replace(/^postgres(ql)?:/, "http:")) || portOf(env.dbUrl) !== project.dbPort) {
+      problems.push("database is not on the disposable local port");
+    }
+  }
+  if (problems.length) throw new Error(`Refusing to reset or destroy the Supabase stack: ${problems.join("; ")}.`);
+}
+
+/** Project-level guards: temp location, marker, disposable project id, no remote link. */
+export function disposableProjectProblems(project: DisposableProject): string[] {
+  const problems: string[] = [];
+  const tmp = realpathSync(tmpdir());
+  const rel = existsSync(project.workdir) ? relative(tmp, realpathSync(project.workdir)) : "..";
+  if (rel === "" || rel.startsWith("..") || rel.includes(`..${sep}`)) problems.push("workdir is not inside the OS temp directory");
+  if (!project.projectId.startsWith(DISPOSABLE_PREFIX)) problems.push("project id is not disposable");
+  try {
+    const marker = JSON.parse(readFileSync(join(project.workdir, DISPOSABLE_MARKER), "utf8"));
+    if (marker.disposable !== true || marker.token !== project.token || marker.projectId !== project.projectId) {
+      problems.push("disposable marker does not match");
+    }
+  } catch {
+    problems.push("disposable marker is missing");
+  }
+  try {
+    const cfg = readFileSync(join(project.workdir, "supabase", "config.toml"), "utf8");
+    if (/^project_id\s*=\s*"([^"]*)"/m.exec(cfg)?.[1] !== project.projectId) problems.push("config project_id does not match");
+  } catch {
+    problems.push("config.toml is missing");
+  }
+  if (existsSync(join(project.workdir, "supabase", ".temp", "project-ref"))) problems.push("workdir is linked to a remote project");
+  return problems;
+}
+
+function readStatus(project: DisposableProject): StackEnv | null {
+  const res = supabase(project, ["status", "-o", "json"], 60_000);
   if (res.status !== 0) return null;
   const start = res.stdout.indexOf("{");
   if (start < 0) return null;
@@ -50,15 +151,15 @@ function readStatus(): StackEnv | null {
   for (const [k, v] of Object.entries(env)) {
     if (!v) throw new Error(`supabase status did not report ${k}`);
   }
-  if (!isLocal(env.apiUrl) || !isLocal(env.dbUrl.replace(/^postgres(ql)?:/, "http:"))) {
-    throw new Error("Refusing to run: the Supabase stack is not local.");
-  }
   return env;
 }
 
-export type Stack = { env: StackEnv; startedHere: boolean; stop: () => void };
+const tail = (r: { stdout: string; stderr: string }, n: number) =>
+  (r.stderr || r.stdout).trim().split(/\r?\n/).slice(-n).join(" | ");
 
-/** Starts (if needed) and resets the local stack so every migration is applied by the CLI. */
+export type Stack = { env: StackEnv; project: DisposableProject; stop: () => void };
+
+/** Creates, starts, verifies, and resets a disposable stack so every migration is applied by the CLI. */
 export function startStack(): Stack {
   if (process.env.VERCEL_ENV) throw new Error("Stack tests refuse to run when VERCEL_ENV is set.");
   if (!existsSync(CLI)) throw new BlockedError("Supabase CLI is not installed (npm devDependency `supabase`).");
@@ -67,27 +168,35 @@ export function startStack(): Stack {
     throw new BlockedError("Docker engine is not running (Docker Desktop requires WSL2 and firmware virtualization).");
   }
 
+  const project = createDisposableProject();
   let startedHere = false;
-  if (!readStatus()) {
-    const started = supabase(["start"], 900_000);
-    if (started.status !== 0) {
-      throw new BlockedError(`supabase start failed: ${(started.stderr || started.stdout).trim().split(/\r?\n/).slice(-3).join(" | ")}`);
+  // Stopping needs only the project-level guards: the random project id exists solely for this run.
+  const stop = () => {
+    const problems = disposableProjectProblems(project);
+    if (startedHere && problems.length === 0) {
+      supabase(project, ["stop", "--no-backup"], 300_000);
+      rmSync(project.workdir, { recursive: true, force: true });
+    } else if (problems.length) {
+      console.error(`Not destroying Supabase stack volumes: ${problems.join("; ")}.`);
+    } else {
+      rmSync(project.workdir, { recursive: true, force: true });
     }
-    startedHere = true;
-  }
-  const reset = supabase(["db", "reset", "--local", "--no-seed"], 600_000);
-  if (reset.status !== 0) {
-    throw new Error(`supabase db reset failed: ${(reset.stderr || reset.stdout).trim().split(/\r?\n/).slice(-8).join(" | ")}`);
-  }
-  const env = readStatus();
-  if (!env) throw new Error("supabase status failed after db reset");
-  return {
-    env,
-    startedHere,
-    stop: () => {
-      if (startedHere) supabase(["stop", "--no-backup"], 300_000);
-    },
   };
+
+  try {
+    const started = supabase(project, ["start"], 900_000);
+    startedHere = true;
+    if (started.status !== 0) throw new Error(`supabase start failed: ${tail(started, 5)}`);
+    assertDisposable(project, readStatus(project), startedHere);
+    const reset = supabase(project, ["db", "reset", "--local", "--no-seed"], 600_000);
+    if (reset.status !== 0) throw new Error(`supabase db reset failed: ${tail(reset, 8)}`);
+    const env = readStatus(project);
+    assertDisposable(project, env, startedHere);
+    return { env: env!, project, stop };
+  } catch (err) {
+    stop();
+    throw err;
+  }
 }
 
 /** Superuser connection for test setup and outcome verification only — never to demonstrate RLS. */
@@ -210,7 +319,7 @@ export async function serviceRest(env: StackEnv, path: string): Promise<HttpResu
 export async function storage(
   env: StackEnv,
   token: string | null,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   objectPath: string,
   content?: string
 ): Promise<HttpResult> {

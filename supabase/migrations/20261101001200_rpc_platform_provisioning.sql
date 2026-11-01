@@ -133,6 +133,7 @@ begin
   end if;
 
   perform private.lock_workspace_membership(p_workspace_id);
+  perform private.require_platform_admin();
   select * into v_ws from public.workspaces w where w.id = p_workspace_id;
   if not found or v_ws.status = 'archived' then
     raise exception 'not_found' using errcode = 'P0002';

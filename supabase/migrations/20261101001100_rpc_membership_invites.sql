@@ -47,6 +47,22 @@ begin
 end;
 $$;
 
+-- Re-evaluates the caller's authority. Membership RPCs call this immediately after
+-- private.lock_workspace_membership: checks made before the lock may predate a concurrent demotion,
+-- removal, suspension, or grant revocation that committed while the caller waited.
+create function private.recheck_authority(p_workspace_id uuid, p_permission text, p_member_only boolean)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if private.active_workspace_id() is distinct from p_workspace_id
+     or (p_member_only and private.active_member_role(p_workspace_id) is null)
+     or (p_permission is not null and not private.has_permission(p_permission)) then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+end;
+$$;
+
 create function private.write_audit(p_workspace_id uuid, p_action text, p_target text, p_metadata jsonb)
 returns void
 language plpgsql security definer set search_path = ''
@@ -291,6 +307,8 @@ begin
     raise exception 'validation_failed' using errcode = '22023';
   end if;
   perform private.require_permission(private.invitation_permission(p_role));
+  perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, private.invitation_permission(p_role), false);
 
   if exists (
     select 1 from public.workspace_members m
@@ -421,6 +439,8 @@ declare
   v_ws uuid := private.require_active_workspace();
   v_inv public.workspace_invitations;
 begin
+  perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, null, false);
   select * into v_inv from public.workspace_invitations i
   where i.id = p_invitation_id and i.workspace_id = v_ws
   for update;
@@ -459,6 +479,7 @@ begin
   end if;
 
   perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, 'team.change_role', true);
   select * into v_target from public.workspace_members m
   where m.workspace_id = v_ws and m.user_id = p_user_id and m.status = 'active'
   for update;
@@ -493,6 +514,8 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
   perform private.require_permission('team.manage_overrides');
+  perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, 'team.manage_overrides', true);
   if not exists (select 1 from public.role_permissions rp where rp.permission = p_permission) then
     raise exception 'validation_failed' using errcode = '22023';
   end if;
@@ -529,6 +552,7 @@ begin
   end if;
 
   perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, null, true);
   select * into v_target from public.workspace_members m
   where m.workspace_id = v_ws and m.user_id = p_user_id and m.status = 'active'
   for update;
@@ -560,6 +584,7 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
   perform private.lock_workspace_membership(v_ws);
+  perform private.recheck_authority(v_ws, null, true);
   perform private.assert_not_last_owner(v_ws, auth.uid());
   perform private.write_audit(v_ws, 'member.left', auth.uid()::text, '{}'::jsonb);
   perform private.deactivate_member(v_ws, auth.uid());

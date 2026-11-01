@@ -4,7 +4,8 @@
 // node:test reports hook failures and timeouts as "cancelled" (not "fail"), and a test file that
 // exits early silently drops its remaining tests. So a suite only passes when: the process exits 0,
 // a summary is present, fail = 0, cancelled = 0, skipped = 0, todo = 0, and at least MIN tests ran.
-// A suite that cannot run because the environment is missing something reports BLOCKED (never PASS).
+// A suite that cannot run because the environment is missing something reports BLOCKED (never PASS),
+// but only if every root-cause failure is such a blocker; any real failure makes it FAIL.
 //
 // Usage: node scripts/run-tests.mjs [--suite unit|db|realpg|stack]... [--files a.ts,b.ts --min N --name X]
 // Exit codes: 0 all passed, 1 any failure, 2 nothing failed but something was BLOCKED.
@@ -16,7 +17,6 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-const BLOCKED_MARKER = "BLOCKED:";
 
 const list = (dir) =>
   readdirSync(join(ROOT, dir))
@@ -34,25 +34,25 @@ const SUITES = {
       "tests/security-scan.test.ts", "tests/run-tests.test.ts", "tests/stack-helpers.test.ts",
     ],
     timeoutMs: 60_000,
-    min: 145,
+    min: 155,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
     timeoutMs: 60_000,
-    min: 130,
+    min: 149,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
     timeoutMs: 120_000,
-    min: 7,
+    min: 10,
   },
   stack: {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
-    min: 12,
+    min: 13,
   },
 };
 
@@ -79,10 +79,38 @@ export function parseTapSummary(tap) {
   return summary;
 }
 
-export function judge({ exitCode, summary, min, output }) {
+// Failure types that are consequences of another failure rather than causes of their own.
+const DERIVED_FAILURES = new Set(["cancelledByParent", "subtestsFailed"]);
+
+/** Root-cause failures from TAP: every `not ok` entry whose failureType is not derived. */
+export function rootCauseFailures(tap) {
+  const lines = tap.split(/\r?\n/);
+  const causes = [];
+  for (let i = 0; i < lines.length; i++) {
+    const head = /^\s*not ok \d+ - (.*)$/.exec(lines[i]);
+    if (!head) continue;
+    const block = [];
+    for (i += 1; i < lines.length && !/^\s*\.\.\.\s*$/.test(lines[i]); i++) block.push(lines[i]);
+    const text = block.join("\n");
+    const failureType = /failureType: '([^']+)'/.exec(text)?.[1] ?? "unknown";
+    if (DERIVED_FAILURES.has(failureType)) continue;
+    const blocked = /\berror: (?:'|\|-?\s*\n\s*)BLOCKED:/.test(text) && !/\bcode: 'ERR_ASSERTION'/.test(text);
+    const reason = blocked ? /BLOCKED:[^'\n]*/.exec(text)?.[0] : null;
+    causes.push({ name: head[1].trim(), failureType, blocked, reason });
+  }
+  return causes;
+}
+
+/**
+ * PASS only for a clean summary. BLOCKED only when there is at least one root-cause failure and
+ * every root cause is an environment blocker (error starting with "BLOCKED:", not an assertion).
+ * A real failure anywhere makes the suite FAIL, whatever else the output contains.
+ */
+export function judge({ exitCode, summary, min, tap = "" }) {
   const problems = [];
   const keys = ["tests", "pass", "fail", "cancelled", "skipped", "todo"];
-  if (keys.some((k) => summary[k] === undefined)) problems.push("no TAP summary (runner crashed?)");
+  const hasSummary = keys.every((k) => summary[k] !== undefined);
+  if (!hasSummary) problems.push("no TAP summary (runner crashed?)");
   if ((summary.fail ?? 0) > 0) problems.push(`${summary.fail} failed`);
   if ((summary.cancelled ?? 0) > 0) problems.push(`${summary.cancelled} cancelled`);
   if ((summary.skipped ?? 0) > 0) problems.push(`${summary.skipped} skipped`);
@@ -90,9 +118,16 @@ export function judge({ exitCode, summary, min, output }) {
   if ((summary.tests ?? 0) < min) problems.push(`only ${summary.tests ?? 0} tests ran (minimum ${min})`);
   if (exitCode !== 0) problems.push(`exit code ${exitCode}`);
   if (problems.length === 0) return { status: "PASS", problems };
-  const blocked = output.includes(BLOCKED_MARKER);
-  const reason = blocked ? output.slice(output.indexOf(BLOCKED_MARKER)).split(/\r?\n/)[0] : null;
-  return { status: blocked ? "BLOCKED" : "FAIL", problems: reason ? [reason, ...problems] : problems };
+
+  const causes = rootCauseFailures(tap);
+  const blocked = hasSummary && causes.length > 0 && causes.every((c) => c.blocked)
+    && (summary.skipped ?? 0) === 0 && (summary.todo ?? 0) === 0;
+  if (blocked) {
+    const reasons = [...new Set(causes.map((c) => c.reason))];
+    return { status: "BLOCKED", problems: [...reasons, ...problems] };
+  }
+  const real = causes.filter((c) => !c.blocked).map((c) => `${c.failureType}: ${c.name}`);
+  return { status: "FAIL", problems: real.length ? [...problems, ...real.slice(0, 5)] : problems };
 }
 
 function runSuite(name, { label, files, timeoutMs, min }) {
@@ -121,7 +156,7 @@ function runSuite(name, { label, files, timeoutMs, min }) {
       tap = "";
     }
     const summary = parseTapSummary(tap);
-    const verdict = judge({ exitCode: res.status ?? 1, summary, min, output: `${res.stdout ?? ""}\n${res.stderr ?? ""}\n${tap}` });
+    const verdict = judge({ exitCode: res.status ?? 1, summary, min, tap });
     return { name, label, summary, ...verdict };
   } finally {
     rmSync(dir, { recursive: true, force: true });

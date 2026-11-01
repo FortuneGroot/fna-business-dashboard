@@ -48,13 +48,32 @@ describe("scripts/run-tests.mjs fails closed", () => {
     assert.match(r.summaryLine, /^BLOCKED .*BLOCKED: required local service/);
   });
 
-  test("npm test runs the runner, which includes the unit, database, and concurrency suites", () => {
+  test("a real test failure stays FAIL even when another part of the suite is BLOCKED", () => {
+    const r = run("blocked-and-failed");
+    assert.equal(r.code, 1);
+    assert.match(r.summaryLine, /^FAIL .*testCodeFailure: a real assertion failure/);
+  });
+
+  test("a real hook failure stays FAIL even when every test is cancelled and one hook is BLOCKED", () => {
+    const r = run("blocked-and-hook-failed");
+    assert.equal(r.code, 1);
+    assert.match(r.summaryLine, /^FAIL .*fail 0.*hookFailed: broken group/);
+  });
+
+  test("an assertion whose message mentions BLOCKED: is still a FAIL", () => {
+    const r = run("assertion-mentions-blocked");
+    assert.equal(r.code, 1);
+    assert.match(r.summaryLine, /^FAIL/);
+  });
+
+  test("npm test runs the runner, which includes the unit, database, concurrency, and stack suites", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
     assert.match(pkg.scripts.test, /scripts\/run-tests\.mjs/);
     assert.doesNotMatch(pkg.scripts.test, /--suite/);
     const runner = readFileSync(RUNNER, "utf8");
-    for (const suite of ["unit:", "db:", "realpg:"]) assert.ok(runner.includes(suite), `runner lacks ${suite}`);
+    for (const suite of ["unit:", "db:", "realpg:", "stack:"]) assert.ok(runner.includes(suite), `runner lacks ${suite}`);
     assert.match(runner, /tests\/db"\)/);
     assert.match(runner, /tests\/db-real"\)/);
+    assert.match(runner, /tests\/supabase-stack"\)/);
   });
 });
