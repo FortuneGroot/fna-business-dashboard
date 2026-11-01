@@ -47,13 +47,24 @@ export async function total(query: Result<unknown>, table: string): Promise<numb
   return count;
 }
 
+/**
+ * Splits ids for `in` filters. The ids travel in the request URL, and the API gateway refuses URLs
+ * of several hundred UUIDs, so lookups for long lists go out in batches.
+ */
+export function idChunks(ids: string[], size = 100): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
 /** Display names for user ids, from the profiles the caller may see. */
 export async function displayNames(scope: DataScope, ids: (string | null | undefined)[]): Promise<Map<string, string>> {
   const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
   if (!unique.length) return new Map();
-  const found = await rows<{ user_id: string; full_name: string }>(
-    scope.supabase.from("profiles").select("user_id, full_name").in("user_id", unique),
-    "profiles"
+  const pages = await Promise.all(
+    idChunks(unique).map((chunk) =>
+      rows<{ user_id: string; full_name: string }>(scope.supabase.from("profiles").select("user_id, full_name").in("user_id", chunk), "profiles")
+    )
   );
-  return new Map(found.filter((p) => p.full_name).map((p) => [p.user_id, p.full_name]));
+  return new Map(pages.flat().filter((p) => p.full_name).map((p) => [p.user_id, p.full_name]));
 }

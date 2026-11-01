@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { check, decodeCursor, encodeCursor, invalid, uuid } from "@/lib/api/native";
-import { activeWorkspaceId, type DataScope } from "@/lib/data/query";
+import { activeWorkspaceId, idChunks, type DataScope } from "@/lib/data/query";
 
 /** PostgREST timestamps (`2026-11-01T14:47:25.709123+00:00`); nothing else may reach a filter. */
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
@@ -68,14 +68,18 @@ export async function requireRef(scope: DataScope, table: string, id: string | n
 export async function contactNames(scope: DataScope, ids: (string | null | undefined)[]): Promise<Map<string, string>> {
   const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
   if (!unique.length) return new Map();
-  const data = check(
-    await scope.supabase
-      .from("contacts")
-      .select("id, first_name, last_name, email, phone")
-      .eq("workspace_id", activeWorkspaceId(scope))
-      .in("id", unique)
-  ) as { id: string; first_name: string; last_name: string; email: string | null; phone: string | null }[] | null;
-  return new Map((data ?? []).map((c) => [c.id, contactLabel(c)]));
+  const pages = await Promise.all(
+    idChunks(unique).map(async (chunk) =>
+      (check(
+        await scope.supabase
+          .from("contacts")
+          .select("id, first_name, last_name, email, phone")
+          .eq("workspace_id", activeWorkspaceId(scope))
+          .in("id", chunk)
+      ) as { id: string; first_name: string; last_name: string; email: string | null; phone: string | null }[] | null) ?? []
+    )
+  );
+  return new Map(pages.flat().map((c) => [c.id, contactLabel(c)]));
 }
 
 export function contactLabel(c: { first_name: string; last_name: string; email: string | null; phone: string | null }): string {
