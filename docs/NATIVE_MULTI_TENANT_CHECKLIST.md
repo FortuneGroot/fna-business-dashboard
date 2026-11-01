@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1 / P2 / P3 Checklist
+# Native Multi-Tenant — P1 / P2 / P3 / P4 Checklist
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record).
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P3. With `AUTH_PROVIDER=supabase`, pages and `/api/dashboard/*` read each workspace's own records; legacy mode (default) is unchanged. Team/settings (P4) and create/edit (P5) have not started.**
+**Stop point: end of P4. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records and Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); legacy mode (default) is unchanged. Create/edit of records (P5) is next.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -92,12 +92,26 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Review fix: calendar cards match bookings by calendar id with no fallback; pipeline columns match by stage id with exact per-stage totals (§17.5).
 - [ ] `/api/webhooks/ghl` and legacy service-role readers retire in P7.
 
+## P4 team and settings
+
+- [x] `/api/team` list, role change, overrides (atomic, API only), removal — through the M11 RPCs with the caller's JWT; role authority, self-change, last-owner, and post-lock checks unchanged.
+- [x] Invitations: link returned once (hash stored only), list, revoke; public preview with masked email; acceptance signed in (email must match) or by creating the invited address's account (A1, email from the database); expired/used/revoked 410, mismatch 403, existing account 409.
+- [x] No email or SMS on any path; NET-1 guard on the app process; disposable stack config has no SMTP/SMS route.
+- [x] Workspace settings (`settings.read`/`settings.write`), strict validation, database attribution, audit of changed field names only.
+- [x] AI receptionist settings; cannot be enabled by any client; escalation must be an active member.
+- [x] Integrations list without secrets; status and verification server-controlled.
+- [x] Native onboarding checklist from real records (`onboarding.read`).
+- [x] Settings UI in the existing cards; invite landing page in the existing card design.
+- [x] Browser flow against the real local stack (invite → account → role change → removal → settings → revoked link).
+- [ ] Overrides editor in Settings (API exists).
+- [ ] Logout-replay decision (above) still open.
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 228, db 187, realpg 28, stack 33) | [x] all four suites PASS: unit 228, db 187, realpg 28, stack 33 |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 187/187 |
+| `npm test` | runner (minimums: unit 257, db 197, realpg 28, stack 46) | [x] all four suites PASS: unit 257, db 197, realpg 28, stack 46 |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 197/197 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
@@ -110,6 +124,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | Platform write grants refused for Storage upload, PUT, upsert, delete; GET allowed; nothing audited | real Supabase local stack | [x] PASS (R2-3, decision A) |
 | App (`next build` + `next start`, AUTH_PROVIDER=supabase) against real GoTrue: AUTH-1, session refresh, JSON body validation, logout replay (reads until token expiry; sensitive mutation refused), ISO-F3, ISO-F4, gates, MEM-1, SUSP-1, workspace switch, audited Storage endpoint (server-only outcomes, completion failure and recovery, recovery vs in-flight write, member write during a pending request, fenced late write) | real Supabase local stack | [x] PASS (11 tests) |
 | App reads native data (P3): API-1 shapes and parity with the owner's PostgREST view, ISO through APIs and pages, tenant config/public, health, retired endpoints, UI-1, native empty states | real Supabase local stack | [x] PASS (5 tests) |
+| P3 review fixes: pipeline columns and calendar cards by id | real Supabase local stack | [x] PASS (3 tests) |
+| P4 team and settings: INV, ROLE, MEM, SUSP, SET-1..7, browser flow; NET-1 (no outbound connection, no SMTP/SMS route) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
 | UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run: sidebar 0.00% on all 20 pages; copy-only differences (§17.4) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
@@ -120,4 +136,4 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 ## Not done by instruction
 
-No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2) and native copy in the existing layouts (P3).
+No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), and the native Settings cards and invite landing page (P4).

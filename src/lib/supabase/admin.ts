@@ -15,6 +15,12 @@ import { createClient } from "@supabase/supabase-js";
  *    the outcome is whether the database saw this request's own write (tagged with the operation
  *    token returned by the claim) commit. Guard: the actor id comes from the caller's verified
  *    request context; the token never leaves the server.
+ * A1 createUserFromInvitation — creating an Auth user needs the admin API. Only caller:
+ *    src/app/api/invitations/[token]/accept/route.ts, for a request without a session. Guard: the
+ *    email comes from the invitation through rpc invitation_signup_email (service role only; the
+ *    invitation must be valid, its workspace active, and the address must have no account), never
+ *    from the client. The account is created confirmed with the caller's password, so no email is
+ *    sent. Membership is granted afterwards by rpc accept_invitation under the new user's own JWT.
  */
 
 export const WORKSPACE_ASSETS_BUCKET = "workspace-assets";
@@ -44,6 +50,38 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const COMPLETION_RETRY_DELAYS_MS = [100, 300];
 
 const UUID_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const INVITATION_TOKEN = /^[0-9a-f]{64}$/;
+const SIGNUP_REFUSALS = new Set([
+  "invitation_not_found", "invitation_expired", "invitation_used", "invitation_revoked", "workspace_suspended", "conflict",
+]);
+
+export type InvitationSignupResult =
+  | { ok: true; email: string }
+  | { ok: false; code: "invitation_not_found" | "invitation_expired" | "invitation_used" | "invitation_revoked" | "workspace_suspended" | "conflict" | "weak_password" | "unavailable" };
+
+/** A1. Creates the confirmed account for the invited address of `token` with `password`. */
+export async function createUserFromInvitation(token: string, password: string): Promise<InvitationSignupResult> {
+  if (!INVITATION_TOKEN.test(token)) return { ok: false, code: "invitation_not_found" };
+  try {
+    const client = adminClient();
+    const { data: email, error } = await client.rpc("invitation_signup_email", { p_token: token });
+    if (error) {
+      return { ok: false, code: SIGNUP_REFUSALS.has(error.message) ? (error.message as "conflict") : "unavailable" };
+    }
+    if (typeof email !== "string" || !email.includes("@")) return { ok: false, code: "unavailable" };
+    const created = await client.auth.admin.createUser({ email, password, email_confirm: true });
+    if (created.error) {
+      const code = (created.error as { code?: string }).code;
+      if (code === "email_exists" || code === "user_already_exists") return { ok: false, code: "conflict" };
+      if (code === "weak_password") return { ok: false, code: "weak_password" };
+      return { ok: false, code: "unavailable" };
+    }
+    return { ok: true, email };
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+}
 
 /** The server's handle on one claimed Storage operation. */
 export type PlatformOperation = { requestId: number; token: string };

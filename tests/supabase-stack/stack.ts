@@ -27,6 +27,7 @@ export type StackEnv = {
   anonKey: string;
   serviceRoleKey: string;
   jwtSecret: string;
+  mailUrl?: string;
 };
 
 export type DisposableProject = {
@@ -151,7 +152,35 @@ function readStatus(project: DisposableProject): StackEnv | null {
   for (const [k, v] of Object.entries(env)) {
     if (!v) throw new Error(`supabase status did not report ${k}`);
   }
+  const mail = s.MAILPIT_URL || s.INBUCKET_URL;
+  if (mail) env.mailUrl = mail;
   return env;
+}
+
+/**
+ * Email/SMS delivery routes enabled in the disposable project's config: `[auth.email.smtp]` and any
+ * `[auth.sms.<provider>]`, plus `[local_smtp]` (the local catcher). Empty means GoTrue cannot send.
+ */
+export function messageRoutes(project: DisposableProject): string[] {
+  const enabled: string[] = [];
+  let section = "";
+  for (const line of readFileSync(join(project.workdir, "supabase", "config.toml"), "utf8").split(/\r?\n/)) {
+    const header = /^\s*\[([^\]]+)\]/.exec(line);
+    if (header) section = header[1];
+    const routeSection = section === "local_smtp" || section === "auth.email.smtp" || /^auth\.sms\.[a-z_]+$/.test(section);
+    if (routeSection && !section.endsWith("test_otp") && /^\s*enabled\s*=\s*true\b/.test(line)) enabled.push(section);
+  }
+  return enabled;
+}
+
+/** Messages captured by the local stack's mail catcher (GoTrue's only mail route locally). */
+export async function capturedMailCount(env: StackEnv): Promise<number> {
+  if (!env.mailUrl) throw new BlockedError("the local stack reported no mail catcher URL");
+  if (!isLocal(env.mailUrl)) throw new Error("mail catcher is not local");
+  const r = await http(`${env.mailUrl}/api/v1/messages`, {});
+  const total = r.body?.total ?? r.body?.messages_count;
+  if (r.status !== 200 || typeof total !== "number") throw new Error(`mail catcher answered ${r.status}: ${r.text.slice(0, 120)}`);
+  return total;
 }
 
 const tail = (r: { stdout: string; stderr: string }, n: number) =>
@@ -354,7 +383,9 @@ export async function storage(
 // The real Next.js app (production build) running with AUTH_PROVIDER=supabase against the stack.
 // ---------------------------------------------------------------------------
 
-export type App = { url: string; stop: () => void };
+export type App = { url: string; stop: () => void; outbound: () => { host: string; port: number | null }[] };
+
+const NET_GUARD = join(ROOT, "tests", "helpers", "net-guard.cjs");
 
 const redactKeys = (text: string, env: StackEnv) =>
   [env.anonKey, env.serviceRoleKey, env.jwtSecret].reduce((t, k) => t.split(k).join("[redacted]"), text);
@@ -375,8 +406,13 @@ export async function startApp(env: StackEnv): Promise<App> {
     childEnv[k] = v;
   }
   const port = 4300 + Math.floor(Math.random() * 500);
+  const netLog = join(mkdtempSync(join(tmpdir(), "fna-net-guard-")), "outbound.jsonl");
+  writeFileSync(netLog, "");
   Object.assign(childEnv, {
     NODE_ENV: "production",
+    NODE_OPTIONS: `${childEnv.NODE_OPTIONS ?? ""} --require "${NET_GUARD.replace(/\\/g, "/")}"`.trim(),
+    NET_GUARD_LOG: netLog,
+    NEXT_TELEMETRY_DISABLED: "1",
     PORT: String(port),
     AUTH_PROVIDER: "supabase",
     SUPABASE_URL: env.apiUrl,
@@ -396,11 +432,13 @@ export async function startApp(env: StackEnv): Promise<App> {
     else child.kill("SIGTERM");
   };
   const url = `http://127.0.0.1:${port}`;
+  const outbound = () =>
+    readFileSync(netLog, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l) as { host: string; port: number | null });
   const deadline = Date.now() + 90_000;
   for (;;) {
     try {
       const r = await fetch(`${url}/api/health`);
-      if (r.status < 500) return { url, stop };
+      if (r.status < 500) return { url, stop, outbound };
     } catch {
       /* not listening yet */
     }
@@ -475,6 +513,31 @@ export function readSessionCookie(cookie: string): { name: string; session: GoTr
   const name = pairs[0][0].replace(/\.\d+$/, "");
   const raw = pairs.map(([, v]) => v).join("");
   return { name, session: JSON.parse(Buffer.from(raw.replace(/^base64-/, ""), "base64url").toString("utf8")) };
+}
+
+/**
+ * Headless Chromium through the pinned playwright-core, using the browser build already cached for
+ * it (nothing is downloaded). A missing browser is an environment blocker, never a pass.
+ */
+export async function launchBrowser() {
+  const { chromium } = await import("playwright-core");
+  const exe = chromium.executablePath();
+  if (!exe || !existsSync(exe)) {
+    throw new BlockedError("Chromium for playwright-core is not cached locally (npx playwright-core install chromium).");
+  }
+  return chromium.launch({
+    executablePath: exe,
+    headless: true,
+    args: ["--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--disable-default-apps"],
+  });
+}
+
+/** Session cookies from a Cookie header, in the shape a browser context accepts. */
+export function browserCookies(app: App, cookie: string) {
+  return cookie.split("; ").map((pair) => {
+    const i = pair.indexOf("=");
+    return { name: pair.slice(0, i), value: pair.slice(i + 1), url: app.url };
+  });
 }
 
 /** HS256 JWT signed with the local stack's JWT secret (for expired/forged token checks). */

@@ -529,7 +529,9 @@ describe("P3 static checks", () => {
     const settings = readFileSync(join(ROOT, "src", "app", "(protected)", "settings", "page.tsx"), "utf8");
     assert.match(settings, /me\?\.legacyRole/, "settings reads the native membership's legacy role");
     assert.match(settings, /isNative \? "\/api\/dashboard\/summary" : "\/api\/sync\/health"/, "native settings never calls the sync endpoint");
-    assert.match(settings, /No integrations are connected to this workspace yet\./);
+    const nativeSettings = readFileSync(join(ROOT, "src", "components", "settings", "NativeSettings.tsx"), "utf8");
+    assert.match(nativeSettings, /No integrations are connected to this workspace yet\./);
+    assert.match(settings, /<NativeIntegrations /, "native settings renders the integrations list");
     assert.equal(SYNC_COPY.waitingTitle("contacts"), "Waiting for sync");
     assert.equal(SYNC_COPY.bannerWaiting("contacts"), "Waiting for sync — no contacts yet.");
   });

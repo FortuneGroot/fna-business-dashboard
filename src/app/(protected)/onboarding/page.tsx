@@ -6,7 +6,8 @@ import {
   toPublicReadinessPayload,
 } from "@/lib/onboarding";
 import { getTenantConfig } from "@/lib/tenant";
-import { getPageData } from "@/lib/data";
+import { getPageData, getPageScope } from "@/lib/data";
+import type { ChecklistItem, ChecklistKey } from "@/lib/native/onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -15,35 +16,39 @@ type ReadinessView = {
   checks?: { id?: string; label?: string; detail?: string; status?: string }[];
 };
 
-/** Native workspaces: setup status from the workspace's own records (no CRM configuration). */
-function nativeReadiness(contactsCount: number, calendarsConfigured: boolean): ReadinessView {
-  const checks = [
-    {
-      id: "calendar",
-      label: "Create a calendar",
-      detail: "Add a calendar so appointments can be booked and confirmed by your team.",
-      status: calendarsConfigured ? "pass" : "pending",
-    },
-    {
-      id: "contact",
-      label: "Add your first contact",
-      detail: "Contacts you add appear across the dashboard — no sample data is seeded here.",
-      status: contactsCount > 0 ? "pass" : "pending",
-    },
-    {
-      id: "automations",
-      label: "Set up automations",
-      detail: "Follow-up and reminder workflows turn on only after an owner explicitly approves them.",
-      status: "pending",
-    },
-    {
-      id: "payments",
-      label: "Connect payments",
-      detail: "Invoicing and payment collection become available once a payment processor is connected.",
-      status: "pending",
-    },
-  ];
+const NATIVE_STEPS: Record<ChecklistKey, { label: string; detail: string }> = {
+  profile: {
+    label: "Complete the business profile",
+    detail: "Add a support email or business phone in Settings so customers know how to reach you.",
+  },
+  team: {
+    label: "Invite your team",
+    detail: "Create an invite link in Settings → Team / Staff and share it yourself — nothing is emailed.",
+  },
+  calendar: {
+    label: "Create a calendar",
+    detail: "Add a calendar so appointments can be booked and confirmed by your team.",
+  },
+  ai_config: {
+    label: "Prepare the AI receptionist",
+    detail: "Write a greeting in Settings. The receptionist stays off until its runtime is available.",
+  },
+};
+
+/** Native workspaces: the §7.4 checklist (GET /api/onboarding/checklist) computed from the workspace's own records. */
+function nativeReadiness(items: ChecklistItem[]): ReadinessView {
+  const checks = items.map((item) => ({
+    id: item.key,
+    label: NATIVE_STEPS[item.key].label,
+    detail: NATIVE_STEPS[item.key].detail,
+    status: item.done ? "pass" : "pending",
+  }));
   return { status: checks.every((c) => c.status === "pass") ? "READY" : "IN PROGRESS", checks };
+}
+
+async function nativeChecklist(): Promise<ChecklistItem[]> {
+  const { onboardingChecklist } = await import("@/lib/native/onboarding");
+  return onboardingChecklist(await getPageScope());
 }
 
 const FALLBACK_STEPS = [
@@ -75,7 +80,7 @@ export default async function OnboardingPage() {
   const { native } = data;
   const summary = await data.reader.summary();
   const publicReport: ReadinessView = native
-    ? nativeReadiness(summary.contactsCount, (await data.workspace()).calendarsConfigured)
+    ? nativeReadiness(await nativeChecklist())
     : toPublicReadinessPayload(evaluateClientReadiness(getTenantConfig()));
 
   const checks = publicReport.checks?.length

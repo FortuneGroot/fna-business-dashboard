@@ -31,6 +31,8 @@ const TABLE_PERMISSION: Record<string, string> = {
   pipelines: "pipeline.read", pipeline_stages: "pipeline.read", opportunities: "pipeline.read",
   calendars: "calendar.read", appointments: "calendar.read", conversations: "conversations.read",
   messages: "conversations.read", tasks: "tasks.read", reviews: "reviews.read", activity_events: "dashboard.read",
+  integrations: "integrations.read", workspace_audit_log: "audit.read", workspace_invitations: "team.read",
+  workspace_members: "team.read", ai_receptionist_configs: "ai_receptionist.read",
 };
 
 function compare(a: unknown, b: unknown): number {
@@ -42,11 +44,12 @@ function compare(a: unknown, b: unknown): number {
   return String(a) < String(b) ? -1 : 1;
 }
 
-/** PostgREST filters used by the data layer: eq, is.null, in.(…). */
+/** PostgREST filters used by the data layer: eq, lt, is.null, in.(…). */
 function matches(row: Row, column: string, filter: string): boolean {
   const value = row[column];
   if (filter === "is.null") return value === null || value === undefined;
   if (filter.startsWith("eq.")) return String(value) === filter.slice(3);
+  if (filter.startsWith("lt.")) return compare(value, typeof value === "number" ? Number(filter.slice(3)) : filter.slice(3)) < 0;
   if (filter.startsWith("in.(") && filter.endsWith(")")) {
     return filter.slice(4, -1).split(",").map((v) => v.replace(/^"|"$/g, "")).includes(String(value));
   }
@@ -323,6 +326,8 @@ export async function startFakeSupabase() {
 
   return {
     url, anonKey, serviceKey, calls, objects, requests, faults, contexts, issue, storageArrivals, tables, limits,
+    /** RPC handlers by name; tests may add or replace entries. */
+    rpc,
     /** Adds rows to a table (PostgREST reads apply RLS from the caller's request context). */
     seed: (table: string, rows: Row[]) => tables.set(table, [...(tables.get(table) ?? []), ...rows]),
     /** PostgREST table reads (not RPCs) made so far. */

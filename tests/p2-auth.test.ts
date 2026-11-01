@@ -352,7 +352,12 @@ describe("P2: static guards", () => {
     const importers = walk(join(ROOT, "src"))
       .filter((f) => /from\s+["'](@\/lib\/supabase\/admin|[./]+supabase\/admin)["']/.test(readFileSync(f, "utf8")))
       .map(rel);
-    assert.deepEqual(importers, ["src/app/api/platform/workspace-logo/route.ts"]);
+    assert.deepEqual(importers.sort(), [
+      "src/app/api/invitations/[token]/accept/route.ts", // A1 (P4)
+      "src/app/api/platform/workspace-logo/route.ts", // A5 (P2)
+    ]);
+    const acceptRoute = readFileSync(join(ROOT, "src/app/api/invitations/[token]/accept/route.ts"), "utf8");
+    assert.match(acceptRoute, /import \{ createUserFromInvitation \} from "@\/lib\/supabase\/admin";/, "A1 caller imports only createUserFromInvitation");
     for (const f of ["src/middleware.ts", "src/lib/auth/provider.ts", "src/lib/supabase/server.ts", "src/lib/authz/context.ts"]) {
       assert.equal(readFileSync(join(ROOT, f), "utf8").includes("SERVICE_ROLE"), false, `${f} must not touch the service role`);
     }

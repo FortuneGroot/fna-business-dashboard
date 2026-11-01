@@ -1,6 +1,6 @@
 import "server-only";
 import { createServerClient, parseCookieHeader, type CookieOptions } from "@supabase/ssr";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { NextResponse } from "next/server";
 import { supabaseCookieOptions, type SupabaseAuthConfig } from "@/lib/auth/provider";
 
@@ -31,6 +31,13 @@ export function supabaseForRequest(
     },
   });
   return { supabase, pending };
+}
+
+/** Per-request anonymous client (no session) for the public invitation preview. */
+export function supabaseAnonymous(config: SupabaseAuthConfig): SupabaseClient {
+  return createClient(config.url, config.anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
 }
 
 export function applyPendingCookies(res: NextResponse, pending: PendingCookies): NextResponse {

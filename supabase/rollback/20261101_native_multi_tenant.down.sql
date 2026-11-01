@@ -1,10 +1,19 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300, 20261101001500 and 20261101001600 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M17 (P4)
+drop trigger if exists workspace_settings_record_change on public.workspace_settings;
+drop trigger if exists ai_receptionist_configs_record_change on public.ai_receptionist_configs;
+drop trigger if exists integrations_record_change on public.integrations;
+drop function if exists private.record_config_change();
+drop function if exists public.list_team_members();
+drop function if exists public.set_member_permissions(uuid, jsonb);
+drop function if exists public.invitation_signup_email(text);
 
 -- M16 (P2)
 drop function if exists public.list_my_workspaces();

@@ -3,6 +3,7 @@ import * as React from "react";
 import { redirect } from "next/navigation";
 import { authProvider } from "@/lib/auth/provider";
 import { legacyDataSource } from "./legacy";
+import type { DataScope } from "./query";
 import type { DataSource } from "./types";
 
 export type { DashboardReader, DataSource, WorkspaceCalendar, WorkspaceView } from "./types";
@@ -24,4 +25,11 @@ export const getPageData = cache(async (): Promise<DataSource> => {
   const { nativeDataSource } = await import("./native");
   const ctx = await requirePageContext();
   return nativeDataSource({ supabase: await getPageSupabase(), ctx });
+});
+
+/** AUTH_PROVIDER=supabase only: the page's user-JWT client and verified context (redirects like requirePageContext). */
+export const getPageScope = cache(async (): Promise<DataScope> => {
+  const { getPageSupabase, requirePageContext } = await import("@/lib/authz/context");
+  const ctx = await requirePageContext();
+  return { supabase: await getPageSupabase(), ctx };
 });

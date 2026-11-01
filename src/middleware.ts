@@ -48,6 +48,24 @@ const PROTECTED_PAGE_PREFIXES = [
   "/help",
 ];
 
+/** Native-only APIs (§7.4); their route handlers answer 404 in legacy mode. */
+const NATIVE_API_PREFIXES = [
+  "/api/team",
+  "/api/settings",
+  "/api/integrations",
+  "/api/audit",
+  "/api/onboarding/checklist",
+  "/api/contacts",
+  "/api/pipeline",
+  "/api/opportunities",
+  "/api/calendars",
+  "/api/appointments",
+  "/api/conversations",
+  "/api/tasks",
+  "/api/reviews",
+  "/api/reports",
+];
+
 const PROTECTED_API_PREFIXES = [
   "/api/dashboard",
   "/api/events",
@@ -56,6 +74,7 @@ const PROTECTED_API_PREFIXES = [
   "/api/tenant/config",
   "/api/workspaces",
   "/api/platform",
+  ...NATIVE_API_PREFIXES,
 ];
 
 /** Signed-in pages that need no workspace (AUTH_PROVIDER=supabase only). */
@@ -262,6 +281,20 @@ export const config = {
     "/api/tenant/config",
     "/api/workspaces/:path*",
     "/api/platform/:path*",
+    "/api/team/:path*",
+    "/api/settings/:path*",
+    "/api/integrations/:path*",
+    "/api/audit/:path*",
+    "/api/onboarding/checklist",
+    "/api/contacts/:path*",
+    "/api/pipeline/:path*",
+    "/api/opportunities/:path*",
+    "/api/calendars/:path*",
+    "/api/appointments/:path*",
+    "/api/conversations/:path*",
+    "/api/tasks/:path*",
+    "/api/reviews/:path*",
+    "/api/reports/:path*",
     "/no-access",
     "/workspace-suspended",
   ],

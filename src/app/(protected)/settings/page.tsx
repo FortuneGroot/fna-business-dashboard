@@ -6,6 +6,14 @@ import { BRAND } from "@/lib/brand";
 import type { AuthRole } from "@/lib/auth/types";
 import { canAccessOwnerSettings, canAccessSyncHealth } from "@/lib/auth/types";
 import { useCallback, useEffect, useState } from "react";
+import {
+  NativeAiReceptionist,
+  NativeAudit,
+  NativeBusinessProfile,
+  NativeIntegrations,
+  NativeTeam,
+  useTeam,
+} from "@/components/settings/NativeSettings";
 
 type Health = {
   ok?: boolean;
@@ -36,6 +44,8 @@ export default function SettingsPage() {
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
   const [native, setNative] = useState(false);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthorized" | "error">(
     "loading"
@@ -54,6 +64,10 @@ export default function SettingsPage() {
       if (meRes.ok) {
         const me = await meRes.json();
         isNative = Boolean(me?.workspace);
+        if (isNative) {
+          setPermissions(Array.isArray(me.permissions) ? me.permissions : []);
+          setMyUserId(typeof me.user?.id === "string" ? me.user.id : null);
+        }
         const next = me?.user?.role ?? me?.legacyRole;
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
       }
@@ -94,6 +108,8 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
+  const can = (permission: string) => permissions.includes(permission);
+  const team = useTeam(native && loadState === "ready" && can("team.read"));
   const isOwner = role ? canAccessOwnerSettings(role) : false;
   const canSeeSystem = role ? canAccessSyncHealth(role) : false;
   const connected = Boolean(health?.ghl?.connected);
@@ -123,6 +139,9 @@ export default function SettingsPage() {
       ) : null}
 
       <div className="grid grid-2">
+        {native && loadState === "ready" ? (
+          <NativeBusinessProfile canEdit={can("settings.write")} />
+        ) : (
         <Card title="Business Profile">
           <label htmlFor="biz-name">Business name</label>
           <input id="biz-name" value={bizName} readOnly disabled aria-disabled="true" />
@@ -140,19 +159,11 @@ export default function SettingsPage() {
             Profile details are managed by Fortune & Automations for your Business Dashboard.
           </p>
         </Card>
+        )}
 
-        {isOwner && native ? (
-          <Card title="Integrations" action={<Badge tone="neutral">Not connected</Badge>}>
-            <p>No integrations are connected to this workspace yet.</p>
-            {tenant?.owner?.pipelineName ? (
-              <p className="muted">
-                Pipeline: {tenant.owner.pipelineName}
-                {tenant.owner.stagesCount ? ` · ${tenant.owner.stagesCount} stages` : ""}
-              </p>
-            ) : null}
-            <p className="muted">Lists and metrics come from this workspace&apos;s own records.</p>
-          </Card>
-        ) : isOwner ? (
+        {native && can("integrations.read") ? (
+          <NativeIntegrations pipelineName={tenant?.owner?.pipelineName} stagesCount={tenant?.owner?.stagesCount} />
+        ) : isOwner && !native ? (
           <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
             <p>
               {connected
@@ -181,9 +192,13 @@ export default function SettingsPage() {
       </div>
 
       <div className="grid grid-2" style={{ marginTop: "1.1rem" }}>
-        <Card title="Team / Staff">
-          <EmptyState title="No team members yet" note="Invited staff accounts will appear here." />
-        </Card>
+        {native && can("team.read") ? (
+          <NativeTeam permissions={permissions} myUserId={myUserId} team={team} />
+        ) : (
+          <Card title="Team / Staff">
+            <EmptyState title="No team members yet" note="Invited staff accounts will appear here." />
+          </Card>
+        )}
 
         {canSeeSystem ? (
           <Card title="System status">
@@ -231,6 +246,15 @@ export default function SettingsPage() {
           </Card>
         )}
       </div>
+
+      {native && loadState === "ready" && (can("ai_receptionist.read") || can("audit.read")) ? (
+        <div className="grid grid-2" style={{ marginTop: "1.1rem" }}>
+          {can("ai_receptionist.read") ? (
+            <NativeAiReceptionist canEdit={can("ai_receptionist.write")} members={team.members} />
+          ) : null}
+          {can("audit.read") ? <NativeAudit /> : null}
+        </div>
+      ) : null}
     </AppShell>
   );
 }

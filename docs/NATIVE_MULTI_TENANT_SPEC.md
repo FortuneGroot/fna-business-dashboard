@@ -1050,7 +1050,7 @@ The legacy migrations originally shared the 8-digit version `20260917`. They are
 | P1 Schema | M1–M14 + rollback script + DB tests | Done locally: PGlite/shim and real-PostgreSQL suites green. `supabase db reset` and HTTP/JWT/Storage checks **BLOCKED** until the Supabase CLI stack runs |
 | P2 Auth | Supabase auth behind `AUTH_PROVIDER`; request context; middleware | AUTH-* pass; legacy mode still passes the original 137 tests |
 | P3 Read parity | Existing pages and `/api/dashboard/*` read native tables via adapters | UI-1, UI-2 visual parity; API-1 shape tests — done locally (§17): API-1, ISO, and UI-1 pass on the real stack; UI-2 run with a local harness (sidebar 0.00% on all 20 pages; differences are copy) |
-| P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass |
+| P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass — done locally (§18): INV, ROLE, MEM, SUSP, SET-1..7, browser flow, and NET-1 pass on the real stack |
 | P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) |
 | P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass |
 | P7 GHL removal | Delete §8.3 files; env cleanup | GHL-1, GHL-2 pass; build + all tests green |
@@ -1447,3 +1447,65 @@ Local only: nothing pushed, deployed, or applied to a hosted project; no invitat
 | Pipeline columns grouped opportunities by stage-name substring, so overlapping or duplicate names put one opportunity in several columns | The workspace view keeps stage ids (`WorkspaceView.stages`); `pipelineColumns` places each opportunity in the column with its `stageId`; column counts and values are exact database totals per stage id (`stageTotals`, paged past `max_rows`, deleted rows excluded, other pipelines excluded), summed in cents. Legacy matching unchanged | Unit: duplicate "Qualified" stages, "New Lead" / "New Lead Follow-up", a rename keeps the id, totals exact and paged, no opportunity placed twice, legacy behaviour pinned. Stack (rendered `/pipeline`): renamed stages with duplicate and overlapping names → items per column `[0,0,1,0,0,0,0,2,0,1,0,0]`, values `$200.5`, `$400.01`, `$999.99`, summary cards and banner count each opportunity once; renaming again keeps the column and the API reports the new name |
 
 Results: unit 235/235, PGlite 187/187, real PostgreSQL 28/28, stack 36/36, `tsc` and `npm run build` PASS.
+
+## 18. P4 implementation record (team and settings)
+
+Local only: nothing pushed, deployed, or applied to a hosted project. No invitation email or SMS is ever sent: invite links are shown once to the inviter. With `AUTH_PROVIDER=legacy` (the default) every P4 endpoint answers 404 and Settings/Onboarding render exactly as before.
+
+### 18.1 Files
+
+| Area | Files |
+| --- | --- |
+| Migration | `supabase/migrations/20261101001600_team_settings.sql` (M17, additive): `list_team_members()` (team.read; active members with sign-in email and overrides), `set_member_permissions(user, overrides)` (several overrides atomically, each through `set_member_permission`), `invitation_signup_email(token)` (service role only, behind A1), `private.record_config_change()` triggers on `workspace_settings`, `ai_receptionist_configs`, `integrations` (changed field names only, never values; actor from `auth.uid()`). Rollback block in `supabase/rollback/20261101_native_multi_tenant.down.sql` |
+| API helpers | `src/lib/api/native.ts`: `nativeApi` (supabase mode only, session + active workspace + permission, the caller's JWT, refreshed cookies, `private, no-store`), `ApiError`/`dbFailure` (M11 codes and SQLSTATEs → §7.1), strict `parseBody`/`parseQuery` (workspace keys dropped per ISO-F1, other unknown keys 422), `parseId`, opaque keyset cursors, `appOrigin` (invite link origin: server-only `APP_ORIGIN` if set, else the request Host) |
+| Domain modules | `src/lib/native/`: `team.ts`, `invitations.ts`, `settings.ts` (workspace profile + AI receptionist), `integrations.ts`, `audit.ts`, `onboarding.ts`, `shared.ts` |
+| Routes | `/api/team`, `/api/team/[userId]`, `/api/team/invitations`, `/api/team/invitations/[id]`, `/api/invitations/[token]`, `/api/invitations/[token]/accept`, `/api/settings/workspace`, `/api/settings/ai-receptionist`, `/api/integrations`, `/api/audit`, `/api/onboarding/checklist` |
+| Admin Auth | `src/lib/supabase/admin.ts`: `createUserFromInvitation` (allowlist entry A1); `src/lib/supabase/server.ts`: `supabaseAnonymous()` for the public preview |
+| Pages | `src/app/invite/[token]/` (landing: preview, create account or sign in, accept); `src/components/settings/NativeSettings.tsx` (Business Profile, Integrations, Team / Staff with invite link, role select, remove dialog, invitations list with revoke, AI Receptionist, Recent changes) rendered by the existing Settings page in supabase mode; Onboarding shows the native checklist. Existing `Card`, `Badge`, `Modal`, `EmptyState` components and classes; no layout change |
+| Middleware | P4 and P5 API prefixes added to the protected list (no behaviour change otherwise) |
+| Tests | `tests/p4-team-settings.test.ts` (unit), `tests/db/p4-team-rpcs.test.ts` (PGlite), stack describe "team, invitations, and settings through the app (P4)" (8 API tests + 1 browser test) and the final NET-1 test; `tests/helpers/net-guard.cjs` |
+
+### 18.2 Behaviour
+
+- **Authority stays in the database.** Every team, invitation, override, and settings change runs with the caller's JWT through the existing M11 RPCs (`set_member_role`, `set_member_permission(s)`, `remove_member`, `create_invitation`, `revoke_invitation`, `accept_invitation`) or column-granted tables under RLS. Role authority (§4.2), self-change rules, last-owner protection, and the post-lock re-check apply unchanged; the app adds input validation and §7.1 error mapping only.
+- **Invitations:** `POST /api/team/invitations` returns `inviteUrl` once (the raw token is never stored; only its hash). Nothing is sent. Lists show email, role, expiry, and status, never the token. Revocation is immediate. The landing page `/invite/[token]` calls the public preview (`workspaceName`, `role`, masked email, `accountExists`) and either signs in (the signed-in email must match) or creates the account for the invitation's own address (A1: the email comes from the database, never the client), then accepts with the new user's own JWT. Expired/used/revoked → 410, unknown → 404, mismatch → 403, existing account → 409 `account_exists`.
+- **Settings:** profile fields validated strictly (timezone from the IANA list, http(s) URLs only, hex colours, `HH:MM` business hours with start before end, phone characters, email lowercased). `logoPath` is not client-writable (Storage endpoint only). Changes are stamped by the database and recorded as field names in the audit log.
+- **AI receptionist:** greeting, hours mode, escalation member (must be an active member of this workspace). `enabled` cannot be set by any client (constraint and validation); the response always reports `enabled: false, runtimeAvailable: false`.
+- **Integrations:** read-only list of provider, status, capabilities, and verification time. Config values are never returned; status and verification are server-controlled (no client grant).
+- **Onboarding checklist:** computed from records: profile (support email or business phone), team (more than one active member), calendar (an active calendar), AI config (a greeting). Requires `onboarding.read` (owner).
+- **Outbound:** the stack suite runs `next start` with `tests/helpers/net-guard.cjs`, which refuses and logs any non-loopback connection; the final test asserts the log is empty and that the disposable stack config has no SMTP or SMS route.
+
+### 18.3 Test IDs defined by this phase
+
+| ID | Test |
+| --- | --- |
+| SET-1 | Members with `settings.read` read the active workspace's profile; it never includes another workspace's data. |
+| SET-2 | Only `settings.write` (owner/admin) changes the profile; employees get 403. |
+| SET-3 | A client-supplied workspace id is ignored; only the active workspace changes. Malformed fields (empty name, unknown timezone, `javascript:` URL, bad email/colour/hours/phone, `logoPath`) → 422. |
+| SET-4 | Changes are stamped by the database (`updated_by`) and audited with the changed field names, never their values. |
+| SET-5 | AI receptionist settings save, but nothing can enable it (API 422 and direct PostgREST refused); escalation must be an active member of this workspace; unknown fields 422. |
+| SET-6 | `/api/integrations` never returns config secrets; clients cannot change integration status. |
+| SET-7 | The onboarding checklist reflects real records and requires `onboarding.read`. |
+
+### 18.4 Deviations and limitations
+
+1. A1 uses a service-role-only RPC (`invitation_signup_email`) to read the invitation's email before `auth.admin.createUser`; the client never supplies the email. The account is created confirmed (no confirmation email exists locally).
+2. If acceptance fails after A1 created the account (a race with revocation or expiry), the account remains without membership; the person can sign in and sees `/no-access`. No cleanup runs automatically.
+3. Overrides are API-only (`PATCH /api/team/[userId] { overrides }`); Settings has no overrides editor yet.
+4. Password policy on the invite page: 12–72 characters plus GoTrue's own checks.
+5. Business hours are shown but not editable in the Settings card (API supports them).
+6. Next normalises a `127.0.0.1` host to `localhost` in `req.nextUrl` and in middleware redirects (`NextURL`). Invite links therefore use `appOrigin` (server-only `APP_ORIGIN` when set, else the forwarded/Host header), so a link matches the address the inviter used. Redirects are unchanged; local browser tests use `localhost` so host-only cookies survive them. Deployed environments should set `APP_ORIGIN`.
+
+### 18.5 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (235 previous + 22 P4: schemas, error mapping, legacy 404, invite link origin, NET-1 guard in a child process, static guards; P2/P3 tests updated for the new routes) | Node 24.20.0 | PASS 257/257 |
+| DB suite (187 previous + 10 P4: `list_team_members`, atomic overrides with rollback, A1 lookup is service-role only and never for an existing account, configuration attribution without values) | PGlite + shim | PASS 197/197 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 (unchanged) |
+| Stack suite (36 previous + 9 P4 + NET-1: INV-1/2/3/4/6/7, preview and A1 account creation, ROLE-1..8, MEM-1/2/4, SUSP, SET-1..7, browser flow, no outbound connection and no SMTP/SMS route) | Real Supabase local stack (disposable) + `next build`/`next start` + Chromium 1243 | PASS 46/46 |
+| Browser flow (owner signs in, creates an invite link shown once, invitee creates an account from the link, password mismatch shown, employee view is read-only, role change, removal → `/no-access`, profile and AI settings saved, revoked link → "Invitation unavailable") | same | PASS (screenshots in a temp directory) |
+| `tsc --noEmit -p .` | — | PASS |
+| `npm run build` | Next.js 15.5.25 | PASS |
+
+The stack suite could not observe a mail catcher (the local config disables `local_smtp`); NET-1 instead asserts that the disposable config has no SMTP or SMS route and that the app opened no non-loopback connection.

@@ -2,13 +2,14 @@
 // GoTrue identity and its own JWT through PostgREST or Storage. The superuser connection is used only
 // for setup that stands in for the platform-admin bootstrap script and for verifying outcomes.
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
-  adminDb, appFetch, appLogin, cookieHeader, jwtPayload, readSessionCookie, rest, rpc, serviceRest, sessionCookie,
-  signJwt, signUp, startApp, startStack, storage, upgradeToAal2, upgradeToAal2Session,
+  adminDb, appFetch, appLogin, capturedMailCount, cookieHeader, jwtPayload, launchBrowser, messageRoutes, readSessionCookie, rest, rpc,
+  serviceRest, sessionCookie, signJwt, signUp, startApp, startStack, storage, upgradeToAal2, upgradeToAal2Session,
   type App, type HttpResult, type Identity, type Stack, type StackEnv,
 } from "./stack";
 import { DASHBOARD_ENDPOINTS, dashboardShapeErrors } from "../helpers/api-shapes";
@@ -1247,6 +1248,477 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       });
     });
 
+    describe("team, invitations, and settings through the app (P4)", () => {
+      let owner: Identity;
+      let admin: Identity;
+      let emp: Identity;
+      let ws = "";
+      let ownerCookie = "";
+      let adminCookie = "";
+      let empCookie = "";
+
+      type Member = { userId: string; email: string; role: string; overrides: Record<string, boolean> };
+      const invite = (cookie: string, json: unknown) => appFetch(app, "/api/team/invitations", { method: "POST", cookie, json });
+      const tokenOf = (url: unknown) => {
+        const m = /^http:\/\/127\.0\.0\.1:\d+\/invite\/([0-9a-f]{64})$/.exec(String(url));
+        assert.ok(m, `invite link: ${String(url)}`);
+        return m![1];
+      };
+      const accept = (token: string, cookie?: string, json: unknown = {}) =>
+        appFetch(app, `/api/invitations/${token}/accept`, { method: "POST", cookie, json });
+      const team = async (cookie: string): Promise<Member[]> => {
+        const r = await appFetch(app, "/api/team", { cookie });
+        assert.equal(r.status, 200, r.text);
+        return r.body.members;
+      };
+      const roleOf = async (userId: string) =>
+        (await db.query<{ role: string; status: string }>(
+          "select role, status from public.workspace_members where workspace_id = $1 and user_id = $2", [ws, userId])).rows[0];
+      const audit = async (cookie: string) => {
+        const r = await appFetch(app, "/api/audit?limit=100", { cookie });
+        assert.equal(r.status, 200, r.text);
+        return r.body.items as { action: string; target: string | null; actorId: string | null; actorKind: string; metadata: any }[];
+      };
+      const expect = (r: Awaited<ReturnType<typeof appFetch>>, status: number, code: string | null, label: string) =>
+        assert.deepEqual([r.status, code === null ? null : r.body?.code], [status, code], `${label}: ${r.text.slice(0, 200)}`);
+      const joinAs = async (user: Identity, role: "admin" | "employee") => {
+        const r = await invite(ownerCookie, { email: user.email, role });
+        assert.equal(r.status, 200, r.text);
+        const cookie = await appLogin(app, user);
+        const a = await accept(tokenOf(r.body.inviteUrl), cookie);
+        assert.equal(a.status, 200, a.text);
+        assert.equal(a.body.workspace?.id, ws, "acceptance answers with the joined workspace");
+        return cookie;
+      };
+
+      before(async () => {
+        owner = await signUp(env, email("team-owner"), "Team Owner");
+        admin = await signUp(env, email("team-admin"), "Team Admin");
+        emp = await signUp(env, email("team-employee"), "Team Employee");
+        const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+          p_provisioning_key: `synthetic-team-${run}`, p_name: "Team (synthetic)", p_slug: `team-synthetic-${run}`,
+          p_owner_email: owner.email,
+        });
+        assert.equal(prov.status, 200, prov.text);
+        ws = prov.body.workspace_id;
+        assert.equal((await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token })).status, 200);
+        ownerCookie = await appLogin(app, owner);
+        adminCookie = await joinAs(admin, "admin");
+        empCookie = await joinAs(emp, "employee");
+      });
+
+      test("INV-1/2/6/7: an invite link is returned once, only its hash is stored, and nothing is sent", async () => {
+        const mailBefore = env.mailUrl ? await capturedMailCount(env) : null;
+        assert.deepEqual(messageRoutes(stack.project).filter((r) => r !== "local_smtp"), [], "no SMTP or SMS route");
+        const newcomer = email("team-newcomer");
+        const r = await invite(ownerCookie, { email: `  ${newcomer.toUpperCase()} `, role: "employee", workspaceId: wsA });
+        assert.equal(r.status, 200, r.text);
+        const token = tokenOf(r.body.inviteUrl);
+        assert.equal(r.text.split(token).length, 2, "the token appears exactly once (inside the link)");
+        assert.deepEqual({ ...r.body.invitation, id: undefined, createdAt: undefined, expiresAt: undefined },
+          { id: undefined, email: newcomer, role: "employee", createdAt: undefined, expiresAt: undefined, status: "pending" });
+        assert.match(r.headers.get("cache-control") ?? "", /no-store/);
+
+        const stored = await db.query<{ workspace_id: string; hashed: boolean; row: string }>(
+          `select workspace_id, token_hash = private.hash_token($2) hashed, row_to_json(i)::text "row"
+           from public.workspace_invitations i where id = $1`, [r.body.invitation.id, token]);
+        assert.equal(stored.rows[0].workspace_id, ws, "a body workspaceId is ignored: the invitation is for the active workspace");
+        assert.equal(stored.rows[0].hashed, true);
+        assert.equal(stored.rows[0].row.includes(token), false, "the raw token is not stored");
+
+        const list = await appFetch(app, "/api/team/invitations", { cookie: ownerCookie });
+        assert.equal(list.status, 200, list.text);
+        assert.equal(list.text.includes(token), false, "listing never shows the token again");
+        assert.equal(list.text.includes("token_hash"), false);
+        const item = list.body.items.find((i: { id: string }) => i.id === r.body.invitation.id);
+        assert.equal(item?.status, "pending");
+        const hash = await rest(env, owner.token, "GET", `workspace_invitations?select=token_hash&id=eq.${r.body.invitation.id}`);
+        assert.ok(denied(hash.status), `token_hash readable through PostgREST: ${hash.status}`);
+
+        expect(await invite(ownerCookie, { email: newcomer, role: "employee" }), 409, "conflict", "second open invitation");
+        expect(await invite(ownerCookie, { email: emp.email, role: "employee" }), 409, "already_member", "existing member");
+        for (const body of [{ email: "not-an-email", role: "employee" }, { email: newcomer, role: "platform_admin" },
+          { email: newcomer, role: "employee", ttlHours: 169 }, { email: newcomer, role: "employee", ttlHours: 0 },
+          { email: newcomer, role: "employee", extra: true }, { role: "employee" }]) {
+          const bad = await invite(ownerCookie, body);
+          expect(bad, 422, "validation_failed", JSON.stringify(body));
+          assert.equal(typeof bad.body.fields, "object");
+        }
+        if (mailBefore !== null) assert.equal(await capturedMailCount(env), mailBefore, "creating invitations sends no email");
+      });
+
+      test("INV: the public preview reveals only a masked email; a new account is created from the invitation (A1)", async () => {
+        const newcomer = email("team-signup");
+        const r = await invite(ownerCookie, { email: newcomer, role: "employee" });
+        const token = tokenOf(r.body.inviteUrl);
+        const preview = await appFetch(app, `/api/invitations/${token}`);
+        assert.equal(preview.status, 200, preview.text);
+        assert.deepEqual({ ...preview.body, emailMasked: undefined },
+          { ok: true, workspaceName: "Team (synthetic)", role: "employee", emailMasked: undefined, accountExists: false });
+        assert.equal(preview.text.includes(newcomer), false, "the full email is not revealed");
+        assert.equal(preview.text.includes(ws), false, "the workspace id is not revealed");
+        assert.equal(preview.headers.get("referrer-policy"), "no-referrer");
+        expect(await appFetch(app, `/api/invitations/${"0".repeat(64)}`), 404, "invitation_not_found", "unknown token");
+        expect(await appFetch(app, "/api/invitations/not-a-token"), 404, "invitation_not_found", "malformed token");
+
+        expect(await accept(token), 401, "unauthenticated", "no session and no password");
+        expect(await accept(token, undefined, { password: "short" }), 422, "validation_failed", "short password");
+        expect(await accept(token, undefined, { password: "Long-enough-pass-1", email: outsider.email }), 422,
+          "validation_failed", "client-chosen email");
+        assert.equal((await db.query("select 1 from auth.users where email = $1", [newcomer])).rowCount, 0, "no account yet");
+
+        const joined = await accept(token, undefined, { password: "Local-newcomer-pass-1" });
+        assert.equal(joined.status, 200, joined.text);
+        assert.equal(joined.body.workspace?.id, ws);
+        const cookie = cookieHeader(joined.setCookies);
+        const me = await appFetch(app, "/api/auth/me", { cookie });
+        assert.deepEqual([me.body.user?.email, me.body.role, me.body.workspace?.id], [newcomer, "employee", ws]);
+        const created = await db.query<{ email: string; confirmed: boolean }>(
+          "select email, email_confirmed_at is not null confirmed from auth.users where email = $1", [newcomer]);
+        assert.deepEqual(created.rows, [{ email: newcomer, confirmed: true }], "the account uses the invited address");
+
+        expect(await accept(token, undefined, { password: "Local-newcomer-pass-2" }), 410, "invitation_used", "reuse without session");
+        expect(await accept(token, cookie), 410, "invitation_used", "reuse with session");
+        expect(await appFetch(app, `/api/invitations/${token}`), 410, "invitation_used", "preview after use");
+        const accepted = await audit(ownerCookie);
+        assert.ok(accepted.some((a) => a.action === "invitation.accepted" && a.actorId === me.body.user.id), "acceptance is audited");
+      });
+
+      test("INV-3/4: expired, revoked, mismatched, and concurrent acceptances are refused exactly once", async () => {
+        const existing = await signUp(env, email("team-existing"), "Team Existing");
+        const existingCookie = await appLogin(app, existing);
+
+        const exp = await invite(ownerCookie, { email: email("team-expired"), role: "employee" });
+        await db.query(`update public.workspace_invitations set created_at = now() - interval '2 hours',
+          expires_at = now() - interval '1 second' where id = $1`, [exp.body.invitation.id]);
+        const expToken = tokenOf(exp.body.inviteUrl);
+        expect(await appFetch(app, `/api/invitations/${expToken}`), 410, "invitation_expired", "expired preview");
+        expect(await accept(expToken, undefined, { password: "Local-expired-pass-1" }), 410, "invitation_expired", "expired accept");
+
+        const rev = await invite(ownerCookie, { email: email("team-revoked"), role: "employee" });
+        const revoked = await appFetch(app, `/api/team/invitations/${rev.body.invitation.id}`, { method: "DELETE", cookie: ownerCookie });
+        assert.equal(revoked.status, 200, revoked.text);
+        expect(await appFetch(app, `/api/team/invitations/${rev.body.invitation.id}`, { method: "DELETE", cookie: ownerCookie }),
+          409, "conflict", "revoking twice");
+        const revToken = tokenOf(rev.body.inviteUrl);
+        expect(await appFetch(app, `/api/invitations/${revToken}`), 410, "invitation_revoked", "revoked preview");
+        expect(await accept(revToken, undefined, { password: "Local-revoked-pass-1" }), 410, "invitation_revoked", "revoked accept");
+
+        const foreign = await rpc(env, ownerA.token, "create_invitation", { p_email: email("team-foreign"), p_role: "employee", p_ttl_hours: 24 });
+        assert.equal(foreign.status, 200, foreign.text);
+        expect(await appFetch(app, `/api/team/invitations/${foreign.body.invitation_id}`, { method: "DELETE", cookie: ownerCookie }),
+          404, "not_found", "another workspace's invitation");
+        assert.equal((await db.query("select revoked_at from public.workspace_invitations where id = $1",
+          [foreign.body.invitation_id])).rows[0].revoked_at, null);
+        expect(await appFetch(app, "/api/team/invitations/not-a-uuid", { method: "DELETE", cookie: ownerCookie }),
+          422, "validation_failed", "malformed id");
+
+        const mismatch = await invite(ownerCookie, { email: email("team-someone-else"), role: "employee" });
+        const misToken = tokenOf(mismatch.body.inviteUrl);
+        expect(await accept(misToken, existingCookie), 403, "invitation_email_mismatch", "signed in as another address");
+        assert.equal((await appFetch(app, `/api/invitations/${misToken}`)).status, 200, "a mismatch does not consume the invitation");
+
+        const forExisting = await invite(ownerCookie, { email: existing.email, role: "employee" });
+        const exToken = tokenOf(forExisting.body.inviteUrl);
+        const preview = await appFetch(app, `/api/invitations/${exToken}`);
+        assert.equal(preview.body.accountExists, true);
+        expect(await accept(exToken, undefined, { password: "Local-existing-pass-1" }), 409, "account_exists",
+          "an existing account must sign in");
+        const results = await Promise.all([accept(exToken, existingCookie), accept(exToken, existingCookie)]);
+        assert.deepEqual(results.map((x) => x.status).sort(), [200, 410], results.map((x) => x.text).join(" | "));
+        const rows = await db.query("select role, status from public.workspace_members where workspace_id = $1 and user_id = $2",
+          [ws, existing.id]);
+        assert.deepEqual(rows.rows, [{ role: "employee", status: "active" }], "exactly one membership");
+      });
+
+      test("ROLE-1..8: role authority, self changes, foreign ids, and audit through /api/team", async () => {
+        const members = await team(empCookie);
+        assert.ok(members.some((m) => m.userId === owner.id && m.email === owner.email && m.role === "owner"));
+        expect(await appFetch(app, "/api/team", { cookie: await appLogin(app, outsider) }), 403, "no_active_workspace", "outsider");
+        expect(await appFetch(app, "/api/team"), 401, "unauthenticated", "anonymous");
+
+        const patch = (cookie: string, userId: string, json: unknown) =>
+          appFetch(app, `/api/team/${userId}`, { method: "PATCH", cookie, json });
+        const remove = (cookie: string, userId: string) => appFetch(app, `/api/team/${userId}`, { method: "DELETE", cookie });
+
+        // Employees: no team changes at all.
+        expect(await patch(empCookie, admin.id, { role: "employee" }), 403, "forbidden", "employee changes a role");
+        expect(await remove(empCookie, admin.id), 403, "forbidden", "employee removes");
+        expect(await invite(empCookie, { email: email("team-by-employee"), role: "employee" }), 403, "forbidden", "employee invites");
+        // Admins: employees only; no role changes.
+        expect(await invite(adminCookie, { email: email("team-admin-invite"), role: "admin" }), 403, "forbidden", "admin invites admin");
+        assert.equal((await invite(adminCookie, { email: email("team-admin-invite"), role: "employee" })).status, 200);
+        expect(await patch(adminCookie, emp.id, { role: "admin" }), 403, "forbidden", "admin promotes");
+        expect(await remove(adminCookie, owner.id), 403, "forbidden", "admin removes the owner");
+        assert.deepEqual(await roleOf(owner.id), { role: "owner", status: "active" });
+        // Overrides: employees only, never team.* or integrations.manage; atomic.
+        const ov = await patch(adminCookie, emp.id, { overrides: { "contacts.delete": true } });
+        assert.equal(ov.status, 200, ov.text);
+        assert.deepEqual(ov.body.member.overrides, { "contacts.delete": true });
+        const empMe = await appFetch(app, "/api/auth/me", { cookie: empCookie });
+        assert.ok(empMe.body.permissions.includes("contacts.delete"), "the override takes effect on the next request");
+        expect(await patch(adminCookie, emp.id, { overrides: { "contacts.write": false, "team.remove": true } }), 422,
+          "validation_failed", "granting team.remove");
+        assert.deepEqual((await team(ownerCookie)).find((m) => m.userId === emp.id)?.overrides, { "contacts.delete": true },
+          "a refused batch changes nothing");
+        expect(await patch(ownerCookie, admin.id, { overrides: { "contacts.delete": true } }), 422, "validation_failed",
+          "overrides on an admin");
+        for (const body of [{}, { role: "superuser" }, { role: "admin", overrides: {} }, { overrides: {} },
+          { overrides: { "contacts.delete": "yes" } }, { overrides: { "not a permission": true } }]) {
+          expect(await patch(ownerCookie, emp.id, body), 422, "validation_failed", JSON.stringify(body));
+        }
+        // Owners: everything except themselves.
+        expect(await patch(ownerCookie, owner.id, { role: "admin" }), 403, "forbidden", "self role change");
+        expect(await remove(ownerCookie, owner.id), 403, "forbidden", "self removal");
+        const promoted = await patch(ownerCookie, emp.id, { role: "admin" });
+        assert.equal(promoted.status, 200, promoted.text);
+        assert.deepEqual([promoted.body.member.role, promoted.body.member.overrides], ["admin", {}], "overrides cleared on promotion");
+        assert.equal((await patch(ownerCookie, emp.id, { role: "employee" })).status, 200);
+        const changes = (await audit(ownerCookie)).filter((a) => a.action === "member.role_changed" && a.target === emp.id);
+        assert.ok(changes.length >= 2, "role changes are audited");
+        assert.equal(changes[0].actorId, owner.id);
+        // Foreign and unknown ids answer 404 and change nothing.
+        for (const id of [ownerA.id, employeeA.id, "00000000-0000-4000-8000-000000000000"]) {
+          expect(await patch(ownerCookie, id, { role: "employee" }), 404, "not_found", `patch ${id}`);
+          expect(await remove(ownerCookie, id), 404, "not_found", `remove ${id}`);
+        }
+        expect(await patch(ownerCookie, "not-a-uuid", { role: "employee" }), 422, "validation_failed", "malformed id");
+        const ownerBCookie = await appLogin(app, ownerB);
+        expect(await patch(ownerBCookie, emp.id, { role: "admin" }), 404, "not_found", "another workspace's owner");
+        assert.deepEqual(await roleOf(emp.id), { role: "employee", status: "active" });
+        assert.equal((await db.query("select count(*)::int n from public.workspace_members where workspace_id = $1 and user_id = $2",
+          [wsA, ownerA.id])).rows[0].n, 1, "ownerA's membership in A is untouched");
+      });
+
+      test("ROLE-7 and MEM-1/2/4: platform grants cannot manage members; removal revokes access and unassigns work", async () => {
+        const grant = await grantAccess(ws, "write", "P4 stack team management check");
+        assert.equal(grant.status, 200, grant.text);
+        const byPlatform = await rpc(env, platformAal2, "set_member_role", { p_user_id: emp.id, p_role: "admin" });
+        assert.ok(byPlatform.status >= 400 && /forbidden/.test(byPlatform.text), byPlatform.text);
+        const invByPlatform = await rpc(env, platformAal2, "create_invitation", { p_email: email("team-by-platform"), p_role: "owner", p_ttl_hours: 24 });
+        assert.ok(invByPlatform.status >= 400 && /forbidden/.test(invByPlatform.text), invByPlatform.text);
+        await revokeGrant(grant.body.id);
+
+        const contact = await rest(env, owner.token, "POST", "contacts", { workspace_id: ws, first_name: "Removal", owner_user_id: emp.id });
+        assert.equal(contact.status, 201, contact.text);
+        const task = await rest(env, owner.token, "POST", "tasks", { workspace_id: ws, title: "Follow up", assigned_user_id: emp.id });
+        assert.equal(task.status, 201, task.text);
+
+        const removed = await appFetch(app, `/api/team/${emp.id}`, { method: "DELETE", cookie: adminCookie });
+        assert.equal(removed.status, 200, removed.text);
+        expect(await appFetch(app, "/api/team", { cookie: empCookie }), 403, "no_active_workspace", "removed member's session");
+        const after = await db.query<{ task: string | null; owner: string | null }>(
+          `select (select assigned_user_id from public.tasks where id = $1) task,
+                  (select owner_user_id from public.contacts where id = $2) owner`, [task.body[0].id, contact.body[0].id]);
+        assert.deepEqual(after.rows[0], { task: null, owner: null }, "open work is unassigned");
+        assert.ok((await audit(ownerCookie)).some((a) => a.action === "member.removed" && a.target === emp.id && a.actorId === admin.id));
+        expect(await appFetch(app, `/api/team/${emp.id}`, { method: "DELETE", cookie: ownerCookie }), 404, "not_found", "removing twice");
+
+        const again = await invite(ownerCookie, { email: emp.email, role: "employee" });
+        assert.equal(again.status, 200, again.text);
+        assert.equal((await accept(tokenOf(again.body.inviteUrl), empCookie)).status, 200);
+        const rows = await db.query("select role, status from public.workspace_members where workspace_id = $1 and user_id = $2", [ws, emp.id]);
+        assert.deepEqual(rows.rows, [{ role: "employee", status: "active" }], "re-invitation reactivates the same membership");
+        assert.equal((await appFetch(app, "/api/team", { cookie: empCookie })).status, 200);
+      });
+
+      test("SUSP: a suspended workspace refuses acceptance and team APIs until reactivated", async () => {
+        const pending = await invite(ownerCookie, { email: email("team-suspended"), role: "employee" });
+        const token = tokenOf(pending.body.inviteUrl);
+        await voidRpc(platformAal2, "platform_suspend_workspace", { p_workspace_id: ws, p_reason: "P4 suspension check" });
+        let reactivated = false;
+        try {
+          expect(await accept(token, undefined, { password: "Local-suspended-pass-1" }), 423, "workspace_suspended", "accept");
+          assert.equal((await db.query("select 1 from auth.users where email = $1", [email("team-suspended")])).rowCount, 0,
+            "no account is created for a suspended workspace");
+          expect(await appFetch(app, "/api/team", { cookie: ownerCookie }), 423, "workspace_suspended", "team list");
+          expect(await invite(ownerCookie, { email: email("team-suspended-2"), role: "employee" }), 423, "workspace_suspended", "invite");
+          expect(await appFetch(app, "/api/settings/workspace", { method: "PATCH", cookie: ownerCookie, json: { industry: "Towing" } }),
+            423, "workspace_suspended", "settings");
+          await voidRpc(platformAal2, "platform_reactivate_workspace", { p_workspace_id: ws, p_reason: "P4 suspension check done" });
+          reactivated = true;
+          assert.equal((await appFetch(app, "/api/team", { cookie: ownerCookie })).status, 200);
+        } finally {
+          if (!reactivated) await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: ws, p_reason: "P4 cleanup" });
+        }
+      });
+
+      test("SET-1..4: workspace settings follow settings.read/write, ignore client workspace ids, and are attributed", async () => {
+        const before = await db.query("select business_name from public.workspace_settings where workspace_id = $1", [wsA]);
+        const read = await appFetch(app, "/api/settings/workspace", { cookie: empCookie });
+        assert.equal(read.status, 200, read.text);
+        assert.equal(read.body.settings.businessName, "Team (synthetic)");
+        expect(await appFetch(app, "/api/settings/workspace", { method: "PATCH", cookie: empCookie, json: { industry: "x" } }),
+          403, "forbidden", "employee edits settings");
+
+        const patch = (json: unknown, cookie = ownerCookie) =>
+          appFetch(app, "/api/settings/workspace", { method: "PATCH", cookie, json });
+        const ok = await patch({ businessName: "Team Towing", supportEmail: "Help@Example.test", websiteUrl: "https://example.test",
+          businessHours: { mon: [{ start: "08:00", end: "17:00" }] }, workspaceId: wsA });
+        assert.equal(ok.status, 200, ok.text);
+        assert.deepEqual([ok.body.settings.businessName, ok.body.settings.supportEmail, ok.body.settings.businessHours],
+          ["Team Towing", "help@example.test", { mon: [{ start: "08:00", end: "17:00" }] }]);
+        assert.deepEqual((await db.query("select business_name from public.workspace_settings where workspace_id = $1", [wsA])).rows,
+          before.rows, "workspace A is untouched");
+        for (const body of [{}, { businessName: "" }, { timezone: "Mars/Olympus" }, { websiteUrl: "javascript:alert(1)" },
+          { supportEmail: "nope" }, { brandColors: { primary: "red" } }, { businessHours: { mon: [{ start: "18:00", end: "09:00" }] } },
+          { logoPath: "x.png" }, { businessPhone: "call me" }]) {
+          expect(await patch(body), 422, "validation_failed", JSON.stringify(body));
+        }
+        const attributed = await db.query<{ updated_by: string }>("select updated_by from public.workspace_settings where workspace_id = $1", [ws]);
+        assert.equal(attributed.rows[0].updated_by, owner.id, "the database stamps the editor");
+        const entry = (await audit(ownerCookie)).find((a) => a.action === "settings.updated");
+        assert.ok(entry, "the change is audited");
+        assert.deepEqual([...entry!.metadata.fields].sort(), ["business_hours", "business_name", "support_email", "website_url"]);
+        assert.equal(JSON.stringify(entry!.metadata).includes("help@example.test"), false, "values are not copied into the audit log");
+        expect(await appFetch(app, "/api/audit", { cookie: empCookie }), 403, "forbidden", "employee reads audit");
+        expect(await appFetch(app, "/api/audit?cursor=bad", { cookie: ownerCookie }), 422, "validation_failed", "bad cursor");
+        expect(await appFetch(app, "/api/audit?limit=500", { cookie: ownerCookie }), 422, "validation_failed", "limit too large");
+        const page1 = await appFetch(app, "/api/audit?limit=2", { cookie: ownerCookie });
+        const page2 = await appFetch(app, `/api/audit?limit=2&cursor=${encodeURIComponent(page1.body.nextCursor)}`, { cookie: ownerCookie });
+        assert.equal(page2.status, 200, page2.text);
+        assert.ok(page2.body.items[0].id < page1.body.items[1].id, "keyset pages do not overlap");
+      });
+
+      test("SET-5..7: AI receptionist settings stay disabled; integrations hide secrets; the checklist reflects real records", async () => {
+        const put = (json: unknown, cookie = adminCookie) => appFetch(app, "/api/settings/ai-receptionist", { method: "PUT", cookie, json });
+        const ok = await put({ greeting: "Thanks for calling Team Towing.", businessHoursMode: "always", escalationUserId: admin.id });
+        assert.equal(ok.status, 200, ok.text);
+        assert.deepEqual([ok.body.config.enabled, ok.body.config.runtimeAvailable, ok.body.config.escalationUserId], [false, false, admin.id]);
+        expect(await put({ enabled: true }), 422, "validation_failed", "enabling");
+        expect(await put({ escalationUserId: employeeA.id }), 422, "validation_failed", "escalation to another workspace's member");
+        expect(await put({ escalationUserId: outsider.id }), 422, "validation_failed", "escalation to a non-member");
+        expect(await put({ greeting: "x".repeat(2001) }), 422, "validation_failed", "greeting too long");
+        expect(await put({ apiKey: "sk-test" }), 422, "validation_failed", "unknown field");
+        expect(await put({ greeting: "Hi" }, empCookie), 403, "forbidden", "employee edits AI settings");
+        const enabled = await db.query("select enabled from public.ai_receptionist_configs where workspace_id = $1", [ws]);
+        assert.deepEqual(enabled.rows, [{ enabled: false }]);
+        const direct = await rest(env, owner.token, "PATCH", `ai_receptionist_configs?workspace_id=eq.${ws}`, { enabled: true });
+        assert.notEqual(direct.status, 200, "enabling through PostgREST is refused too");
+        assert.ok((await audit(ownerCookie)).some((a) => a.action === "ai_receptionist.updated" && a.actorId === admin.id));
+
+        await db.query(`insert into public.integrations (workspace_id, provider, status, verified_at, capabilities, config)
+          values ($1, 'twilio', 'connected', now(), '{sms}', '{"from":"+15550100","api_key":"sk-not-real","authToken":"not-real"}')`, [ws]);
+        const integrations = await appFetch(app, "/api/integrations", { cookie: ownerCookie });
+        assert.equal(integrations.status, 200, integrations.text);
+        assert.equal(integrations.body.items.length, 1);
+        assert.equal(integrations.body.items[0].status, "connected");
+        assert.equal(/sk-not-real|not-real|api_key|authToken/.test(integrations.text), false, "no secret-like config is returned");
+        expect(await appFetch(app, "/api/integrations", { cookie: empCookie }), 403, "forbidden", "employee lists integrations");
+        const forged = await rest(env, owner.token, "PATCH", `integrations?workspace_id=eq.${ws}`, { status: "error" });
+        assert.ok(denied(forged.status) || forged.status === 400, `clients cannot set integration status: ${forged.status}`);
+
+        const checklist = await appFetch(app, "/api/onboarding/checklist", { cookie: ownerCookie });
+        assert.equal(checklist.status, 200, checklist.text);
+        assert.deepEqual(checklist.body.items, [{ key: "profile", done: true }, { key: "team", done: true },
+          { key: "calendar", done: false }, { key: "ai_config", done: true }]);
+        expect(await appFetch(app, "/api/onboarding/checklist", { cookie: adminCookie }), 403, "forbidden", "admins lack onboarding.read");
+        const onboarding = await appFetch(app, "/onboarding", { cookie: ownerCookie });
+        assert.equal(onboarding.status, 200);
+      });
+
+      test("browser: the owner invites, the invitee creates an account from the link, and the owner manages the team", async () => {
+        const shots = mkdtempSync(join(tmpdir(), "fna-p4-browser-"));
+        // Next rewrites a 127.0.0.1 host to localhost in redirects (NextURL), and session cookies are
+        // host-only, so the browser uses localhost throughout.
+        const base = app.url.replace("//127.0.0.1:", "//localhost:");
+        const browser = await launchBrowser();
+        try {
+          const ownerCtx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+          ownerCtx.setDefaultTimeout(20_000);
+          await ownerCtx.addInitScript("window.__name = (f) => f");
+          const page = await ownerCtx.newPage();
+          await page.goto(`${base}/login`);
+          await page.fill("#email", owner.email);
+          await page.fill("#password", owner.password);
+          await page.click("button[type=submit]");
+          await page.waitForURL(/\/dashboard$/);
+          await page.goto(`${base}/settings`);
+          await page.getByRole("heading", { name: "Team / Staff" }).waitFor();
+          await page.getByText(admin.email, { exact: true }).waitFor();
+
+          const invitee = email("team-browser");
+          await page.fill("#invite-email", invitee);
+          await page.selectOption("#invite-role", "employee");
+          await page.getByRole("button", { name: "Create invite link" }).click();
+          const link = page.getByLabel("Invite link");
+          await link.waitFor();
+          const url = await link.inputValue();
+          assert.ok(url.startsWith(`${base}/invite/`) && /\/invite\/[0-9a-f]{64}$/.test(url), `the link uses the inviter's own address: ${url}`);
+          await page.getByText("no email or text message is sent").waitFor();
+          await page.screenshot({ path: join(shots, "settings-invite.png"), fullPage: true });
+          await page.reload();
+          await page.getByRole("heading", { name: "Team / Staff" }).waitFor();
+          await page.getByText(invitee, { exact: true }).waitFor();
+          assert.equal(await page.getByLabel("Invite link").count(), 0, "the link is not shown again after reload");
+
+          const guestCtx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+          guestCtx.setDefaultTimeout(20_000);
+          await guestCtx.addInitScript("window.__name = (f) => f");
+          const guest = await guestCtx.newPage();
+          await guest.goto(url);
+          await guest.getByRole("heading", { name: "Join Team (synthetic)" }).waitFor();
+          await guest.screenshot({ path: join(shots, "invite-landing.png"), fullPage: true });
+          await guest.fill("#invite-password", "Local-browser-pass-1");
+          await guest.fill("#invite-confirm", "Local-browser-pass-2");
+          await guest.getByRole("button", { name: "Create account and join" }).click();
+          await guest.getByText("The passwords do not match.").waitFor();
+          await guest.fill("#invite-confirm", "Local-browser-pass-1");
+          await guest.getByRole("button", { name: "Create account and join" }).click();
+          await guest.waitForURL(/\/dashboard$/);
+          await guest.goto(`${base}/settings`);
+          await guest.getByText("Employee (you)").waitFor();
+          assert.equal(await guest.locator("#invite-email").count(), 0, "employees get no invite form");
+          assert.equal(await guest.locator("#biz-name").isDisabled(), true, "employees cannot edit the profile");
+          await guest.screenshot({ path: join(shots, "settings-employee.png"), fullPage: true });
+
+          await page.reload();
+          await page.getByLabel(`Role for ${invitee}`).selectOption("admin");
+          await page.getByText(/is now Admin\./).waitFor();
+          assert.equal((await db.query<{ role: string }>(
+            "select m.role from public.workspace_members m join auth.users u on u.id = m.user_id where m.workspace_id = $1 and u.email = $2",
+            [ws, invitee])).rows[0].role, "admin");
+          await page.getByRole("button", { name: `Remove ${invitee}` }).click();
+          await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+          await page.getByText(/was removed from the workspace\./).waitFor();
+          await guest.goto(`${base}/dashboard`);
+          await guest.waitForURL(/\/no-access$/);
+
+          await page.fill("#biz-businessPhone", "781-964-0654");
+          await page.getByRole("button", { name: "Save profile" }).click();
+          await page.getByText("Business profile saved.").waitFor();
+          await page.fill("#ai-greeting", "Hello from the browser test.");
+          await page.getByRole("button", { name: "Save AI settings" }).click();
+          await page.getByText("AI receptionist settings saved. It stays off.").waitFor();
+          await page.reload();
+          await page.getByRole("heading", { name: "Recent changes" }).waitFor();
+          assert.equal(await page.locator("#biz-businessPhone").inputValue(), "781-964-0654");
+          await page.screenshot({ path: join(shots, "settings-owner.png"), fullPage: true });
+
+          const revokedInvite = await invite(ownerCookie, { email: email("team-browser-revoked"), role: "employee" });
+          await page.reload();
+          await page.getByRole("button", { name: `Revoke invitation for ${email("team-browser-revoked")}` }).click();
+          await page.getByText("Invitation revoked.").waitFor();
+          await guest.goto(revokedInvite.body.inviteUrl);
+          await guest.getByRole("heading", { name: "Invitation unavailable" }).waitFor();
+          await guest.screenshot({ path: join(shots, "invite-revoked.png"), fullPage: true });
+          console.log(`P4 browser screenshots: ${shots}`);
+        } catch (err) {
+          let n = 0;
+          for (const ctx of browser.contexts()) {
+            for (const p of ctx.pages()) {
+              console.error(`P4 browser page ${n}: ${p.url()}`);
+              await p.screenshot({ path: join(shots, `failure-${n++}.png`), fullPage: true }).catch(() => undefined);
+            }
+          }
+          console.error(`P4 browser flow failed (screenshots so far: ${shots}):`, err);
+          throw err;
+        } finally {
+          await browser.close().catch(() => undefined);
+        }
+      });
+    });
+
     // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit
     // these attempts in practice; the 429 → rate_limited mapping is proven in tests/p2-auth.test.ts.
     test("AUTH-1: repeated failed sign-ins only ever answer generic 401 or 429 rate_limited", async () => {
@@ -1257,6 +1729,14 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.ok(r.status === 401 || r.status === 429, `attempt ${i}: ${r.status} ${r.text.slice(0, 120)}`);
         assert.deepEqual(r.body, r.status === 401 ? generic : limited);
       }
+    });
+
+    test("NET-1: the app attempted no outbound connection, and the stack has no email or SMS route", async () => {
+      assert.deepEqual(app.outbound(), [], "non-local connections attempted by the app");
+      const routes = messageRoutes(stack.project);
+      assert.deepEqual(routes.filter((r) => r !== "local_smtp"), [], "GoTrue has no SMTP or SMS provider configured");
+      if (env.mailUrl) assert.equal(await capturedMailCount(env), 0, "messages captured by the local mail catcher");
+      else assert.equal(routes.includes("local_smtp"), false);
     });
   });
 });
