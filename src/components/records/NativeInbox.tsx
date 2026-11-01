@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Button, Card, DataTable, EmptyState, Modal, PageHead } from "@/components/ui";
@@ -46,13 +46,16 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState<{ convo: NativeConversation; messages: Message[]; nextCursor: string | null } | null>(null);
   const [note, setNote] = useState("");
+  const latest = useRef(0);
 
   async function load(status: string, cursor?: string | null) {
     const params = new URLSearchParams({ limit: "50" });
     if (status) params.set("status", status);
     if (cursor) params.set("cursor", cursor);
+    const request = ++latest.current;
     setBusy(true);
     const { body } = await api(`/api/conversations?${params}`);
+    if (request !== latest.current) return;
     setBusy(false);
     if (!body.ok) {
       setError(failure(body, "Could not load conversations."));
@@ -72,6 +75,7 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
       return;
     }
     const items = body.items as Message[];
+    setError("");
     setThread((t) => ({
       convo,
       messages: cursor && t ? [...t.messages, ...items] : items,
@@ -113,7 +117,7 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
           ? copy.bannerWaiting("conversation events")
           : "Showing this workspace's messages. Do not send from this view until messaging channels are live."}
       </StatusBanner>
-      {error ? <div className="banner error" role="alert">{error}</div> : null}
+      {error && !thread ? <div className="banner error" role="alert">{error}</div> : null}
 
       <div className="quick-actions" style={{ margin: "1.1rem 0" }} role="tablist" aria-label="Conversation filters">
         {FILTERS.map((f) => (
@@ -158,6 +162,7 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
       <Modal open={Boolean(thread)} onClose={() => setThread(null)} title={thread ? `Conversation with ${thread.convo.contactName ?? "contact"}` : "Conversation"}>
         {thread ? (
           <div>
+            {error ? <div className="banner error" role="alert">{error}</div> : null}
             <p className="muted" style={{ marginTop: 0 }}>
               {thread.convo.channel} · {thread.convo.status} · {thread.convo.assignedName ?? "Unassigned"}
             </p>

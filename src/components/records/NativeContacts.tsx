@@ -80,6 +80,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
   const [detail, setDetail] = useState<Detail | null>(null);
   const [notice, setNotice] = useState("");
   const first = useRef(true);
+  const latest = useRef(0);
 
   useEffect(() => {
     void loadMembers().then(setMembers);
@@ -90,8 +91,10 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
     if (q.trim()) params.set("q", q.trim());
     if (t.trim()) params.set("tag", t.trim());
     if (cursor) params.set("cursor", cursor);
+    const request = ++latest.current;
     setBusy(true);
     const { body } = await api(`/api/contacts?${params}`);
+    if (request !== latest.current) return;
     setBusy(false);
     if (!body.ok) {
       setError(failure(body, "Could not load contacts."));
@@ -113,9 +116,16 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
 
   const openDetail = useCallback(async (id: string) => {
     const { body } = await api(`/api/contacts/${id}`);
-    if (body.ok) setDetail(body as unknown as Detail);
-    else setError(failure(body, "Could not open this contact."));
+    if (body.ok) {
+      setError("");
+      setDetail(body as unknown as Detail);
+    } else setError(failure(body, "Could not open this contact."));
   }, []);
+
+  function edit(id: string | null, form: Form) {
+    setError("");
+    setEditing({ id, form });
+  }
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -175,6 +185,8 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
   ]);
   const set = (key: keyof Form) => (e: { target: { value: string } }) =>
     setEditing((s) => (s ? { ...s, form: { ...s.form, [key]: e.target.value } } : s));
+  const dialogOpen = Boolean(editing || detail);
+  const errorBanner = error ? <div className="banner error" role="alert">{error}</div> : null;
 
   return (
     <AppShell>
@@ -185,7 +197,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
           ? copy.bannerWaiting("contacts")
           : `${page.total} contact(s) ${filtering ? "match" : "in this workspace"}. Phone/email masked in this view.`}
       </StatusBanner>
-      {error ? <div className="banner error" role="alert">{error}</div> : null}
+      {dialogOpen ? null : errorBanner}
       {notice ? <div className="banner" role="status">{notice}</div> : null}
 
       <div className="grid grid-2" style={{ margin: "0 0 1.1rem" }}>
@@ -204,7 +216,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
         title="All Contacts"
         action={
           can("contacts.write") ? (
-            <Button size="sm" variant="secondary" onClick={() => setEditing({ id: null, form: EMPTY_FORM })}>
+            <Button size="sm" variant="secondary" onClick={() => edit(null, EMPTY_FORM)}>
               Add a contact
             </Button>
           ) : undefined
@@ -231,6 +243,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
       <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={editing?.id ? "Edit contact" : "Add a contact"}>
         {editing ? (
           <form onSubmit={save} aria-label="Contact">
+            {errorBanner}
             <div className="grid grid-2">
               <div>
                 <label htmlFor="c-first">First name</label>
@@ -270,6 +283,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
       <Modal open={Boolean(detail) && !editing} onClose={() => setDetail(null)} title={detail?.contact.name ?? "Contact"}>
         {detail ? (
           <div>
+            {errorBanner}
             <p style={{ marginTop: 0 }}>
               {detail.contact.email ?? "No email"} · {detail.contact.phone ?? "No phone"}
               {detail.contact.dnd ? " · Do not contact" : ""}
@@ -283,7 +297,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
             </p>
             <div className="quick-actions">
               {can("contacts.write") ? (
-                <Button size="sm" variant="secondary" onClick={() => setEditing({ id: detail.contact.id, form: formOf(detail.contact) })}>
+                <Button size="sm" variant="secondary" onClick={() => edit(detail.contact.id, formOf(detail.contact))}>
                   Edit contact
                 </Button>
               ) : null}

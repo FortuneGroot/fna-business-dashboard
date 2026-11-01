@@ -191,45 +191,7 @@ export function DataTable({
   );
 }
 
-export function Modal({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      className="modal-overlay"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
-      role="presentation"
-    >
-      <div
-        className="modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-head">
-          <h3 style={{ margin: 0 }}>{title}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close dialog" type="button">
-            ×
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
+export { Modal } from "./Modal";
 
 export function PageHead({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
   return (

@@ -23,11 +23,12 @@ export function ContactPicker({
   const [options, setOptions] = useState<Option[]>(value && initialName ? [{ id: value, name: initialName }] : []);
 
   useEffect(() => {
+    let current = true;
     const timer = setTimeout(async () => {
       const params = new URLSearchParams({ limit: "20" });
       if (query.trim()) params.set("q", query.trim());
       const { body } = await api(`/api/contacts?${params}`);
-      if (body.ok && Array.isArray(body.items)) {
+      if (current && body.ok && Array.isArray(body.items)) {
         const found = (body.items as { id: string; name: string }[]).map((c) => ({ id: c.id, name: c.name }));
         setOptions((prev) => {
           const current = prev.find((o) => o.id === value);
@@ -35,7 +36,10 @@ export function ContactPicker({
         });
       }
     }, 250);
-    return () => clearTimeout(timer);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
   }, [query, value]);
 
   return (

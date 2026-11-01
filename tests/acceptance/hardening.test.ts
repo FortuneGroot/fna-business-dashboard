@@ -302,13 +302,21 @@ describe("hardening rehearsal: two synthetic businesses, one owner, many tabs", 
 
     test("simultaneous requests for one slot: exactly one succeeds; edits and cancellations keep the rules", async () => {
       await switchTo(wsN);
-      const attempts = await Promise.all(
-        ["nora", "nate", "nora", "nate", "nora", "nate", "nora", "nate"].map((who) => book("chairs", "2031-06-10T14:00:00Z", "2031-06-10T15:00:00Z", who))
-      );
-      assert.deepEqual(attempts.map((r) => r.status).sort(), [200, 409, 409, 409, 409, 409, 409, 409], attempts.map((r) => r.text.slice(0, 80)).join("\n"));
-      const live = await db.query("select 1 from public.appointments where calendar_id = $1 and starts_at = '2031-06-10T14:00:00Z'", [calendars.chairs]);
-      assert.equal(live.rowCount, 1, "one booking stored");
-      const winner = attempts.find((r) => r.status === 200)!.body.appointment.id as string;
+      let winner = "";
+      const rounds = 6 + Number(process.env.HARDENING_BOOKING_ROUNDS ?? 0);
+      for (let i = 0; i < rounds; i++) {
+        const date = i === 0 ? "2031-06-10" : new Date(Date.UTC(2032, 0, i)).toISOString().slice(0, 10);
+        const attempts = await Promise.all(
+          ["nora", "nate", "nora", "nate", "nora", "nate", "nora", "nate"].map((who) => book("chairs", `${date}T14:00:00Z`, `${date}T15:00:00Z`, who))
+        );
+        const diagnostics = app.log().split(/\r?\n/).filter((l) => l.includes("[native-api]")).slice(-5).join("\n");
+        assert.deepEqual(attempts.map((r) => r.status).sort(), [200, 409, 409, 409, 409, 409, 409, 409],
+          `${date}: ${attempts.map((r) => r.text.slice(0, 80)).join("\n")}\n${diagnostics}`);
+        for (const r of attempts.filter((x) => x.status === 409)) assert.equal(r.body.code, "overlap");
+        const live = await db.query("select 1 from public.appointments where calendar_id = $1 and starts_at = $2", [calendars.chairs, `${date}T14:00:00Z`]);
+        assert.equal(live.rowCount, 1, "one booking stored");
+        if (i === 0) winner = attempts.find((r) => r.status === 200)!.body.appointment.id as string;
+      }
 
       const a = (await ok(book("chairs", "2031-06-11T15:00:00Z", "2031-06-11T16:00:00Z"), "A")).body.appointment.id as string;
       const b = (await ok(book("chairs", "2031-06-11T16:00:00Z", "2031-06-11T17:00:00Z", "nate"), "B")).body.appointment.id as string;
@@ -404,5 +412,157 @@ describe("hardening rehearsal: two synthetic businesses, one owner, many tabs", 
         await browser.close().catch(() => undefined);
       }
     });
+  });
+
+  describe("packet 3: real-browser usability and accessibility", () => {
+    const LONG_FIRST = "Maximiliana-Alexandrina Josephine";
+    const LONG_LAST = "Featherstonehaugh-Worthington of the Very Long Synthetic Surname Family";
+    const PAGES = ["/dashboard", "/contacts", "/pipeline", "/calendar", "/tasks", "/inbox", "/settings"];
+
+    before(async () => {
+      await switchTo(wsN);
+      await ok(call("POST", "/api/contacts", { firstName: LONG_FIRST, lastName: LONG_LAST, tags: ["synthetic-long"] }), "long-name contact");
+      await ok(call("POST", "/api/tasks", { title: `Follow up with ${LONG_FIRST} ${LONG_LAST} about the very long synthetic treatment plan` }), "long task");
+    });
+
+    async function login(width: number, height: number) {
+      const browser = await launchBrowser();
+      const ctx = await browser.newContext({ viewport: { width, height } });
+      ctx.setDefaultTimeout(20_000);
+      await ctx.addInitScript("window.__name = (f) => f");
+      const page = await ctx.newPage();
+      const base = app.url.replace("//127.0.0.1:", "//localhost:");
+      await page.goto(`${base}/login`);
+      await page.fill("#email", owner.email);
+      await page.fill("#password", owner.password);
+      await page.click("button[type=submit]");
+      await page.waitForURL(/\/dashboard$/);
+      return { browser, page, base };
+    }
+    const unlabelled = (page: import("playwright-core").Page) =>
+      page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>("input, select, textarea, button")]
+          .filter((el) => (el as HTMLInputElement).type !== "hidden" && el.getClientRects().length > 0)
+          .filter((el) => {
+            const named = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || el.getAttribute("title");
+            if (el.tagName === "BUTTON") return !named && !el.textContent?.trim();
+            return !named && !((el as HTMLInputElement).labels?.length);
+          })
+          .map((el) => el.id || el.outerHTML.slice(0, 100))
+      );
+    const overflow = (page: import("playwright-core").Page) =>
+      page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+    for (const [label, width, height] of [["desktop", 1360, 900], ["mobile", 390, 700]] as const) {
+      test(`${label} (${width}px): labels, no sideways scrolling, long names, keyboard dialogs, errors in view, saves persist`, async () => {
+        const shots = mkdtempSync(join(tmpdir(), `fna-a11y-${label}-`));
+        await switchTo(wsN);
+        const { browser, page, base } = await login(width, height);
+        try {
+          for (const path of PAGES) {
+            await page.goto(`${base}${path}`);
+            await page.waitForLoadState("networkidle");
+            assert.deepEqual(await unlabelled(page), [], `${path}: every control has an accessible name`);
+            assert.ok((await overflow(page)) <= 1, `${path}: no sideways scrolling at ${width}px (overflow ${await overflow(page)}px)`);
+          }
+          await page.goto(`${base}/contacts`);
+          await page.getByRole("button", { name: `Open ${LONG_FIRST} ${LONG_LAST}` }).waitFor();
+          await page.screenshot({ path: join(shots, "contacts-long-name.png"), fullPage: true });
+
+          if (label === "mobile") {
+            // The closed off-canvas menu is out of the tab order; the menu opens and closes by keyboard.
+            const hiddenFocusable = await page.evaluate(() =>
+              [...document.querySelectorAll<HTMLElement>("#app-sidebar a, #app-sidebar button")].filter((el) => {
+                const r = el.getBoundingClientRect();
+                return r.right <= 0 && getComputedStyle(el).visibility !== "hidden";
+              }).length);
+            assert.equal(hiddenFocusable, 0, "no invisible sidebar link can take keyboard focus");
+            await page.getByRole("button", { name: "Open menu" }).focus();
+            await page.keyboard.press("Enter");
+            await page.getByRole("link", { name: "Tasks" }).first().waitFor({ state: "visible" });
+            await page.keyboard.press("Escape");
+            await page.waitForFunction(() => getComputedStyle(document.querySelector("#app-sidebar")!).visibility === "hidden");
+          }
+
+          // Keyboard: open the add dialog, focus lands on the first field, Tab stays inside, Escape returns focus.
+          const add = page.getByRole("button", { name: "Add a contact" });
+          await add.focus();
+          await page.keyboard.press("Enter");
+          const dialog = page.getByRole("dialog", { name: "Add a contact" });
+          await dialog.waitFor();
+          assert.equal(await page.evaluate(() => document.activeElement?.id), "c-first", "focus moves to the first field");
+          for (let i = 0; i < 14; i++) await page.keyboard.press("Tab");
+          assert.ok(await dialog.evaluate((d) => d.contains(document.activeElement)), "Tab keeps focus inside the dialog");
+          assert.notEqual(await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle), "none", "the focused control shows a focus ring");
+          await page.keyboard.press("Escape");
+          await dialog.waitFor({ state: "detached" });
+          assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Add a contact", "focus returns to the opener");
+
+          // A rejected save shows its reason inside the dialog (not behind it) and keeps what was typed.
+          await add.click();
+          await dialog.locator("#c-first").fill("Valid");
+          await dialog.locator("#c-last").fill("Person");
+          const typedEmail = `synthetic-${label}-${run}@example.test`;
+          await dialog.locator("#c-email").fill(typedEmail);
+          await page.route("**/api/contacts", (route) =>
+            route.request().method() === "POST"
+              ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ ok: false, code: "validation_failed", error: "Some fields are invalid", fields: { email: "Enter a valid email" } }) })
+              : route.continue());
+          // The form fits a short screen: its submit button can be scrolled into view and pressed.
+          const submit = dialog.getByRole("button", { name: "Add contact", exact: true });
+          await submit.scrollIntoViewIfNeeded();
+          const box = await submit.boundingBox();
+          assert.ok(box && box.y >= 0 && box.y + box.height <= height, `submit reachable at ${width}x${height} (y=${box?.y})`);
+          await submit.click();
+          const inDialog = dialog.getByRole("alert");
+          await inDialog.waitFor();
+          assert.match(await inDialog.innerText(), /valid email|invalid/i);
+          await page.waitForTimeout(300);
+          const alertBox = await inDialog.boundingBox();
+          assert.ok(alertBox && alertBox.y >= 0 && alertBox.y < height, `the error is on screen, on top of the page (y=${alertBox?.y})`);
+          assert.equal(await dialog.locator("#c-email").inputValue(), typedEmail, "input kept after a failed save");
+          await page.screenshot({ path: join(shots, "dialog-error.png") });
+          await page.unroute("**/api/contacts");
+
+          await dialog.locator("#c-first").fill(`Saved${label}`);
+          await submit.click();
+          await dialog.waitFor({ state: "detached" });
+          await page.getByRole("status").filter({ hasText: `Saved${label} Person was added.` }).waitFor();
+          await page.reload();
+          await page.getByRole("button", { name: `Open Saved${label} Person` }).waitFor();
+
+          // Empty states say what happened and how to recover.
+          await page.fill("#contact-tag", "no-such-tag");
+          await page.getByText("No matching contacts").waitFor();
+          await page.fill("#contact-tag", "");
+
+          // Search: a slow earlier response cannot overwrite a newer one.
+          let slowed = false;
+          await page.route("**/api/contacts?*", async (route) => {
+            if (!slowed && route.request().url().includes("q=Nora")) {
+              slowed = true;
+              await new Promise((r) => setTimeout(r, 1500));
+            }
+            await route.continue();
+          });
+          await page.fill("#contact-search", "Nora");
+          await page.waitForTimeout(400);
+          await page.fill("#contact-search", "Nate");
+          await page.getByRole("button", { name: "Open Nate North" }).waitFor();
+          await page.waitForTimeout(1800);
+          assert.equal(await page.getByRole("button", { name: "Open Nora North" }).count(), 0, "the late Nora response was ignored");
+          assert.equal(await page.getByRole("button", { name: "Open Nate North" }).count(), 1);
+          await page.unroute("**/api/contacts?*");
+          await page.screenshot({ path: join(shots, "contacts-final.png"), fullPage: true });
+          console.log(`packet 3 ${label} screenshots: ${shots}`);
+        } catch (err) {
+          await page.screenshot({ path: join(shots, "failure.png"), fullPage: true }).catch(() => undefined);
+          console.error(`packet 3 ${label} failed (screenshots: ${shots})`);
+          throw err;
+        } finally {
+          await browser.close().catch(() => undefined);
+        }
+      });
+    }
   });
 });
