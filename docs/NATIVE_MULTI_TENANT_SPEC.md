@@ -1726,3 +1726,60 @@ MFA to AAL2; provisioning (idempotent, link once); invitation acceptance (new an
 | Browser bundle scan (`.next/static`) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, CRM terms, or `GHL_`; `AUTH_SECRET` named once in the existing legacy login message (no value) |
 | Secret scan of changed and new files | — | no secrets; matches are synthetic passwords for throwaway users on the disposable stack |
 | Cleanup | Docker / temp | 0 containers, volumes, networks, or temp projects left |
+
+## 23. Hardening rehearsal (six packets, local only)
+
+Local only. All of it ran on fresh disposable Supabase stacks and a built app, with synthetic businesses and `example.test` addresses. No staging or production project, hosted service, deployment, push, or outbound message was involved. There are four suites: `tests/acceptance/hardening.test.ts` (packets 1–4), `backup-restore.test.ts` (packet 5) and `scale.test.ts` (packet 6), plus the existing acceptance journeys. The runner now runs acceptance and stack files one at a time (each starts its own stack) with a minimum of 33 tests.
+
+### 23.1 Defects found and fixed (commits on `feat/native-multi-tenant`)
+
+| Packet | Defect (observed) | Fix | Commit |
+| --- | --- | --- | --- |
+| 1 Workspaces and tabs | A tab still showing business A could read or save into business B after another tab switched | Every page pins its workspace (`X-FNA-Workspace`); a mismatch answers 409 `workspace_changed` and writes nothing; switching reloads the page; other tabs show a banner | `4939be8` |
+| 2 Bookings and time zones | An edit could stretch an appointment past 24 hours or end before it started; times that do not exist (spring-forward) were silently shifted; card times were ambiguous | `updateAppointment` re-checks the duration against the stored row (422); the forms refuse skipped local times; native cards show `YYYY-MM-DD HH:MM UTC` | `02b3070` |
+| 2 (diagnostics) | One run returned 503 instead of 409 to seven losing simultaneous bookings (one booking stored, correct) and could not be reproduced in 66 further rounds | Unmapped database failures now log their SQLSTATE and status only (never the message) | `c9a74ce` |
+| 3 Browser usability | Dialogs did not trap focus or return it, and Escape did not close them; save errors appeared behind the open dialog or off screen; `/settings` overflowed 232 px at 390 px wide; mobile dialog buttons were unreachable; out-of-order search responses could replace newer results | Shared `Modal` (focus first field, Tab trapped, Escape, focus restored, alert scrolled into view); errors render inside the open dialog; `.grid > * { min-width: 0 }`; dialogs scroll within the viewport; superseded searches are ignored | `dbfd583` |
+| 4 Failure and recovery | A write whose response was lost said "failed" though it might have been saved; refusals (expired session, removed permission, suspension) used technical wording; "Save note" could be submitted twice | Lost or ambiguous write responses say the outcome is unknown and ask for a reload before retrying; plain refusals that end "Nothing was saved."; single-submit guard | `781d9e2` |
+| 5 Backup and restore | None in the product | Rehearsal tooling and `docs/BACKUP_RESTORE_REHEARSAL.md` | `7591aee` |
+| 6 Scale | A year of a busy calendar answered 503: about 500 contact ids in one `in` filter exceed the gateway's URL limit (414; 100 ids answer 200) | Contact and display-name lookups go out in batches of 100 ids | `2de8d75` |
+
+### 23.2 Verified without change
+
+- Packet 1: browser back/forward, refresh, pagination cursors and cached pages stay on the pinned business.
+- Packet 2:
+  - Exclusive slots: 6 rounds of 8 simultaneous bookings give exactly one success and seven 409 `overlap` each round, plus concurrent reschedules.
+  - Daylight-saving instants, midnight and month boundaries, and half-open adjacency all behave correctly.
+  - Appointments stay on their exact calendar IDs; there is no cross-calendar or cross-business display.
+- Packet 4:
+  - Table locks give 503 after about 8 seconds with nothing written.
+  - When the REST, Auth or Storage container is stopped, errors are honest: an Auth outage keeps existing sessions working (tokens are verified locally) and refuses new logins with 503; a Storage outage refuses logo saves with 502 `storage_failed`.
+  - No response contained keys, tokens, cookies or SQL detail.
+- Packet 6:
+  - With 1,458 live contacts and more than 1,000 opportunities, tasks, conversations, messages, appointments, reviews and audit rows, every list returns each row exactly once in stable order across page boundaries inside 200–400 identical timestamps, with exact totals.
+  - Search, tag, stage and status filters are exact.
+  - Board, task and dashboard counts are exact beyond the 1,000-row cap.
+  - Every page renders in 77–130 ms and every API call in 48–80 ms (median of 3 on this machine).
+  - Statement counts differ from a small business only by the 1,000-row paging of exact totals (at most 6 more). No N+1 queries.
+
+### 23.3 Open items
+
+- The single unreproduced 503 in 23.1 remains unexplained. The added logging will capture its SQLSTATE if it recurs.
+- Known limitations, kept by decision:
+  - calendar cards show the five latest-dated bookings (original behaviour);
+  - an appointment range returns at most 500 bookings and says `truncated` (month views are complete).
+- Restores do not bring back passwords, sessions, MFA factors or integration secrets (`docs/BACKUP_RESTORE_REHEARSAL.md`).
+- Everything in §22.3 is still open.
+
+### 23.4 Results (2026-11-01, this machine, final source)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite | Node 24.20.0 | PASS 243/243 |
+| DB suite | PGlite + shim | PASS 217/217 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 |
+| Stack suite | Real Supabase local stack (disposable) + built app + Chromium | PASS 63/63 |
+| Acceptance rehearsals | Fresh disposable stacks + built app + Chromium (journeys, hardening, backup/restore across two stacks, scale) | PASS 33/33 |
+| UI-2 visual harness | disposable stack + built app + Chromium | 20/20 routes 200; sidebar 0.00% on every page (settings/onboarding differences are the existing accepted ones) |
+| `npm run typecheck` / `npm run build` | Next.js 15.5.25 | PASS / PASS |
+| Browser bundle scan (`.next/static`, 112 files) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, or GHL terms |
+| Secret scan of every file changed in this run | — | no matches |

@@ -31,7 +31,8 @@ require George's explicit approval (spec §9.2 P9, §11).
 - [ ] UI-2 screenshot comparison against `docs/baseline/` on staging.
 - [ ] Bundle scan of the staging build: no service-role key, no `SUPABASE_SERVICE_ROLE_KEY` value, no GHL token.
 - [ ] Rollback rehearsal on staging: run `supabase/rollback/20261101_native_multi_tenant.down.sql`, confirm legacy tables and data untouched, then re-apply.
-- [ ] Restore-from-backup test on staging (required before T6/M15).
+- [ ] Restore-from-backup test on staging (required before T6/M15). The local rehearsal (`docs/BACKUP_RESTORE_REHEARSAL.md`) lists what a restore does not bring back: passwords, sessions and MFA factors (users reset their passwords; platform admins re-enrol MFA), and integration secrets (re-entered). Repeat its functional checks on the restored staging project.
+- [ ] Confirm the hosted API gateway still answers a busy calendar month and a full contacts page (local evidence: `tests/acceptance/scale.test.ts`; lookups send at most 100 ids per request because the local gateway refuses roughly 500).
 - [ ] George signs off on staging.
 
 ## 2. Production cutover (P9 / T5) — requires George's explicit approval

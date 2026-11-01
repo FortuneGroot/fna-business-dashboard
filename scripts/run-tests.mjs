@@ -38,7 +38,7 @@ const SUITES = {
     ],
     timeoutMs: 60_000,
     // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1.
-    min: 241,
+    min: 243,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
@@ -57,12 +57,15 @@ const SUITES = {
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
     min: 63,
+    serial: true,
   },
   acceptance: {
-    label: "local acceptance rehearsal (fresh disposable stack, two synthetic businesses, P1–P7 journeys)",
+    label: "local acceptance rehearsals (fresh disposable stacks: P1–P7 journeys, hardening, backup/restore, scale)",
     files: () => list("tests/acceptance"),
-    timeoutMs: 1_200_000,
-    min: 16,
+    timeoutMs: 1_800_000,
+    min: 33,
+    // Each file starts its own stack on the same ports, so files run one at a time.
+    serial: true,
   },
 };
 
@@ -140,13 +143,14 @@ export function judge({ exitCode, summary, min, tap = "" }) {
   return { status: "FAIL", problems: real.length ? [...problems, ...real.slice(0, 5)] : problems };
 }
 
-function runSuite(name, { label, files, timeoutMs, min }) {
+function runSuite(name, { label, files, timeoutMs, min, serial }) {
   const dir = mkdtempSync(join(tmpdir(), "fna-tests-"));
   const tapFile = join(dir, "results.tap");
   try {
     const args = [
       "--require", "./scripts/stub-server-only.cjs", "--import", "tsx", "--test",
       `--test-timeout=${timeoutMs}`,
+      ...(serial ? ["--test-concurrency=1"] : []),
       "--test-reporter=spec", "--test-reporter-destination=stdout",
       "--test-reporter=tap", `--test-reporter-destination=${tapFile}`,
       ...files,
