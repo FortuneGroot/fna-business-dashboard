@@ -20,6 +20,14 @@ create table auth.users (
   created_at         timestamptz not null default now()
 );
 
+-- Supabase Auth's session rows (the columns the migrations read); logout deletes the row.
+create table auth.sessions (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  not_after  timestamptz,
+  created_at timestamptz not null default now()
+);
+
 -- Same claim resolution as Supabase's auth.uid() / auth.jwt().
 create function auth.jwt() returns jsonb language sql stable as $$
   select coalesce(
@@ -63,6 +71,7 @@ grant usage, create on schema public to migration_owner;
 grant usage, create on schema extensions to migration_owner;
 grant usage on schema auth to migration_owner;
 grant select, references, trigger on auth.users to migration_owner;
+grant select on auth.sessions to migration_owner;
 grant anon, authenticated, service_role to migration_owner;
 
 -- Minimal Supabase Storage tables (owned by a separate admin role, like supabase_storage_admin).

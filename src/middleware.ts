@@ -6,7 +6,7 @@ import {
   isStoredSessionActiveEdge,
   verifySessionTokenEdge,
 } from "@/lib/auth/session-edge";
-import { authProvider, supabaseAuthConfig, supabaseCookieOptions } from "@/lib/auth/provider";
+import { authProvider, expireAuthCookies, supabaseAuthConfig, supabaseCookieOptions } from "@/lib/auth/provider";
 import { contextFromRpc, denialRedirect, evaluateContext, pagePermission } from "@/lib/authz/evaluate";
 
 /** Paths that never require a session (machine or public). */
@@ -185,8 +185,11 @@ async function supabaseMiddleware(req: NextRequest): Promise<NextResponse> {
     // Next renders a page in parallel with its layout, so a layout redirect alone can still stream
     // the page. Workspace access and §4.3 page permissions are decided here, before rendering;
     // the layout and page guards repeat the check.
+    // A verified JWT whose session has ended server-side (logout elsewhere, revocation) is
+    // reported signed out by the database; its cookies are expired so the browser stops sending it.
+    const ended = () => expireAuthCookies(carry(loginRedirect(req, pathname)), req.cookies.getAll().map((c) => c.name));
     const ctxRes = await supabase.rpc("request_context");
-    if (ctxRes.status === 401 || ctxRes.status === 403) return carry(loginRedirect(req, pathname));
+    if (ctxRes.status === 401 || ctxRes.status === 403) return ended();
     if (ctxRes.error) {
       return carry(new NextResponse("Service temporarily unavailable", {
         status: 503,
@@ -195,7 +198,7 @@ async function supabaseMiddleware(req: NextRequest): Promise<NextResponse> {
     }
     const ctx = contextFromRpc(ctxRes.data, data!.claims as Record<string, unknown>);
     const denial = evaluateContext(ctx, { permission: pagePermission(pathname) });
-    if (denial === "unauthenticated") return carry(loginRedirect(req, pathname));
+    if (denial === "unauthenticated") return ended();
     if (denial) return carry(NextResponse.redirect(new URL(denialRedirect(denial, ctx), req.url)));
     return response;
   }
@@ -221,7 +224,9 @@ async function platformGate(
     headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
   });
   const res = await supabase.rpc("platform_status");
-  if (res.status === 401 || res.status === 403) return loginRedirect(req, pathname);
+  if (res.status === 401 || res.status === 403) {
+    return expireAuthCookies(loginRedirect(req, pathname), req.cookies.getAll().map((c) => c.name));
+  }
   if (res.error) return unavailable();
   const status = (res.data ?? {}) as { listed?: boolean; active?: boolean };
   const mfaPage = pathname === "/platform/mfa";

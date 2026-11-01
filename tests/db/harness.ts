@@ -16,7 +16,7 @@ export const SESSION_TIMEOUT_MS = 20_000;
 export type Db = PGlite;
 export type Q = Transaction;
 
-export type TestUser = { id: string; email: string; aal?: "aal1" | "aal2" };
+export type TestUser = { id: string; email: string; aal?: "aal1" | "aal2"; sessionId?: string };
 
 export class NestedSessionError extends Error {
   constructor(what: string) {
@@ -139,7 +139,10 @@ export async function asUser<T>(db: Db, user: TestUser, fn: (q: Q) => Promise<T>
   return session(db, "asUser", async (tx) => {
     await tx.exec("set local role authenticated");
     await tx.query("select set_config('request.jwt.claims', $1, true)", [
-      JSON.stringify({ sub: user.id, email: user.email, role: "authenticated", aal: user.aal ?? "aal1" }),
+      JSON.stringify({
+        sub: user.id, email: user.email, role: "authenticated", aal: user.aal ?? "aal1",
+        ...(user.sessionId ? { session_id: user.sessionId } : {}),
+      }),
     ]);
   }, fn);
 }

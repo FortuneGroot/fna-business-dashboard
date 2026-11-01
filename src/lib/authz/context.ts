@@ -3,7 +3,7 @@ import * as React from "react";
 import { redirect } from "next/navigation";
 import { NextResponse, type NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { supabaseAuthConfig } from "@/lib/auth/provider";
+import { expireAuthCookies, supabaseAuthConfig } from "@/lib/auth/provider";
 import {
   applyPendingCookies,
   supabaseForRequest,
@@ -103,6 +103,10 @@ export async function requireApiContext(req: NextRequest, requirement: ContextRe
     return { ctx: null, supabase, pending, error: applyPendingCookies(unavailableResponse(), pending) };
   }
   const denial = evaluateContext(ctx, requirement);
+  if (denial === "unauthenticated") {
+    const error = applyPendingCookies(denialResponse(denial), pending);
+    return { ctx, supabase, pending, error: expireAuthCookies(error, req.cookies.getAll().map((c) => c.name)) };
+  }
   if (denial) return { ctx, supabase, pending, error: applyPendingCookies(denialResponse(denial), pending) };
   if (!requirement.allowNoWorkspace && workspaceChanged(req, ctx)) {
     return { ctx, supabase, pending, error: applyPendingCookies(workspaceChangedResponse(), pending) };

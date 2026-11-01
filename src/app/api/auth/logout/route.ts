@@ -5,7 +5,7 @@ import {
   revokeSessionToken,
   sessionCookieOptions,
 } from "@/lib/auth";
-import { authProvider, supabaseAuthConfig } from "@/lib/auth/provider";
+import { authProvider, expireAuthCookies, supabaseAuthConfig } from "@/lib/auth/provider";
 import { applyPendingCookies, supabaseForRequest } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -27,12 +27,7 @@ async function supabaseLogout(req: NextRequest): Promise<NextResponse> {
   }
   applyPendingCookies(res, pending);
   // Clear every Supabase auth cookie even if the sign-out call failed.
-  for (const c of req.cookies.getAll()) {
-    if (/^sb-.+-auth-token(\.\d+)?$/.test(c.name) && !pending.cookies.some((p) => p.name === c.name)) {
-      res.cookies.set(c.name, "", { path: "/", maxAge: 0 });
-    }
-  }
-  return res;
+  return expireAuthCookies(res, req.cookies.getAll().map((c) => c.name), pending.cookies.map((p) => p.name));
 }
 
 export async function POST(req: NextRequest) {

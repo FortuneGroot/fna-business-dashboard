@@ -25,6 +25,23 @@ export function supabaseCookieOptions(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
+const SUPABASE_AUTH_COOKIE = /^sb-.+-auth-token(\.\d+)?$/;
+
+/**
+ * Expires every Supabase auth cookie named in `requestCookieNames` (except `keep`), for a session
+ * that has ended: logout, or a token whose session the database reports gone.
+ */
+export function expireAuthCookies<R extends { cookies: { set(name: string, value: string, options: { path: string; maxAge: number }): unknown } }>(
+  res: R,
+  requestCookieNames: string[],
+  keep: string[] = []
+): R {
+  for (const name of requestCookieNames) {
+    if (SUPABASE_AUTH_COOKIE.test(name) && !keep.includes(name)) res.cookies.set(name, "", { path: "/", maxAge: 0 });
+  }
+  return res;
+}
+
 /**
  * Server-side Supabase Auth settings: SUPABASE_URL plus the anon (publishable) key. The browser never
  * talks to Supabase directly, so no NEXT_PUBLIC_* variables are used. Returns null when incomplete.

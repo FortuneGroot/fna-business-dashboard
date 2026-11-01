@@ -99,14 +99,15 @@ describe("migrations apply to a clean local database", () => {
     await db.close();
   });
 
-  test("anon can execute only peek_invitation among new public functions", async () => {
+  test("anon can execute only peek_invitation and the PostgREST pre-request check among new public functions", async () => {
     const db = await freshDb();
     const res = await db.query<{ proname: string }>(
       `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute')
          and p.proname not like 'pg\\_%'`
     );
-    assert.deepEqual(res.rows.map((r) => r.proname).sort(), ["peek_invitation"]);
+    // PostgREST runs the pre-request check as the request's role, anon included; it returns nothing.
+    assert.deepEqual(res.rows.map((r) => r.proname).sort(), ["check_request_session", "peek_invitation"]);
     await db.close();
   });
 

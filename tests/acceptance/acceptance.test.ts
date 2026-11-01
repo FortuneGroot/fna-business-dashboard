@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
-  adminDb, appFetch, appLogin, cookieHeader, signUp, startApp, startStack, totp,
+  adminDb, appFetch, appLogin, cookieHeader, readSessionCookie, rest, signUp, startApp, startStack, totp,
   type App, type Identity, type Stack, type StackEnv,
 } from "../supabase-stack/stack";
 
@@ -426,20 +426,44 @@ describe("local acceptance rehearsal (P1–P7): two synthetic businesses on a fr
     assert.equal(done.status, "done", "completed work keeps its history");
   });
 
-  test("14. logout: the session ends for the browser; a replayed cookie is recorded as the open decision", async () => {
+  test("14. logout ends the session at once: a replayed cookie or token can neither read nor write (M21)", async () => {
+    // Browser tabs share one cookie jar, so a second open tab replays exactly this cookie.
     const throwaway = await login(dana);
+    const { session } = readSessionCookie(throwaway);
+    await ok(call(throwaway, "GET", "/api/contacts"), "before logout");
     assert.equal((await call(throwaway, "POST", "/api/auth/logout")).status, 200);
     assert.equal((await appFetch(app, "/api/auth/me")).body.user, null);
+
     const read = await call(throwaway, "GET", "/api/contacts");
     const write = await call(throwaway, "POST", "/api/contacts", { firstName: "Replay", lastName: "Check" });
     const sensitive = await call(throwaway, "POST", "/api/team/invitations", { email: email("replay"), role: "employee" });
-    console.log(`LOGOUT-REPLAY observed: read ${read.status}, record write ${write.status}, invitation ${sensitive.status}`);
-    // Spec §5.1/§16: reads trust the verified access token until it expires, so a replayed cookie still reads.
-    assert.equal(read.status, 200, "observed replay read (open decision: logout replay)");
-    // Observed behaviour pinned so any change is noticed; whether ordinary writes should be refused is the open decision.
-    assert.equal(write.status, 200, "observed: an ordinary record write on a replayed cookie succeeds until the token expires");
-    assert.equal(sensitive.status, 401, "observed: a sensitive action re-checks the session and refuses the replayed cookie");
+    console.log(`LOGOUT-REPLAY: read ${read.status}, record write ${write.status}, invitation ${sensitive.status}`);
+    expect(read, 401, "unauthenticated", "replayed cookie read");
+    expect(write, 401, "unauthenticated", "replayed cookie write");
+    expect(sensitive, 401, "unauthenticated", "replayed cookie sensitive action");
+    assert.ok(read.setCookies.some((c) => /^sb-.+-auth-token/.test(c) && /Max-Age=0/i.test(c)), "the stale cookie is expired");
+    const page = await appFetch(app, "/contacts", { cookie: throwaway });
+    assert.equal(page.status, 307);
+    assert.equal(new URL(page.location!, app.url).pathname, "/login");
+    assert.ok(page.setCookies.some((c) => /^sb-.+-auth-token/.test(c) && /Max-Age=0/i.test(c)), "the page redirect expires the stale cookie");
+
+    // The raw access token, straight at the Data API (bypassing the app), is refused too.
+    const restRead = await rest(env, session.access_token, "GET", "contacts?select=id&limit=1");
+    const restWrite = await rest(env, session.access_token, "POST", "contacts", { workspace_id: wsH, first_name: "Replay" });
+    const restCtx = await rest(env, session.access_token, "POST", "rpc/request_context", {});
+    assert.deepEqual([restRead.status, restWrite.status, restCtx.status], [401, 401, 401], restRead.text.slice(0, 200));
+    // The session's refresh token was revoked with it, so the replay cannot mint a new access token.
+    const refresh = await fetch(`${env.apiUrl}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST", headers: { apikey: env.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    });
+    assert.notEqual(refresh.status, 200, "revoked refresh token");
+    await refresh.body?.cancel();
+    const replayed = await db.query("select 1 from public.contacts where first_name = 'Replay'");
+    assert.equal(replayed.rowCount, 0, "nothing was written by the replay");
+
     assert.equal((await ok(call(dana.cookie, "GET", "/api/auth/me"), "other session")).body.user.email, dana.email, "other sessions continue");
+    await ok(call(dana.cookie, "GET", "/api/contacts"), "other session reads");
   });
 
   test("15. legacy mode: the same build starts without any Supabase, auth, or GHL setting and serves no retired route", async () => {

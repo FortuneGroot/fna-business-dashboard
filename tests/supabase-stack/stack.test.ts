@@ -560,11 +560,12 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       for (const c of cleared) assert.match(c, /Max-Age=0|Expires=Thu, 01 Jan 1970/i);
       const signedOut = await appFetch(app, "/api/auth/me");
       assert.equal(signedOut.body.user, null);
-      // Spec §5.1: reads trust the verified access token until it expires, so a replayed cookie of a
-      // logged-out session still reads (observed). Sensitive mutations re-check with getUser() and
-      // refuse it (platform Storage endpoint test). Update §16 if this ever changes.
+      // M21: the logged-out session's row is gone, so its still-unexpired access token is refused
+      // for reads, and directly at the Data API.
       const replayApi = await appFetch(app, "/api/tenant/config", { cookie: throwaway });
-      assert.equal(replayApi.status, 200, `replayed cookie after logout: ${replayApi.status}`);
+      assert.equal(replayApi.status, 401, `replayed cookie after logout: ${replayApi.status}`);
+      const replayToken = readSessionCookie(throwaway).session.access_token;
+      assert.equal((await rest(env, replayToken, "GET", "workspaces?select=id")).status, 401);
       // Logging out one session does not end the owner's other session (scope: local).
       assert.equal((await appFetch(app, "/api/auth/me", { cookie: ownerCookie })).body.user?.id, ownerA.id);
     });
@@ -932,13 +933,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         const aal1Cookie = await appLogin(app, admin);
         const aal1 = await put(aal1Cookie);
         assert.equal(aal1.status, 403, aal1.text);
-
-        // Sensitive mutations re-check the session with the Auth server (§5.1): once this AAL2
-        // session is logged out, its still-unexpired cookie is refused and nothing is recorded.
-        assert.equal((await appFetch(app, "/api/auth/logout", { method: "POST", cookie: adminCookie })).status, 200);
-        const loggedOut = await put(adminCookie);
-        assert.deepEqual([loggedOut.status, loggedOut.body.code], [401, "unauthenticated"], loggedOut.text);
-        assert.equal((await storageAudit(writeGrant)).length, auditCount, "a logged-out session records nothing");
+        assert.equal((await storageAudit(writeGrant)).length, auditCount);
       } finally {
         await revoke(writeGrant);
       }
@@ -946,6 +941,14 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       const afterRevoke = await put(adminCookie);
       assert.equal(afterRevoke.status, 403, afterRevoke.text);
       assert.equal((await storageAudit(writeGrant)).length, total, "nothing is recorded after revocation");
+
+      // Once this AAL2 session is logged out, its still-unexpired cookie and token are refused (M21)
+      // and nothing is recorded. The grant is revoked first, because revoking needs this session.
+      assert.equal((await appFetch(app, "/api/auth/logout", { method: "POST", cookie: adminCookie })).status, 200);
+      const loggedOut = await put(adminCookie);
+      assert.deepEqual([loggedOut.status, loggedOut.body.code], [401, "unauthenticated"], loggedOut.text);
+      assert.equal((await rpc(env, aal2.access_token, "platform_status")).status, 401);
+      assert.equal((await storageAudit(writeGrant)).length, total, "a logged-out session records nothing");
     });
 
     // P3: pages and /api/dashboard/* read each workspace's native tables through the app, as the
