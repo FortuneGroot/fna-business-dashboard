@@ -9,8 +9,8 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
-  adminDb, appFetch, appLogin, launchBrowser, rpc, signUp, startApp, startStack, upgradeToAal2,
-  type App, type Identity, type Stack, type StackEnv,
+  adminDb, appFetch, appLogin, launchBrowser, readSessionCookie, rpc, sessionCookie, signUp, stackService, startApp, startStack, waitForService,
+  upgradeToAal2, upgradeToAal2Session, type App, type Identity, type Stack, type StackEnv,
 } from "../supabase-stack/stack";
 
 const run = Date.now().toString(36);
@@ -564,5 +564,265 @@ describe("hardening rehearsal: two synthetic businesses, one owner, many tabs", 
         }
       });
     }
+  });
+
+  describe("packet 4: failures and recovery", () => {
+    const leaks = (text: string) => {
+      const found: string[] = [];
+      for (const [name, value] of [["anon key", env.anonKey], ["service key", env.serviceRoleKey], ["jwt secret", env.jwtSecret]] as const) {
+        if (value && text.includes(value)) found.push(name);
+      }
+      if (/eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\./.test(text)) found.push("a JWT");
+      if (/sb-[a-z0-9-]+-auth-token=/.test(text)) found.push("a session cookie");
+      if (/postgres(ql)?:\/\//i.test(text)) found.push("a database URL");
+      if (/SQLSTATE|permission denied for|violates|relation "|PGRST\d|authenticator|at [A-Za-z]+ \(.*:\d+:\d+\)/.test(text)) found.push("database or stack detail");
+      return found;
+    };
+    const contactCount = async (ws: string, first: string) =>
+      Number((await db.query<{ n: number }>("select count(*)::int n from public.contacts where workspace_id = $1 and first_name = $2 and deleted_at is null", [ws, first])).rows[0].n);
+    async function browserAs(who: Identity, ws?: string) {
+      const browser = await launchBrowser();
+      const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+      ctx.setDefaultTimeout(20_000);
+      await ctx.addInitScript("window.__name = (f) => f");
+      const page = await ctx.newPage();
+      const base = app.url.replace("//127.0.0.1:", "//localhost:");
+      await page.goto(`${base}/login`);
+      await page.fill("#email", who.email);
+      await page.fill("#password", who.password);
+      await page.click("button[type=submit]");
+      await page.waitForURL(/\/dashboard$/);
+      if (ws) assert.equal(await page.evaluate(async () => (await (await fetch("/api/auth/me")).json()).workspace?.id), ws);
+      return { browser, ctx, page, base };
+    }
+    async function openAddContact(page: import("playwright-core").Page, base: string, first: string) {
+      await page.goto(`${base}/contacts`);
+      await page.getByRole("button", { name: "Add a contact" }).click();
+      const dialog = page.getByRole("dialog", { name: "Add a contact" });
+      await dialog.locator("#c-first").fill(first);
+      await dialog.locator("#c-last").fill("Recovery");
+      return dialog;
+    }
+
+    test("browser: interrupted and repeated saves, expired session, suspension while a page is open", async () => {
+      const shots = mkdtempSync(join(tmpdir(), "fna-fail-"));
+      await switchTo(wsS);
+      const { browser, ctx, page, base } = await browserAs(owner, wsS);
+      try {
+        // The connection drops after the server saved: the screen must not claim either outcome.
+        let dialog = await openAddContact(page, base, "Interrupted");
+        await page.route("**/api/contacts", async (route) => {
+          if (route.request().method() !== "POST") return route.continue();
+          await route.fetch();
+          await route.abort("connectionreset");
+        });
+        await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+        const unknown = dialog.getByRole("alert");
+        await unknown.waitFor();
+        assert.match(await unknown.innerText(), /may or may not have been saved/i);
+        assert.doesNotMatch(await unknown.innerText(), /was added|saved\.$/i);
+        assert.equal(await contactCount(wsS, "Interrupted"), 1, "the server did save it");
+        await page.unroute("**/api/contacts");
+        await page.reload();
+        await page.getByRole("button", { name: "Open Interrupted Recovery" }).waitFor();
+        assert.equal(await page.getByRole("button", { name: "Open Interrupted Recovery" }).count(), 1, "reload shows it once");
+
+        // Slow saves pressed repeatedly are sent once (contact and note).
+        const slow = async (pattern: string) => page.route(pattern, async (route) => {
+          if (route.request().method() === "POST") await new Promise((r) => setTimeout(r, 1500));
+          await route.continue();
+        });
+        await slow("**/api/contacts");
+        dialog = await openAddContact(page, base, "Doubleclick");
+        const addBtn = dialog.getByRole("button", { name: "Add contact", exact: true });
+        await addBtn.dblclick();
+        await addBtn.click({ force: true }).catch(() => undefined);
+        await dialog.waitFor({ state: "detached", timeout: 10_000 });
+        await page.unroute("**/api/contacts");
+        assert.equal(await contactCount(wsS, "Doubleclick"), 1, "one contact for a double-clicked save");
+
+        await page.getByRole("button", { name: "Open Sam South" }).click();
+        const detail = page.getByRole("dialog", { name: "Sam South" });
+        await slow("**/api/contacts/*/notes");
+        await detail.locator("#c-note").fill("Synthetic note sent once");
+        const noteBtn = detail.getByRole("button", { name: "Save note" });
+        await noteBtn.dblclick();
+        await noteBtn.click({ force: true }).catch(() => undefined);
+        await detail.getByText("Synthetic note sent once").waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(2000);
+        await page.unroute("**/api/contacts/*/notes");
+        const notes = await db.query("select 1 from public.contact_notes where body = 'Synthetic note sent once'");
+        assert.equal(notes.rowCount, 1, "one note for a repeatedly pressed save");
+        await page.keyboard.press("Escape");
+
+        // The session ends while the form is open: a clear refusal, the input stays, and after signing
+        // in again (another tab) the same form saves exactly once.
+        dialog = await openAddContact(page, base, "Afterexpiry");
+        await ctx.clearCookies();
+        await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+        const expired = dialog.getByRole("alert");
+        await expired.waitFor();
+        assert.match(await expired.innerText(), /session has ended/i);
+        assert.match(await expired.innerText(), /nothing was saved/i);
+        assert.equal(await dialog.locator("#c-first").inputValue(), "Afterexpiry");
+        const relogin = await ctx.newPage();
+        await relogin.goto(`${base}/login`);
+        await relogin.fill("#email", owner.email);
+        await relogin.fill("#password", owner.password);
+        await relogin.click("button[type=submit]");
+        await relogin.waitForURL(/\/dashboard$/);
+        await relogin.close();
+        await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
+        assert.equal(await contactCount(wsS, "Afterexpiry"), 1);
+
+        // Suspension while the page is open: refused with the reason; reactivation restores access.
+        dialog = await openAddContact(page, base, "Whilesuspended");
+        try {
+          const suspend = await rpc(env, platformAal2, "platform_suspend_workspace", { p_workspace_id: wsS, p_reason: "Synthetic suspension rehearsal" });
+          assert.ok([200, 204].includes(suspend.status), suspend.text);
+          await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+          const suspended = dialog.getByRole("alert");
+          await suspended.waitFor();
+          assert.match(await suspended.innerText(), /suspended/i);
+          assert.match(await suspended.innerText(), /nothing was saved/i);
+          assert.equal(await contactCount(wsS, "Whilesuspended"), 0);
+          await page.screenshot({ path: join(shots, "suspended-dialog.png") });
+          await page.reload();
+          await page.waitForLoadState("networkidle");
+          assert.ok(await page.getByText(/suspended/i).first().isVisible(), "the reloaded page explains the suspension");
+        } finally {
+          const reactivate = await rpc(env, platformAal2, "platform_reactivate_workspace", { p_workspace_id: wsS, p_reason: "Synthetic suspension rehearsal over" });
+          assert.ok([200, 204].includes(reactivate.status), reactivate.text);
+        }
+        await page.goto(`${base}/contacts`);
+        await page.getByRole("button", { name: "Open Sam South" }).waitFor();
+        console.log(`packet 4 screenshots: ${shots}`);
+      } catch (err) {
+        await page.screenshot({ path: join(shots, "failure.png"), fullPage: true }).catch(() => undefined);
+        console.error(`packet 4 browser flow failed (screenshots: ${shots})`);
+        throw err;
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
+    });
+
+    test("browser: an employee's permission and then membership are removed while their page is open", async () => {
+      await switchTo(wsS);
+      const invite = await ok(call("POST", "/api/team/invitations", { email: email("employee"), role: "employee" }), "invite employee");
+      const token = String(invite.body.inviteUrl).split("/invite/")[1];
+      const employee = await signUp(env, email("employee"), "Erin Employee (synthetic)");
+      assert.equal((await rpc(env, employee.token, "accept_invitation", { p_token: token })).status, 200);
+      const { browser, page, base } = await browserAs(employee, wsS);
+      try {
+        const dialog = await openAddContact(page, base, "Employeesave");
+        await ok(call("PATCH", `/api/team/${employee.id}`, { overrides: { "contacts.write": false } }), "remove contacts.write");
+        await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+        const refused = dialog.getByRole("alert");
+        await refused.waitFor();
+        assert.match(await refused.innerText(), /permission/i);
+        assert.match(await refused.innerText(), /nothing was saved/i);
+        assert.equal(await dialog.locator("#c-first").inputValue(), "Employeesave", "input kept");
+        assert.equal(await contactCount(wsS, "Employeesave"), 0);
+
+        await ok(call("DELETE", `/api/team/${employee.id}`), "remove employee");
+        await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+        await page.waitForFunction(() => /no longer have access/i.test(document.querySelector('[role="dialog"] [role="alert"]')?.textContent ?? ""));
+        assert.equal(await contactCount(wsS, "Employeesave"), 0);
+        await page.reload();
+        await page.waitForLoadState("networkidle");
+        assert.equal(await page.getByRole("button", { name: "Open Sam South" }).count(), 0, "no South records after removal");
+        assert.deepEqual(leaks(await page.content()), []);
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
+    });
+
+    test("slow database, PostgREST, Auth, and Storage outages: honest errors, nothing half-done, no sensitive detail", async () => {
+      await switchTo(wsS);
+      const seen: string[] = [];
+      const record = <T extends { text: string }>(r: T) => (seen.push(r.text), r);
+
+      // A held table lock makes the write wait past the statement timeout: 503, nothing stored.
+      const locker = await adminDb(env);
+      try {
+        await locker.query("begin");
+        await locker.query("lock table public.contacts in access exclusive mode");
+        const started = Date.now();
+        const slowWrite = record(await call("POST", "/api/contacts", { firstName: "Lockedout", lastName: "Recovery" }));
+        assert.deepEqual([slowWrite.status, slowWrite.body?.code], [503, "unavailable"], slowWrite.text);
+        console.log(`locked write answered after ${Date.now() - started} ms`);
+      } finally {
+        await locker.query("rollback").catch(() => undefined);
+        await locker.end();
+      }
+      assert.equal(await contactCount(wsS, "Lockedout"), 0, "nothing half-written");
+      await ok(call("POST", "/api/contacts", { firstName: "Lockedout", lastName: "Retry" }), "retry after the lock");
+
+      // PostgREST down: APIs answer 503, pages do not pretend the user signed out.
+      stackService(stack, "rest", "stop");
+      try {
+        const list = record(await call("GET", "/api/contacts"));
+        assert.deepEqual([list.status, list.body?.code], [503, "unavailable"], list.text);
+        const write = record(await call("POST", "/api/contacts", { firstName: "Restdown", lastName: "Recovery" }));
+        assert.equal(write.status, 503, write.text);
+        const pageRes = await fetch(`${app.url}/contacts`, { headers: { cookie: ownerCookie }, redirect: "manual" });
+        const pageText = await pageRes.text();
+        seen.push(pageText);
+        assert.doesNotMatch(pageRes.headers.get("location") ?? "", /\/login/, "an outage is not reported as signed out");
+      } finally {
+        stackService(stack, "rest", "start");
+      }
+      await waitForService(env, "rest");
+      await ok(call("GET", "/api/contacts?limit=1"), "PostgREST back");
+      assert.equal(await contactCount(wsS, "Restdown"), 0);
+
+      // Auth down: a valid session is not treated as signed out and its cookie is kept.
+      stackService(stack, "auth", "stop");
+      try {
+        const res = await fetch(`${app.url}/api/contacts?limit=1`, { headers: { cookie: ownerCookie }, redirect: "manual" });
+        const text = await res.text();
+        seen.push(text);
+        assert.notEqual(res.status, 401, `an Auth outage must not read as signed out: ${text.slice(0, 200)}`);
+        assert.ok([200, 503].includes(res.status), `${res.status}: ${text.slice(0, 200)}`);
+        const cleared = res.headers.getSetCookie().filter((c) => /sb-.*-auth-token/.test(c) && /Max-Age=0|Expires=Thu, 01 Jan 1970/i.test(c));
+        assert.deepEqual(cleared, [], "the session cookie is not cleared");
+        const pageRes = await fetch(`${app.url}/contacts`, { headers: { cookie: ownerCookie }, redirect: "manual" });
+        seen.push(await pageRes.text());
+        assert.doesNotMatch(pageRes.headers.get("location") ?? "", /\/login/, "pages do not send a signed-in user to login");
+        const login = record(await fetch(`${app.url}/api/auth/login`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: owner.email, password: owner.password }),
+        }).then(async (r) => ({ status: r.status, text: await r.text() })));
+        assert.equal(login.status, 503, `login during an Auth outage: ${login.text.slice(0, 200)}`);
+        console.log(`auth outage: API ${res.status}, page ${pageRes.status} ${pageRes.headers.get("location") ?? ""}, login ${login.status}`);
+      } finally {
+        stackService(stack, "auth", "start");
+      }
+      await waitForService(env, "auth");
+      await ok(call("GET", "/api/contacts?limit=1"), "Auth back");
+
+      // Storage down: a platform logo change is never reported as done; it stays recoverable.
+      const aal2 = await upgradeToAal2Session(env, await signUp(env, email("storage-admin"), "Storage Platform Admin"));
+      await db.query("insert into public.platform_admins (user_id) select id from auth.users where email = $1", [email("storage-admin")]);
+      const adminCookie = sessionCookie(readSessionCookie(ownerCookie).name, aal2);
+      const grant = await rpc(env, aal2.access_token, "platform_grant_access", { p_workspace_id: wsS, p_mode: "write", p_reason: "Storage outage rehearsal", p_minutes: 15 });
+      assert.equal(grant.status, 200, grant.text);
+      stackService(stack, "storage", "stop");
+      try {
+        const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+        const put = record(await appFetch(app, "/api/platform/workspace-logo", { method: "PUT", cookie: adminCookie, body: png, contentType: "image/png" }));
+        assert.notEqual(put.status, 200, put.text);
+        assert.ok(["operation_in_progress", "storage_failed", "unavailable", "audit_pending"].includes(put.body?.code), put.text);
+        assert.ok(put.body.requestId, "the change can be recovered by request id");
+        console.log(`storage outage: logo PUT ${put.status} ${put.body.code}`);
+        const audit = await db.query("select action from public.workspace_audit_log where grant_id = $1 and action like 'storage.%'", [grant.body.id]);
+        assert.ok(audit.rowCount! >= 1, "the attempt is in the audit log");
+      } finally {
+        stackService(stack, "storage", "start");
+        await waitForService(env, "storage");
+      }
+
+      for (const text of seen) assert.deepEqual(leaks(text), [], `no sensitive detail in: ${text.slice(0, 160)}`);
+    });
   });
 });

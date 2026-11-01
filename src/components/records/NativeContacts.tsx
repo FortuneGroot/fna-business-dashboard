@@ -79,6 +79,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
   const [editing, setEditing] = useState<{ id: string | null; form: Form } | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [notice, setNotice] = useState("");
+  const [noteBusy, setNoteBusy] = useState(false);
   const first = useRef(true);
   const latest = useRef(0);
 
@@ -162,9 +163,11 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
 
   async function addNote(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!detail) return;
+    if (!detail || noteBusy) return;
     const field = e.currentTarget.elements.namedItem("note") as HTMLTextAreaElement;
+    setNoteBusy(true);
     const { body } = await api(`/api/contacts/${detail.contact.id}/notes`, { method: "POST", body: JSON.stringify({ body: field.value }) });
+    setNoteBusy(false);
     if (!body.ok) {
       setError(failure(body, "Could not add the note."));
       return;
@@ -322,7 +325,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
                 <label htmlFor="c-note">Add a note</label>
                 <textarea id="c-note" name="note" rows={3} maxLength={10000} required />
                 <div style={{ marginTop: "0.5rem" }}>
-                  <Button type="submit" size="sm">Save note</Button>
+                  <Button type="submit" size="sm" disabled={noteBusy}>Save note</Button>
                 </div>
               </form>
             ) : null}

@@ -5,19 +5,38 @@ import { markWorkspaceStale, workspaceHeaders } from "./workspace-pin";
 
 export type ApiBody = { ok?: boolean; error?: string; code?: string; fields?: Record<string, string> } & Record<string, unknown>;
 
+const OUTCOME_UNKNOWN =
+  "The connection was interrupted before the server answered, so this may or may not have been saved. Reload the page to check before trying again.";
+
+/** Plain-language refusals; every one of these means the request changed nothing. */
+function refusal(code: string | undefined, write: boolean): string | null {
+  const notSaved = write ? " Nothing was saved." : "";
+  if (code === "unauthenticated") return `Your session has ended.${notSaved} Sign in again (another tab keeps this page), then try again.`;
+  if (code === "forbidden") return `You do not have permission to do this.${notSaved} Ask the account owner if you need it.`;
+  if (code === "no_active_workspace") return `You no longer have access to this business.${notSaved} Reload the page to continue.`;
+  if (code === "workspace_suspended") return `This business is suspended.${notSaved} Contact your account manager.`;
+  return null;
+}
+
 export async function api(path: string, init?: RequestInit): Promise<{ status: number; body: ApiBody }> {
+  const write = (init?.method ?? "GET").toUpperCase() !== "GET";
+  let res: Response;
   try {
-    const res = await fetch(path, {
+    res = await fetch(path, {
       ...init,
       cache: "no-store",
       headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...workspaceHeaders() },
     });
-    const body = (await res.json().catch(() => ({}))) as ApiBody;
-    if (res.status === 409 && body.code === "workspace_changed") markWorkspaceStale();
-    return { status: res.status, body };
   } catch {
-    return { status: 0, body: { error: "Network error. Try again." } };
+    return { status: 0, body: { error: write ? OUTCOME_UNKNOWN : "Network error. Try again.", code: write ? "outcome_unknown" : "network" } };
   }
+  const body = (await res.json().catch(() => ({}))) as ApiBody;
+  if (res.status === 409 && body.code === "workspace_changed") markWorkspaceStale();
+  if (write && ((res.status >= 500 && !body.code) || (res.ok && body.ok === undefined))) {
+    return { status: res.status, body: { error: OUTCOME_UNKNOWN, code: "outcome_unknown" } };
+  }
+  const plain = refusal(body.code, write);
+  return { status: res.status, body: plain ? { ...body, error: plain } : body };
 }
 
 export function failure(body: ApiBody, fallback: string): string {

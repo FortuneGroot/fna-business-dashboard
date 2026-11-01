@@ -228,6 +228,31 @@ export function startStack(): Stack {
   }
 }
 
+/**
+ * Fault injection: stops or starts one service container of this run's disposable stack. Refuses
+ * unless the project passes the same disposable guards used for teardown.
+ */
+export function stackService(stack: Stack, service: "rest" | "auth" | "storage", action: "stop" | "start"): void {
+  const problems = disposableProjectProblems(stack.project);
+  if (problems.length) throw new Error(`Refusing to ${action} ${service}: ${problems.join("; ")}`);
+  const name = `supabase_${service}_${stack.project.projectId}`;
+  const r = run("docker", [action, name], 180_000);
+  if (r.error || r.status !== 0) throw new Error(`docker ${action} ${name} failed: ${tail(r, 3)}`);
+}
+
+/** Waits until a restarted service answers through the API gateway again. */
+export async function waitForService(env: StackEnv, service: "rest" | "auth" | "storage", timeoutMs = 120_000): Promise<void> {
+  const path = { rest: "/rest/v1/", auth: "/auth/v1/health", storage: "/storage/v1/bucket" }[service];
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await fetch(`${env.apiUrl}${path}`, { headers: { apikey: env.serviceRoleKey, Authorization: `Bearer ${env.serviceRoleKey}` } })
+      .then((r) => r.status).catch(() => 0);
+    if (status === 200) return;
+    if (Date.now() > deadline) throw new Error(`${service} did not come back (last status ${status})`);
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+}
+
 /** Superuser connection for test setup and outcome verification only — never to demonstrate RLS. */
 export async function adminDb(env: StackEnv): Promise<pg.Client> {
   const client = new pg.Client({ connectionString: env.dbUrl });
