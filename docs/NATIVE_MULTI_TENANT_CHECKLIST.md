@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1 / P2 / P3 / P4 / P5 Checklist
+# Native Multi-Tenant — P1 / P2 / P3 / P4 / P5 / P6 Checklist
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record, §20 P6 record).
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P5. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. Legacy mode (default) is unchanged. The platform console (P6) is next.**
+**Stop point: end of P6. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. The platform console (P6) at `/platform` requires a listed platform admin with an AAL2 session (MFA through the app), provisions workspaces, replaces bootstrap owner invitations, suspends/reactivates, grants time-limited audited support access, and shows the audit log. Legacy mode (default) is unchanged. GHL runtime retirement (P7) is next.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -71,7 +71,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Audited platform Storage endpoint (R2-3) with service-role allowlist entry A5; M16 migration and rollback.
 - [x] Static guards: SR-1 service-role allowlist, ISO-F1 (no client-supplied workspace id except the switch route), no cross-request client state, AAL1 override never enabled.
 - [x] Wire pages and APIs to workspace data — done in P3 (below); Settings rewrite remains P4.
-- [ ] `/platform` console (P6); platform admins without a workspace see `/no-access` meanwhile.
+- [x] `/platform` console (P6, below); `/no-access` sends AAL2 platform admins to `/platform` and offers listed AAL1 admins the MFA step.
 - [x] Review finding 1: Storage audit outcomes are server-only (`claimed`/`finished` execute as `service_role` only; outcome derived from Storage; unclaimed requests never complete).
 - [x] Review finding 2: completion errors handled (retries, `503 audit_pending`, `409 change_pending`, `POST` recovery by the requesting admin).
 - [x] Review finding 3: refreshed/cleared session cookies applied on `/api/auth/me` and every other supabase-mode response, including denials.
@@ -119,14 +119,27 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Browser flow against the real local stack (contacts, opportunity to Won, calendar and booking with overlap error, task done, inbox note).
 - [ ] Board edits limited to the 8 opportunities shown per column; no delete for appointments/tasks (cancel/complete instead).
 
+## P6 platform console
+
+- [x] M19: `platform_status`, search/detail/grants/audit pages, reason-bearing `platform_revoke_access(grant, reason)` (live grants only; one-argument form no longer client-callable); rollback block.
+- [x] Console outside the client sidebar (existing top bar, cards, tables, modals); legacy mode 404.
+- [x] Platform authority = `platform_admins` row + AAL2, independent of membership; members 403/404, listed AAL1 admins `mfa_required` and redirected to MFA; decided in middleware before rendering.
+- [x] MFA enrolment and verification through the app (TOTP via the user's own Supabase session); AAL2 cookies; wrong codes 422.
+- [x] Provisioning: transactional, idempotent, concurrent-safe; owner link shown once; nothing emailed.
+- [x] Bootstrap owner invitation replacement with reason; old link revoked; refused once an owner joined.
+- [x] Suspension/reactivation with reason; members 423; read grants read; write grants no access; new write grants 423.
+- [x] Support access: mode, duration (1–480 min), reason; banner with workspace, mode, expiry, minutes left; ending needs a reason; revocation and clock expiry apply on the next request; writes attributed to the grant.
+- [x] Audit view (all workspaces or one) with actor email and reason; credential-like metadata keys dropped; no tokens in any response except the one-time link.
+- [x] Browser flow against the real local stack (no-access → MFA enrolment → provision → detail → support access → banner → end → audit).
+- [ ] MFA device-loss recovery is not self-service (operator removes the factor); no recovery codes.
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 278, db 209, realpg 28, stack 53) | [x] all four suites PASS: unit 278, db 209, realpg 28, stack 53 |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 209/209 |
+| `npm test` | runner (minimums: unit 298, db 217, realpg 28, stack 63) | see §20.5 of the spec for the P6 run |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 217/217 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
-| `tsc` (app and test files) | — | [x] PASS |
+| `npm run typecheck` (`tsc` for the app, then `tsconfig.tests.json` for test files) | — | [x] PASS (test files were not type-clean before P6: 44 errors in P4/P5 tests and one in `auth.test.ts`, fixed without changing assertions) |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
 | Lint | — | not available (no script) |
 | `npm run test:stack`: CLI `db reset` applies all migrations | real Supabase local stack | [x] PASS |
@@ -140,6 +153,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | P3 review fixes: pipeline columns and calendar cards by id | real Supabase local stack | [x] PASS (3 tests) |
 | P4 team and settings: INV, ROLE, MEM, SUSP, SET-1..7, browser flow; NET-1 (no outbound connection, no SMTP/SMS route) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
 | P5 native records: CRUD-1..5, workspace switching, browser flow (NET-1 still empty) | real Supabase local stack + Chromium | [x] PASS (7 tests) |
+| P6 platform console: CON-1..9 (denial, MFA, provisioning, rotation, search, grants, clock expiry, suspension, logged-out session, browser flow) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
 | UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run after P5: sidebar 0.00% on all 20 pages; P5 pages 1.2–2.2% (native copy and controls); Settings/Onboarding differ by P4 content (§19.5) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
@@ -150,4 +164,4 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 ## Not done by instruction
 
-No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), the native Settings cards and invite landing page (P4), and native create/edit controls in the existing record pages (P5).
+No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), the native Settings cards and invite landing page (P4), native create/edit controls in the existing record pages (P5), and the separate platform console, MFA page, and support-access banner (P6).

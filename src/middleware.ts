@@ -7,7 +7,7 @@ import {
   verifySessionTokenEdge,
 } from "@/lib/auth/session-edge";
 import { authProvider, supabaseAuthConfig, supabaseCookieOptions } from "@/lib/auth/provider";
-import { contextFromRpc, evaluateContext, PAGE_DENIAL_REDIRECT, pagePermission } from "@/lib/authz/evaluate";
+import { contextFromRpc, denialRedirect, evaluateContext, pagePermission } from "@/lib/authz/evaluate";
 
 /** Paths that never require a session (machine or public). */
 const PUBLIC_EXACT = new Set([
@@ -77,8 +77,11 @@ const PROTECTED_API_PREFIXES = [
   ...NATIVE_API_PREFIXES,
 ];
 
-/** Signed-in pages that need no workspace (AUTH_PROVIDER=supabase only). */
-const SESSION_ONLY_PAGES = ["/no-access", "/workspace-suspended"];
+/**
+ * Signed-in pages that need no workspace (AUTH_PROVIDER=supabase only). The platform console decides
+ * platform authority (listed admin + AAL2) in its own pages and APIs, never from membership.
+ */
+const SESSION_ONLY_PAGES = ["/no-access", "/workspace-suspended", "/platform"];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
@@ -178,6 +181,7 @@ async function supabaseMiddleware(req: NextRequest): Promise<NextResponse> {
 
   if (signedIn) {
     if (pathname === "/") return carry(NextResponse.redirect(new URL("/dashboard", req.url)));
+    if (pathname === "/platform" || pathname.startsWith("/platform/")) return carry(await platformGate(req, supabase, pathname, response));
     if (sessionOnly || isProtectedApi(pathname)) return response;
     // Next renders a page in parallel with its layout, so a layout redirect alone can still stream
     // the page. Workspace access and §4.3 page permissions are decided here, before rendering;
@@ -193,13 +197,38 @@ async function supabaseMiddleware(req: NextRequest): Promise<NextResponse> {
     const ctx = contextFromRpc(ctxRes.data, data!.claims as Record<string, unknown>);
     const denial = evaluateContext(ctx, { permission: pagePermission(pathname) });
     if (denial === "unauthenticated") return carry(loginRedirect(req, pathname));
-    if (denial) return carry(NextResponse.redirect(new URL(PAGE_DENIAL_REDIRECT[denial], req.url)));
+    if (denial) return carry(NextResponse.redirect(new URL(denialRedirect(denial, ctx), req.url)));
     return response;
   }
   if (isProtectedApi(pathname)) {
     return carry(NextResponse.json({ ok: false, error: "Unauthorized", code: "unauthenticated" }, { status: 401 }));
   }
   return carry(loginRedirect(req, pathname));
+}
+
+/**
+ * Platform console pages (§7.5), decided before rendering: an AAL2 platform admin passes (and is sent
+ * on from /platform/mfa); a listed admin with an AAL1 session is sent to /platform/mfa; anyone else
+ * gets the ordinary 404 page, so the console is not advertised. The pages and APIs repeat the check.
+ */
+async function platformGate(
+  req: NextRequest,
+  supabase: ReturnType<typeof createServerClient>,
+  pathname: string,
+  next: NextResponse
+): Promise<NextResponse> {
+  const unavailable = () => new NextResponse("Service temporarily unavailable", {
+    status: 503,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
+  });
+  const res = await supabase.rpc("platform_status");
+  if (res.status === 401 || res.status === 403) return loginRedirect(req, pathname);
+  if (res.error) return unavailable();
+  const status = (res.data ?? {}) as { listed?: boolean; active?: boolean };
+  const mfaPage = pathname === "/platform/mfa";
+  if (status.active === true) return mfaPage ? NextResponse.redirect(new URL("/platform", req.url)) : next;
+  if (status.listed === true) return mfaPage ? next : NextResponse.redirect(new URL("/platform/mfa", req.url));
+  return NextResponse.rewrite(new URL("/_platform-not-found", req.url), { status: 404 });
 }
 
 async function legacyMiddleware(req: NextRequest) {
@@ -297,5 +326,7 @@ export const config = {
     "/api/reports/:path*",
     "/no-access",
     "/workspace-suspended",
+    "/platform",
+    "/platform/:path*",
   ],
 };

@@ -10,10 +10,12 @@ export function AccessNotice({
   title,
   message,
   choices = [],
+  action,
 }: {
   title: string;
   message: string;
   choices?: WorkspaceChoice[];
+  action?: { href: string; label: string };
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -70,6 +72,11 @@ export function AccessNotice({
             Open {c.name}
           </button>
         ))}
+        {action ? (
+          <a className="btn" href={action.href} style={{ width: "100%", marginTop: "0.75rem", textAlign: "center" }}>
+            {action.label}
+          </a>
+        ) : null}
         <button
           className="btn secondary"
           type="button"

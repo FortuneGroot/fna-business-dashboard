@@ -566,6 +566,7 @@ describe("fake-client readiness unchanged", () => {
 describe("$297 compatibility unchanged", () => {
   it("rejects $497 dependency flags", () => {
     const cfg = faLiveDefaultClientConfig();
+    assert.ok(cfg.forbiddenDependencies);
     cfg.forbiddenDependencies.requiresAgencyPro497 = true;
     const report = validateClientDeployment(cfg, {
       GHL_WEBHOOK_SECRET: "x",

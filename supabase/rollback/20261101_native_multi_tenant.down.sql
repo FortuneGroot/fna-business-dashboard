@@ -1,10 +1,25 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101001700 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101001800 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M19 (P6)
+drop function if exists public.platform_audit_page(uuid, bigint, int);
+drop function if exists public.platform_revoke_access(uuid, text);
+drop function if exists public.platform_list_grants(uuid, boolean, int);
+drop function if exists public.platform_get_workspace(uuid);
+drop function if exists public.platform_search_workspaces(text, text, int, timestamptz, uuid);
+drop function if exists private.like_pattern(text);
+drop function if exists public.platform_status();
+do $$
+begin
+  if to_regprocedure('public.platform_revoke_access(uuid)') is not null then
+    grant execute on function public.platform_revoke_access(uuid) to authenticated;
+  end if;
+end $$;
 
 -- M18 (P5)
 drop trigger if exists contacts_record_activity on public.contacts;

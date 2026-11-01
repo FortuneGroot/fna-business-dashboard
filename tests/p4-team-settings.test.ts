@@ -49,7 +49,8 @@ const memberCtx = (u: FakeUser, role: string, permissions: string[]) => ({
   authenticated: true, user_id: u.id, is_platform_admin: false, workspace: ws(WS_A, "Alpha"), role, grant: null, permissions,
 });
 
-type Handler = (req: NextRequest, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
+// Route handlers type their own params; tests pass them as a plain record.
+type Handler = (req: NextRequest, ctx: { params: Promise<any> }) => Promise<Response>;
 const params = (p: Record<string, string> = {}) => ({ params: Promise.resolve(p) });
 
 function req(path: string, init: { cookie?: string; method?: string; body?: unknown } = {}) {

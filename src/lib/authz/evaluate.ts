@@ -79,6 +79,12 @@ export const PAGE_DENIAL_REDIRECT: Record<ContextDenial, string> = {
   forbidden: "/dashboard?denied=1",
 };
 
+/** Page redirect for a denial; platform admins with no usable workspace go to the console (§5.1). */
+export function denialRedirect(denial: ContextDenial, ctx: RequestContext | null): string {
+  if (denial === "no_active_workspace" && ctx?.isPlatformAdmin) return "/platform";
+  return PAGE_DENIAL_REDIRECT[denial];
+}
+
 /** Pages gated by a permission rather than membership alone (§4.3). */
 export const PAGE_PERMISSIONS: Record<string, string> = {
   "/onboarding": "onboarding.read",

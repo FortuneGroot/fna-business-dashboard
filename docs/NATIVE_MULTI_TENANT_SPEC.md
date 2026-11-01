@@ -1052,7 +1052,7 @@ The legacy migrations originally shared the 8-digit version `20260917`. They are
 | P3 Read parity | Existing pages and `/api/dashboard/*` read native tables via adapters | UI-1, UI-2 visual parity; API-1 shape tests — done locally (§17): API-1, ISO, and UI-1 pass on the real stack; UI-2 run with a local harness (sidebar 0.00% on all 20 pages; differences are copy) |
 | P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass — done locally (§18): INV, ROLE, MEM, SUSP, SET-1..7, browser flow, and NET-1 pass on the real stack |
 | P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) — done locally (§19): CRUD-1..5, workspace switching, browser flow, and NET-1 pass on the real stack |
-| P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass |
+| P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass — done locally (§20): CON-1..9 (covering PLAT-1..3 and SUSP-1/2/5/6 through the app) pass on the real stack, including MFA and the browser flow |
 | P7 GHL removal | Delete §8.3 files; env cleanup | GHL-1, GHL-2 pass; build + all tests green |
 | P8 Staging rehearsal | T3–T4 on staging | Full suite green on staging; George signs off |
 | P9 Production cutover | T5, then T6 after 14 days | **Requires George's explicit approval** |
@@ -1565,3 +1565,68 @@ Local only: nothing pushed, deployed, or applied to a hosted project. Nothing is
 | `npm run build` | Next.js 15.5.25 | PASS |
 
 The first stack run of the workspace-switching test failed because the test created its "home" contact after accepting the invitation, and acceptance activates the invited workspace (M11). The test now creates the contact first, asserts its workspace in the database, asserts that acceptance switches the active workspace, and checks every listed id against the database instead of matching text. No application change was needed.
+
+## 20. P6 implementation record (platform console)
+
+Local only: nothing pushed, deployed, or applied to a hosted project; no invitation is sent (links are shown once to the admin who created them). With `AUTH_PROVIDER=legacy` (the default) every `/platform` page and `/api/platform/*` and `/api/auth/mfa/*` endpoint answers 404.
+
+### 20.1 Files
+
+| Area | Files |
+| --- | --- |
+| Migration | `supabase/migrations/20261101001800_platform_console.sql` (M19, additive): `platform_status()` (caller's own `{listed, aal, active}`), `platform_search_workspaces` (name/slug/owner-email search with literal `%`/`_`, status filter, keyset on `(created_at, id)`, exact total), `platform_get_workspace` (detail with member counts and the open owner invitation's id and dates only), `platform_list_grants`, `platform_audit_page` (keyset on id, actor email, optional workspace), and `platform_revoke_access(grant, reason)` (reason 10–500 characters, written to both audit logs). The one-argument `platform_revoke_access(uuid)` is no longer executable by `authenticated`. Rollback block restores it |
+| Server | `src/lib/api/platform.ts` (`platformApi`: supabase mode, session, platform authority from the database, `mfa_required` for listed AAL1 admins, Auth-server session re-check on sensitive actions), `src/lib/platform/console.ts` (strict schemas and RPC calls), `src/lib/platform/page.ts` (page guards), `src/lib/auth/mfa.ts` (TOTP enrol/verify through the user's own Supabase session) |
+| Routes | `GET/POST /api/platform/workspaces`, `GET /api/platform/workspaces/[id]`, `POST …/[id]/suspend`, `…/[id]/reactivate`, `…/[id]/access`, `…/[id]/bootstrap-invitation`, `GET …/[id]/audit`, `GET /api/platform/audit`, `GET /api/platform/access`, `DELETE /api/platform/access/[grantId]`; `GET /api/auth/mfa`, `POST /api/auth/mfa/enroll`, `POST /api/auth/mfa/verify` |
+| UI | `src/app/(platform)/platform/` (workspaces, workspace detail, audit, MFA) with `src/components/platform/` (`PlatformShell` — the existing top bar, content, and footer without the client sidebar — `PlatformWorkspaces`, `PlatformWorkspaceDetail`, `PlatformAudit`, `MfaSetup`, `shared`); `src/components/SupportAccess.tsx` (banner on every workspace page during a grant); `/no-access` sends AAL2 admins to `/platform` and offers listed AAL1 admins the MFA step |
+| Middleware | `/platform` pages are decided before rendering: AAL2 admins pass, listed AAL1 admins are redirected to `/platform/mfa`, everyone else gets the ordinary 404 page; an unknown status is 503, never access |
+
+### 20.2 Behaviour
+
+- **Platform authority is separate from membership.** It comes only from a `platform_admins` row plus an AAL2 session (`private.is_platform_admin()`); no workspace role is involved, and a workspace member who is not listed is refused everywhere (403). A listed admin with a password-only session gets 403 `mfa_required` from every console API and is sent to `/platform/mfa` by every console page.
+- **MFA.** If the app's session is AAL1, `/platform/mfa` enrols a TOTP authenticator through GoTrue (QR code and setup key shown once to that user; abandoned enrolments are removed first; a second verified authenticator is refused with 409) and verifies the current code, which upgrades the same cookie session to AAL2. Wrong or malformed codes are 422, throttling 429. A new sign-in is AAL1 again and needs a code.
+- **Provisioning** runs `platform_provision_workspace` (one transaction: workspace, settings, AI receptionist config, default pipeline with 12 stages, bootstrap owner invitation, audit). It is idempotent per provisioning key: a repeat with the same inputs returns the same workspace and no link; different inputs or a taken slug are 409; concurrent identical requests create exactly one. The owner link is returned once and never stored or shown again.
+- **Bootstrap invitation rotation** needs a reason, revokes every open owner invitation, and returns one new link; it is refused (409) once an owner has joined.
+- **Suspension/reactivation** need a reason. While suspended, members get 423; read grants still read; write grants confer nothing (403 `no_active_workspace`, by design of `active_grant_id`), and new write grants are refused with 423.
+- **Support access** (`read`/`write`, 1–480 minutes, reason required) switches the admin's active workspace to the target. Every workspace page shows a banner with the workspace, the mode, the expiry in UTC, and minutes left, with links back to the console and to end access (reason required). Revocation and expiry apply on the next request. Writes under a write grant are attributed to the admin and the grant in `workspace_audit_log`. Ids from other workspaces answer 404.
+- **Audit view.** Platform audit entries (all workspaces or one) with actor email, reason, and metadata; keys that look like credentials (`token`, `hash`, `secret`, `password`) are dropped before they reach the browser. No response carries an invitation token or hash except the one-time link at creation/rotation.
+- **Target workspace in the path.** Console routes take the workspace from `/api/platform/workspaces/[id]/…`; body or query workspace ids are dropped (ISO-F1 applies unchanged to tenant routes).
+
+### 20.3 Test IDs defined by this phase
+
+These console tests (CON) run through the app and also exercise the §10 criteria PLAT-1 (CON-6, CON-7), PLAT-2 (CON-6), PLAT-3 (CON-1, CON-2), SUSP-1/SUSP-2 (CON-8), SUSP-5 (CON-8), and SUSP-6 (CON-8).
+
+| ID | Test |
+| --- | --- |
+| CON-1 | Denial: signed out 401; workspace members 403 on every console API and MFA endpoint, 404 on every console page; listed AAL1 admin 403 `mfa_required` and redirected to MFA; nothing recorded. |
+| CON-2 | MFA through the app: enrolment replaces abandoned factors, wrong/short codes and bad factor ids 422, AAL2 cookies issued, second authenticator 409, re-login needs a code, setup key never shown again. |
+| CON-3 | Provisioning: malformed 422, four concurrent identical requests → one workspace, one link; repeat → no link; conflicting inputs and taken slug 409; 12 stages; audit attributed; detail without tokens. |
+| CON-4 | Rotation: reason required, old link 410 `invitation_revoked`, new owner joins through the link (A1), rotation then 409, audit with reason and no token. |
+| CON-5 | Search and paging: keyset pages without overlap, exact total, owner-email search, literal `%`, status filter, malformed queries 422. |
+| CON-6 | Grants: read grant reads and cannot write; banner shows workspace, mode, expiry; other workspaces 404; ending needs a reason and applies on the next request; double end 404; write grant attributed in `workspace_audit_log`; both audit logs carry the reasons. |
+| CON-7 | A one-minute grant expires by the clock on the next request (expired, not revoked). |
+| CON-8 | Suspension from the console: members 423; existing write grant no access; new write grant 423; read grant reads with the banner marked suspended; reactivation restores records; audit attributed. |
+| CON-9 | A logged-out AAL2 cookie is refused for sensitive actions and nothing is recorded; browser flow (no-access → MFA enrolment in the UI with a wrong code first → provision with the link shown once → search → detail → read access → banner → end access → audit). |
+
+### 20.4 Deviations and limitations
+
+1. The §7.5 `GET /api/platform/audit?workspaceId=` filter is served by `GET /api/platform/workspaces/[id]/audit`, and grants per workspace by `GET /api/platform/workspaces/[id]`, because `parseQuery`/`parseBody` drop client workspace ids everywhere. `GET /api/platform/audit` lists all workspaces.
+2. `DELETE /api/platform/access/[grantId]` takes a JSON body `{ reason }`; the end-access reason is now mandatory (the one-argument RPC is no longer callable by clients).
+3. Provisioning has no reason field (the §5.3 contract has none); the action is audited with its slug and owner email.
+4. MFA recovery when an admin loses the authenticator device is not self-service: another platform admin or the operator must remove the factor (documented gap; no recovery codes).
+5. A write grant on a suspended workspace answers 403 `no_active_workspace` rather than 423, because the database treats it as no access at all.
+### 20.5 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (278 previous + 20 P6: strict schemas, MFA failure mapping, credential-free audit metadata, 401 on all 11 console and 3 MFA handlers, members 403 everywhere with no MFA call, listed AAL1 admins `mfa_required` with no RPC beyond the status check, missing/short reasons and malformed input 422 before any write, workspace ids in bodies dropped, one-time owner link, error mapping 409/404/423/403/503, middleware page gate 404/307/200/503, legacy 404, static guards) | Node 24.20.0 | PASS 298/298 |
+| DB suite (209 previous + 8 P6: status, refusal of every console RPC for members/outsiders/AAL1/anon, literal search with paging and exact totals, malformed filters, detail without tokens, grants and reasoned revocation in both audit logs, expired grants cannot be ended, audit paging) | PGlite + shim | PASS 217/217 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 (unchanged) |
+| Stack suite (53 previous + 10 P6: CON-1..9 and the browser flow) | Real Supabase local stack (disposable) + `next build`/`next start` + Chromium | PASS 63/63 |
+| Browser flow (password sign-in lands on `/no-access` with the MFA link; enrolment in the UI with a wrong code refused first; provisioning shows the owner link once; search; detail; read access opens the dashboard with the banner "P6 Alpha (synthetic) · Read-only · expires … UTC (15 min left)"; ending access returns to the console; audit page shows the reason) | same | PASS (screenshots in a temp directory) |
+| UI-2 visual harness | disposable stack + built app + Chromium | Unchanged from P5: sidebar 0.00% on all 20 pages; differences are native copy and P4 Settings/Onboarding content |
+| `npm run typecheck` (app, then test files via `tsconfig.tests.json`) | — | PASS |
+| `npm run build` | Next.js 15.5.25 | PASS |
+| Secret scan of every changed and new file; browser bundles | — | No secrets. One existing synthetic placeholder in `tests/auth.test.ts` (not changed by P6); the login bundle names `AUTH_SECRET` in an existing legacy message, with no value |
+| Disposable stack cleanup | Docker | 0 containers, volumes, networks, or temp projects left |
+
+Fixes made during the P6 runs: (1) the first stack run failed in the provisioning test because the test expected an unknown key's error under its own name; the API reports unknown keys under `body`, and the test now expects that (later P6 tests failed only because that workspace was never created); (2) the suspension test expected 423 for an existing write grant, but the database treats a write grant on a suspended workspace as no access (403 `no_active_workspace`); the expectation was corrected and the test now also asserts nothing was written; (3) the audit showed "Support access ended" for a grant that had already expired (test cleanup ended it), so `platform_revoke_access` now ends live grants only, with PGlite and stack tests; (4) test files were not type-clean (Next's global `ProcessEnv` type and handler casts); they are now checked by `npm run typecheck` with no change to any assertion.

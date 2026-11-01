@@ -1,4 +1,6 @@
 import { requirePageSession } from "@/lib/auth/guards";
+import { authProvider } from "@/lib/auth/provider";
+import { SupportAccessProvider, type SupportAccessInfo } from "@/components/SupportAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -8,5 +10,19 @@ export default async function ProtectedLayout({
   children: React.ReactNode;
 }) {
   await requirePageSession();
-  return children;
+  let support: SupportAccessInfo | null = null;
+  if (authProvider() === "supabase") {
+    const { getRequestContext } = await import("@/lib/authz/context");
+    const ctx = await getRequestContext();
+    if (ctx?.grant && ctx.workspace) {
+      support = {
+        grantId: ctx.grant.id,
+        workspaceName: ctx.workspace.name,
+        workspaceStatus: ctx.workspace.status,
+        mode: ctx.grant.mode,
+        expiresAt: ctx.grant.expiresAt,
+      };
+    }
+  }
+  return <SupportAccessProvider value={support}>{children}</SupportAccessProvider>;
 }

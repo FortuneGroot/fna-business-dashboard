@@ -325,7 +325,7 @@ describe("findings 2-8 (shared synthetic world)", () => {
         asUser(w.db, w.platform, (q) => q.query("update public.contacts set owner_user_id = $1 where id = $2", [w.platform.id, contactA])),
         /foreign key|active member of the same workspace/);
 
-      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
       await assert.rejects(
         asUser(w.db, w.platform, (q) => q.query(
           "insert into public.contact_notes (workspace_id, contact_id, body) values ($1, $2, 'after revoke')", [w.wsA, contactA])),
@@ -343,7 +343,7 @@ describe("findings 2-8 (shared synthetic world)", () => {
         asUser(w.db, w.platform, (q) => q.query(
           "insert into public.contact_notes (workspace_id, contact_id, body) values ($1, $2, 'read grant')", [w.wsA, contactA])),
         /row-level security|must be an active member/);
-      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
     });
 
     test("removed members cannot author", async () => {
@@ -420,7 +420,7 @@ describe("findings 2-8 (shared synthetic world)", () => {
     before(async () => {
       grantA = (await asUser(w.db, w.platform, (q) =>
         rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "read", "Grant used for FK regression test", 30]))).id;
-      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grantA]));
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grantA, "Support session finished"]));
     });
 
     test("composite foreign keys exist on (workspace_id, grant id)", async () => {

@@ -179,7 +179,7 @@ describe("review 2, finding 3: platform grants cannot change Storage objects; th
       assert.deepEqual(await metadataOf(), before, "the object is unchanged");
       assert.deepEqual(await storageAudit(w.wsA, since), []);
     } finally {
-      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
     }
   });
 
@@ -211,7 +211,7 @@ describe("review 2, finding 3: platform grants cannot change Storage objects; th
     assert.deepEqual(audit.map((a) => a.metadata.object_path), [path, renamed, renamed]);
     assert.equal(audit[1].metadata.previous_object_path, path);
 
-    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
   });
 
   test("a read grant can view assets but cannot mutate them, and nothing is audited", async () => {
@@ -221,7 +221,7 @@ describe("review 2, finding 3: platform grants cannot change Storage objects; th
     assert.equal(await asUser(w.db, w.platform, (q) => visible(q, `${w.wsA}/policy-logo.png`)), 1);
     await assert.rejects(asUser(w.db, w.platform, (q) => upload(q, `${w.wsA}/read-grant.png`)), /row-level security/);
     assert.deepEqual(await storageAudit(w.wsA, since), []);
-    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
   });
 
   test("after revocation the platform admin can neither view nor mutate assets", async () => {

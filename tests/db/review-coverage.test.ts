@@ -75,7 +75,7 @@ async function grant(ws: string, mode: "read" | "write", reason: string): Promis
 }
 
 async function revoke(id: string): Promise<void> {
-  await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [id]));
+  await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [id, "Support session finished"]));
 }
 
 async function override(by: TestUser, target: TestUser, permission: string, allowed: boolean | null): Promise<void> {

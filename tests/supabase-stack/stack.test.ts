@@ -9,7 +9,7 @@ import { after, afterEach, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
   adminDb, appFetch, appLogin, capturedMailCount, cookieHeader, jwtPayload, launchBrowser, messageRoutes, readSessionCookie, rest, rpc,
-  serviceRest, sessionCookie, signJwt, signUp, startApp, startStack, storage, upgradeToAal2, upgradeToAal2Session,
+  serviceRest, sessionCookie, signJwt, signUp, startApp, startStack, storage, totp, upgradeToAal2, upgradeToAal2Session,
   type App, type HttpResult, type Identity, type Stack, type StackEnv,
 } from "./stack";
 import { DASHBOARD_ENDPOINTS, dashboardShapeErrors } from "../helpers/api-shapes";
@@ -68,7 +68,7 @@ async function grantAccess(ws: string, mode: "read" | "write", reason: string, m
 
 async function revokeGrant(id: string) {
   liveGrants.delete(id);
-  await voidRpc(platformAal2, "platform_revoke_access", { p_grant_id: id });
+  await voidRpc(platformAal2, "platform_revoke_access", { p_grant_id: id, p_reason: "Support session finished" });
 }
 
 /** Grants still live for the platform admin, from the database (verification only). */
@@ -90,7 +90,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
   afterEach(async () => {
     for (const id of [...liveGrants]) {
       liveGrants.delete(id);
-      const r = await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: id });
+      const r = await rpc(env, platformAal2, "platform_revoke_access", { p_grant_id: id, p_reason: "Support session finished" });
       if (r.status !== 204 && !/not_found/.test(r.text)) console.error(`cleanup: revoking grant failed: ${r.status} ${r.text}`);
     }
   });
@@ -765,7 +765,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.equal(r.status, 200, r.text);
         return r.body.id as string;
       };
-      const revoke = (id: string) => voidRpc(aal2.access_token, "platform_revoke_access", { p_grant_id: id });
+      const revoke = (id: string) => voidRpc(aal2.access_token, "platform_revoke_access", { p_grant_id: id, p_reason: "Support session finished" });
 
       const noGrant = await put(adminCookie);
       assert.deepEqual([noGrant.status, noGrant.body.code], [403, "no_active_workspace"]);
@@ -2229,6 +2229,490 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
             }
           }
           console.error(`P5 browser flow failed (screenshots so far: ${shots}):`, err);
+          throw err;
+        } finally {
+          await browser.close().catch(() => undefined);
+        }
+      });
+    });
+
+    // P6: the platform console, through the app only. The admin reaches AAL2 with the app's own MFA
+    // endpoints (real GoTrue TOTP); every check uses that admin's cookies. The superuser connection
+    // only registers the platform admin (stands in for the bootstrap script) and verifies outcomes.
+    describe("platform console through the app (P6)", () => {
+      let admin: Identity;
+      let adminCookie = "";
+      let factorId = "";
+      let secret = "";
+      let lastCode = "";
+      let wsP = "";
+      let firstToken = "";
+      let pOwnerCookie = "";
+      let pContact = "";
+      const REASON = "Synthetic support check for P6";
+      const BUSINESS = "P6 Alpha (synthetic)";
+      const TOKEN_LIKE = /[0-9a-f]{64}|invite_token|token_hash/;
+
+      type R = Awaited<ReturnType<typeof appFetch>>;
+      const expect = (r: R, status: number, code: string | null, label: string) =>
+        assert.deepEqual([r.status, code === null ? null : r.body?.code], [status, code], `${label}: ${r.text.slice(0, 240)}`);
+      const call = (cookie: string, method: string, path: string, json?: unknown) => appFetch(app, path, { method, cookie, json });
+      const mergeCookies = (cookie: string, setCookies: string[]) => {
+        const jar = new Map(cookie.split("; ").filter(Boolean).map((p) => [p.slice(0, p.indexOf("=")), p.slice(p.indexOf("=") + 1)] as const));
+        for (const c of setCookies) {
+          const pair = c.split(";")[0];
+          const name = pair.slice(0, pair.indexOf("="));
+          const value = pair.slice(pair.indexOf("=") + 1);
+          if (value === "" || /max-age=0\b/i.test(c)) jar.delete(name);
+          else jar.set(name, value);
+        }
+        return [...jar].map(([n, v]) => `${n}=${v}`).join("; ");
+      };
+      // GoTrue may refuse a code it has already accepted, so each verification waits for a new one.
+      const freshCode = async () => {
+        let c = totp(secret);
+        while (c === lastCode) {
+          await new Promise((r) => setTimeout(r, 1000));
+          c = totp(secret);
+        }
+        lastCode = c;
+        return c;
+      };
+      const verifyWithApp = async (cookie: string) => {
+        const r = await call(cookie, "POST", "/api/auth/mfa/verify", { factorId, code: await freshCode() });
+        assert.equal(r.status, 200, r.text);
+        assert.deepEqual([r.body.aal, r.body.platformActive], ["aal2", true]);
+        const next = mergeCookies(cookie, r.setCookies);
+        assert.equal(jwtPayload(readSessionCookie(next).session.access_token).aal, "aal2", "the app's cookies now carry an AAL2 session");
+        return next;
+      };
+      const tokenOf = (url: unknown) => {
+        const m = /^http:\/\/127\.0\.0\.1:\d+\/invite\/([0-9a-f]{64})$/.exec(String(url));
+        assert.ok(m, `invite link: ${String(url)}`);
+        return m![1];
+      };
+      const platformAudit = async (ws: string) =>
+        (await db.query<{ action: string; actor_id: string; reason: string | null; metadata: any }>(
+          "select action, actor_id, reason, metadata from public.platform_audit_log where workspace_id = $1 order by id", [ws])).rows;
+      const grantTo = async (ws: string, mode: "read" | "write", minutes = 30) => {
+        const r = await call(adminCookie, "POST", `/api/platform/workspaces/${ws}/access`, { mode, reason: REASON, durationMinutes: minutes });
+        assert.equal(r.status, 200, r.text);
+        assert.deepEqual([r.body.grant.workspaceId, r.body.grant.mode], [ws, mode]);
+        return r.body.grant as { id: string; expiresAt: string };
+      };
+      const endGrant = async (id: string) => {
+        const r = await call(adminCookie, "DELETE", `/api/platform/access/${id}`, { reason: "Support session finished" });
+        assert.ok(r.status === 200 || r.body?.code === "not_found", r.text);
+      };
+
+      before(async () => {
+        admin = await signUp(env, email("p6-admin"), "P6 Platform Admin");
+        await db.query("insert into public.platform_admins (user_id) values ($1)", [admin.id]);
+      });
+
+      test("P6 denial: non-admins get 403/404; a listed admin with a password session must verify an authenticator first", async () => {
+        const surface: [string, string, unknown?][] = [
+          ["GET", "/api/platform/workspaces"],
+          ["POST", "/api/platform/workspaces", { provisioningKey: `p6-denied-${run}`, name: "Denied", slug: `p6-denied-${run}`, ownerEmail: email("p6-denied") }],
+          ["GET", `/api/platform/workspaces/${wsA}`],
+          ["POST", `/api/platform/workspaces/${wsA}/suspend`, { reason: REASON }],
+          ["POST", `/api/platform/workspaces/${wsA}/access`, { mode: "write", reason: REASON, durationMinutes: 5 }],
+          ["POST", `/api/platform/workspaces/${wsA}/bootstrap-invitation`, { reason: REASON }],
+          ["GET", `/api/platform/workspaces/${wsA}/audit`],
+          ["GET", "/api/platform/audit"],
+          ["GET", "/api/platform/access"],
+        ];
+        for (const [m, p, j] of surface) expect(await appFetch(app, p, { method: m, json: j }), 401, "unauthenticated", `signed out ${m} ${p}`);
+        for (const [m, p, j] of surface) expect(await call(ownerCookie, m, p, j), 403, "forbidden", `member ${m} ${p}`);
+        expect(await call(ownerCookie, "GET", "/api/auth/mfa"), 403, "forbidden", "member MFA status");
+        expect(await call(ownerCookie, "POST", "/api/auth/mfa/enroll", {}), 403, "forbidden", "member MFA enrolment");
+        for (const path of ["/platform", "/platform/audit", `/platform/workspaces/${wsA}`, "/platform/mfa"]) {
+          const page = await appFetch(app, path, { cookie: ownerCookie });
+          assert.equal(page.status, 404, `member page ${path}`);
+          assert.equal(page.text.includes("Platform administration"), false, `${path}: console not rendered`);
+        }
+
+        adminCookie = await appLogin(app, admin);
+        for (const [m, p, j] of surface) expect(await call(adminCookie, m, p, j), 403, "mfa_required", `AAL1 admin ${m} ${p}`);
+        const toMfa = await appFetch(app, "/platform", { cookie: adminCookie });
+        assert.equal(toMfa.status, 307);
+        assert.equal(new URL(toMfa.location!, app.url).pathname, "/platform/mfa");
+        assert.equal(toMfa.text.includes("All workspaces"), false);
+        const mfaPage = await appFetch(app, "/platform/mfa", { cookie: adminCookie });
+        assert.equal(mfaPage.status, 200);
+        assert.ok(mfaPage.text.includes("Platform administration requires your authenticator app."));
+        const noAccess = await appFetch(app, "/no-access", { cookie: adminCookie });
+        assert.ok(noAccess.text.includes("Verify authenticator for platform administration"), "the no-access page points a listed admin to MFA");
+
+        assert.equal((await db.query("select status from public.workspaces where id = $1", [wsA])).rows[0].status, "active");
+        assert.equal((await db.query("select count(*)::int n from public.platform_audit_log where actor_id = $1", [admin.id])).rows[0].n, 0);
+        assert.equal((await db.query("select count(*)::int n from public.platform_access_grants where admin_user_id = $1", [admin.id])).rows[0].n, 0);
+      });
+
+      test("MFA through the app: enrol (abandoned enrolments replaced), wrong codes refused, AAL2 cookies issued, re-login needs a code again", async () => {
+        const st = await call(adminCookie, "GET", "/api/auth/mfa");
+        assert.equal(st.status, 200, st.text);
+        assert.deepEqual([st.body.aal, st.body.platformActive, st.body.factors], ["aal1", false, []]);
+        const abandoned = await call(adminCookie, "POST", "/api/auth/mfa/enroll", {});
+        assert.equal(abandoned.status, 200, abandoned.text);
+        const en = await call(adminCookie, "POST", "/api/auth/mfa/enroll", {});
+        assert.equal(en.status, 200, en.text);
+        assert.notEqual(en.body.factorId, abandoned.body.factorId);
+        ({ factorId, secret } = en.body);
+        assert.match(String(en.body.qrCode), /^data:image\/svg/);
+        assert.equal(en.headers.get("cache-control"), "private, no-store");
+        const factors = await db.query<{ id: string; status: string }>("select id, status::text from auth.mfa_factors where user_id = $1", [admin.id]);
+        assert.deepEqual(factors.rows, [{ id: factorId, status: "unverified" }], "the abandoned enrolment was removed");
+
+        const wrong = String((Number(totp(secret)) + 1) % 1_000_000).padStart(6, "0");
+        expect(await call(adminCookie, "POST", "/api/auth/mfa/verify", { factorId, code: wrong }), 422, "validation_failed", "wrong code");
+        expect(await call(adminCookie, "POST", "/api/auth/mfa/verify", { factorId, code: "12" }), 422, "validation_failed", "short code");
+        expect(await call(adminCookie, "POST", "/api/auth/mfa/verify", { factorId: "nope", code: "123456" }), 422, "validation_failed", "bad factor id");
+        expect(await call(adminCookie, "GET", "/api/platform/workspaces"), 403, "mfa_required", "still AAL1 after wrong codes");
+
+        adminCookie = await verifyWithApp(adminCookie);
+        expect(await call(adminCookie, "POST", "/api/auth/mfa/enroll", {}), 409, "factor_exists", "second authenticator");
+        assert.equal((await call(adminCookie, "GET", "/api/platform/workspaces")).status, 200);
+        const consolePage = await appFetch(app, "/platform", { cookie: adminCookie });
+        assert.equal(consolePage.status, 200);
+        for (const marker of ["Platform administration", "All workspaces", "Active support access"]) assert.ok(consolePage.text.includes(marker), marker);
+        assert.equal(/class="sidebar/.test(consolePage.text), false, "the console has no client sidebar");
+        const back = await appFetch(app, "/platform/mfa", { cookie: adminCookie });
+        assert.deepEqual([back.status, new URL(back.location!, app.url).pathname], [307, "/platform"]);
+
+        const relogin = await appLogin(app, admin);
+        expect(await call(relogin, "GET", "/api/platform/workspaces"), 403, "mfa_required", "a new password session is AAL1 again");
+        const again = await call(relogin, "GET", "/api/auth/mfa");
+        assert.deepEqual(again.body.factors.map((f: { id: string }) => f.id), [factorId]);
+        assert.equal(JSON.stringify(again.body).includes(secret), false, "the setup key is never shown again");
+        const upgraded = await verifyWithApp(relogin);
+        assert.equal((await call(upgraded, "GET", "/api/platform/audit")).status, 200);
+      });
+
+      test("provisioning through the app: validated, idempotent, one winner under concurrency, owner link shown once", async () => {
+        const body = { provisioningKey: `p6-alpha-${run}`, name: BUSINESS, slug: `p6-alpha-${run}`, ownerEmail: email("p6-alpha-owner") };
+        for (const [bad, field] of [[{ ...body, slug: "Bad Slug" }, "slug"], [{ ...body, ownerEmail: "nope" }, "ownerEmail"],
+          [{ ...body, status: "active" }, "body"], [{ ...body, workspaceId: wsA, provisioningKey: "x" }, "provisioningKey"]] as const) {
+          const r = await call(adminCookie, "POST", "/api/platform/workspaces", bad);
+          expect(r, 422, "validation_failed", `malformed ${field}`);
+          assert.ok(field in (r.body.fields ?? {}), `${field}: ${r.text}`);
+        }
+        const results = await Promise.all(Array.from({ length: 4 }, () => call(adminCookie, "POST", "/api/platform/workspaces", body)));
+        for (const r of results) assert.equal(r.status, 200, r.text);
+        assert.equal(new Set(results.map((r) => r.body.workspaceId)).size, 1, "every caller gets the same workspace");
+        const winners = results.filter((r) => r.body.created);
+        assert.equal(winners.length, 1, "exactly one call created it");
+        assert.deepEqual(results.filter((r) => r.body.inviteUrl).length, 1, "the owner link is returned once");
+        wsP = winners[0].body.workspaceId;
+        firstToken = tokenOf(winners[0].body.inviteUrl);
+        const repeat = await call(adminCookie, "POST", "/api/platform/workspaces", body);
+        assert.deepEqual(repeat.body, { ok: true, workspaceId: wsP, created: false, inviteUrl: null });
+        expect(await call(adminCookie, "POST", "/api/platform/workspaces", { ...body, name: "Someone Else" }), 409, "conflict", "same key, other inputs");
+        expect(await call(adminCookie, "POST", "/api/platform/workspaces", { ...body, provisioningKey: `p6-other-${run}` }), 409, "conflict", "slug taken");
+
+        const rows = await db.query<{ n: number; stages: number; creator: string }>(
+          `select count(*)::int n, (select count(*)::int from public.pipeline_stages where workspace_id = $2) stages,
+                  max(created_by::text) creator
+           from public.workspaces where provisioning_key = $1`, [body.provisioningKey, wsP]);
+        assert.deepEqual(rows.rows[0], { n: 1, stages: 12, creator: admin.id });
+        const provAudit = (await platformAudit(wsP)).filter((a) => a.action === "workspace.provisioned");
+        assert.deepEqual(provAudit.map((a) => a.actor_id), [admin.id]);
+
+        const detail = await call(adminCookie, "GET", `/api/platform/workspaces/${wsP}`);
+        assert.equal(detail.status, 200, detail.text);
+        assert.deepEqual([detail.body.workspace.name, detail.body.workspace.status, detail.body.workspace.canRotateBootstrap,
+          detail.body.workspace.ownerAcquiredAt, detail.body.workspace.members], [BUSINESS, "active", true, null, { owner: 0, admin: 0, employee: 0 }]);
+        assert.ok(detail.body.workspace.openOwnerInvitation?.expiresAt);
+        assert.equal(TOKEN_LIKE.test(detail.text), false, "no invitation token or hash in the detail");
+      });
+
+      test("replacing the owner invitation: reason required, old link revoked, owner joins, then refused", async () => {
+        const path = `/api/platform/workspaces/${wsP}/bootstrap-invitation`;
+        expect(await call(adminCookie, "POST", path, {}), 422, "validation_failed", "no reason");
+        expect(await call(adminCookie, "POST", path, { reason: "lost" }), 422, "validation_failed", "short reason");
+        expect(await call(adminCookie, "POST", `/api/platform/workspaces/${"0".repeat(8)}-0000-4000-8000-000000000000/bootstrap-invitation`,
+          { reason: REASON }), 404, "not_found", "unknown workspace");
+        const rotated = await call(adminCookie, "POST", path, { reason: REASON });
+        assert.equal(rotated.status, 200, rotated.text);
+        const token = tokenOf(rotated.body.inviteUrl);
+        assert.notEqual(token, firstToken);
+        assert.equal(rotated.body.revokedInvitations, 1);
+        expect(await appFetch(app, `/api/invitations/${firstToken}`), 410, "invitation_revoked", "old link");
+
+        const joined = await appFetch(app, `/api/invitations/${token}/accept`, { method: "POST", json: { password: "Local-p6-owner-pass-1" } });
+        assert.equal(joined.status, 200, joined.text);
+        assert.equal(joined.body.workspace?.id, wsP);
+        pOwnerCookie = cookieHeader(joined.setCookies);
+        expect(await call(adminCookie, "POST", path, { reason: REASON }), 409, "conflict", "after the owner joined");
+        const detail = await call(adminCookie, "GET", `/api/platform/workspaces/${wsP}`);
+        assert.deepEqual([detail.body.workspace.canRotateBootstrap, detail.body.workspace.openOwnerInvitation, detail.body.workspace.members.owner],
+          [false, null, 1]);
+        assert.ok(detail.body.workspace.ownerAcquiredAt);
+        const rot = (await platformAudit(wsP)).filter((a) => a.action === "workspace.bootstrap_invitation_rotated");
+        assert.deepEqual(rot.map((a) => [a.actor_id, a.reason]), [[admin.id, REASON]]);
+        assert.equal(TOKEN_LIKE.test(JSON.stringify(rot.map((a) => a.metadata))), false, "no token in the audit metadata");
+
+        const c = await call(pOwnerCookie, "POST", "/api/contacts", { firstName: "Paula", lastName: "Synthetic" });
+        assert.equal(c.status, 200, c.text);
+        pContact = c.body.contact.id;
+      });
+
+      test("search, status filter, and keyset paging with exact totals", async () => {
+        const made: string[] = [];
+        for (let i = 0; i < 3; i++) {
+          const r = await call(adminCookie, "POST", "/api/platform/workspaces", {
+            provisioningKey: `p6-page-${run}-${i}`, name: `P6 Page ${i} (synthetic)`, slug: `p6-page-${run}-${i}`, ownerEmail: email(`p6-page-${i}`) });
+          assert.equal(r.status, 200, r.text);
+          made.push(r.body.workspaceId);
+        }
+        const pages: string[][] = [];
+        const totals = new Set<number>();
+        let cursor: string | null = null;
+        do {
+          const r: R = await call(adminCookie, "GET", `/api/platform/workspaces?q=p6-page-${run}&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+          assert.equal(r.status, 200, r.text);
+          pages.push(r.body.items.map((w: { id: string }) => w.id));
+          totals.add(r.body.total);
+          cursor = r.body.nextCursor;
+        } while (cursor);
+        assert.deepEqual(pages.map((p) => p.length), [2, 1]);
+        assert.deepEqual(pages.flat(), [...made].reverse(), "newest first, no overlap, nothing skipped");
+        assert.deepEqual([...totals], [3]);
+        const byEmail = await call(adminCookie, "GET", `/api/platform/workspaces?q=${encodeURIComponent(email("p6-page-1"))}`);
+        assert.deepEqual(byEmail.body.items.map((w: { id: string }) => w.id), [made[1]]);
+        const literal = await call(adminCookie, "GET", `/api/platform/workspaces?q=${encodeURIComponent("p6%page")}`);
+        assert.equal(literal.body.total, 0, "% is matched literally");
+        const suspendedOnly = await call(adminCookie, "GET", `/api/platform/workspaces?q=p6-page-${run}&status=suspended`);
+        assert.deepEqual([suspendedOnly.body.total, suspendedOnly.body.items], [0, []]);
+        const one = (await call(adminCookie, "GET", `/api/platform/workspaces?q=p6-alpha-${run}`)).body.items[0];
+        assert.deepEqual([one.id, one.memberCount, one.ownerJoined], [wsP, 1, true]);
+        expect(await call(adminCookie, "GET", "/api/platform/workspaces?limit=101"), 422, "validation_failed", "limit");
+        expect(await call(adminCookie, "GET", "/api/platform/workspaces?cursor=bogus"), 422, "validation_failed", "cursor");
+        expect(await call(adminCookie, "GET", "/api/platform/workspaces?status=deleted"), 422, "validation_failed", "status");
+      });
+
+      test("support grants: read reads only, write is attributed, other workspaces stay 404, ending access applies on the next request", async () => {
+        const read = await grantTo(wsP, "read");
+        try {
+          const list = await call(adminCookie, "GET", "/api/contacts");
+          assert.equal(list.status, 200, list.text);
+          assert.deepEqual(list.body.items.map((c: { id: string }) => c.id), [pContact]);
+          expect(await call(adminCookie, "POST", "/api/contacts", { firstName: "Nope" }), 403, "forbidden", "write under a read grant");
+          expect(await call(adminCookie, "GET", `/api/contacts/${contactA}`), 404, "not_found", "another workspace's contact");
+          const page = await appFetch(app, "/dashboard", { cookie: adminCookie });
+          assert.equal(page.status, 200);
+          const banner = new RegExp(`Platform support access:.*${BUSINESS.replace(/[()]/g, "\\$&")}.*Read-only.*expires.*\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}.*UTC`);
+          assert.match(page.text.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, ""), banner, "the banner names the workspace, mode, and expiry");
+          const active = await call(adminCookie, "GET", "/api/platform/access");
+          assert.deepEqual(active.body.items.map((g: { id: string; mine: boolean }) => [g.id, g.mine]), [[read.id, true]]);
+
+          expect(await call(adminCookie, "DELETE", `/api/platform/access/${read.id}`, {}), 422, "validation_failed", "end without reason");
+          const ended = await call(adminCookie, "DELETE", `/api/platform/access/${read.id}`, { reason: "Customer issue resolved" });
+          assert.equal(ended.status, 200, ended.text);
+          expect(await call(adminCookie, "GET", "/api/contacts"), 403, "no_active_workspace", "next request after ending");
+          expect(await call(adminCookie, "DELETE", `/api/platform/access/${read.id}`, { reason: "Customer issue resolved" }), 404, "not_found", "end twice");
+          const history = await call(adminCookie, "GET", "/api/platform/access?include=all");
+          const row = history.body.items.find((g: { id: string }) => g.id === read.id);
+          assert.deepEqual([row.active, Boolean(row.revokedAt), row.reason], [false, true, REASON]);
+          assert.deepEqual((await call(adminCookie, "GET", "/api/platform/access")).body.items, []);
+        } finally {
+          await endGrant(read.id);
+        }
+
+        const write = await grantTo(wsP, "write");
+        try {
+          const made = await call(adminCookie, "POST", "/api/contacts", { firstName: "Support", lastName: "Written" });
+          assert.equal(made.status, 200, made.text);
+          expect(await call(adminCookie, "PATCH", `/api/contacts/${contactA}`, { firstName: "Hijack" }), 404, "not_found", "write to another workspace");
+          const audit = await db.query(
+            "select actor_id, actor_kind, action, target from public.workspace_audit_log where grant_id = $1 and action = 'contacts.insert'", [write.id]);
+          assert.deepEqual(audit.rows, [{ actor_id: admin.id, actor_kind: "platform_admin", action: "contacts.insert", target: made.body.contact.id }]);
+          const contactRow = await db.query("select created_by from public.contacts where id = $1", [made.body.contact.id]);
+          assert.equal(contactRow.rows[0].created_by, admin.id);
+          const page = await appFetch(app, "/contacts", { cookie: adminCookie });
+          assert.match(page.text.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, ""), /Platform support access:.*Read and write/);
+        } finally {
+          await endGrant(write.id);
+        }
+        const contactsA = await db.query("select first_name from public.contacts where workspace_id = $1 and first_name = 'Hijack'", [wsA]);
+        assert.equal(contactsA.rowCount, 0);
+
+        const auditApi = await call(adminCookie, "GET", `/api/platform/workspaces/${wsP}/audit?limit=100`);
+        assert.equal(auditApi.status, 200, auditApi.text);
+        const items = auditApi.body.items as { action: string; reason: string | null; actorEmail: string; metadata: any; workspaceId: string }[];
+        const granted = items.filter((a) => a.action === "access.granted");
+        const revoked = items.filter((a) => a.action === "access.revoked");
+        assert.equal(granted.length, 2);
+        assert.ok(granted.every((a) => a.actorEmail === admin.email && a.reason === REASON && a.workspaceId === wsP));
+        assert.deepEqual(revoked.map((a) => [a.reason, a.metadata.grant_id]).sort(),
+          [["Customer issue resolved", read.id], ["Support session finished", write.id]].sort());
+        assert.equal(TOKEN_LIKE.test(auditApi.text.replace(/"nextCursor":"[^"]*"/, "")), false, "no credentials in the audit view");
+        const wsSide = await db.query<{ action: string; metadata: any }>(
+          "select action, metadata from public.workspace_audit_log where workspace_id = $1 and action = 'platform.access_revoked' order by id", [wsP]);
+        assert.deepEqual(wsSide.rows.map((r) => r.metadata.reason), ["Customer issue resolved", "Support session finished"]);
+      });
+
+      test("a one-minute grant created in the console expires by the clock on the next request", async () => {
+        const g = await grantTo(wsP, "read", 1);
+        try {
+          assert.equal((await call(adminCookie, "GET", "/api/contacts")).status, 200);
+          const wait = Date.parse(g.expiresAt) - Date.now() + 1500;
+          assert.ok(wait > 0 && wait < 65_000, `expiry in ${wait} ms`);
+          await new Promise((r) => setTimeout(r, wait));
+          expect(await call(adminCookie, "GET", "/api/contacts"), 403, "no_active_workspace", "after expiry");
+          assert.equal((await call(adminCookie, "GET", "/api/platform/access")).body.items.length, 0);
+          const hist = (await call(adminCookie, "GET", "/api/platform/access?include=all")).body.items.find((x: { id: string }) => x.id === g.id);
+          assert.deepEqual([hist.active, hist.revokedAt], [false, null], "expired, not revoked");
+          expect(await call(adminCookie, "DELETE", `/api/platform/access/${g.id}`, { reason: "Ending an expired grant" }), 404, "not_found",
+            "an expired grant cannot be ended");
+          const ended = await db.query("select count(*)::int n from public.platform_audit_log where action = 'access.revoked' and metadata ->> 'grant_id' = $1", [g.id]);
+          assert.equal(ended.rows[0].n, 0, "no end-of-access entry for a grant that had already expired");
+        } finally {
+          if (Date.parse(g.expiresAt) > Date.now()) await endGrant(g.id);
+        }
+      });
+
+      test("suspension from the console: members 423, read grants still read, write grants 423, reactivation restores everything", async () => {
+        const write = await grantTo(wsP, "write");
+        let reactivated = false;
+        try {
+          expect(await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/suspend`, {}), 422, "validation_failed", "suspend without reason");
+          const s = await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/suspend`, { reason: REASON });
+          assert.equal(s.status, 200, s.text);
+          assert.deepEqual([s.body.workspace.status, s.body.workspace.suspendedReason], ["suspended", REASON]);
+          expect(await call(pOwnerCookie, "GET", "/api/contacts"), 423, "workspace_suspended", "owner during suspension");
+          expect(await call(pOwnerCookie, "POST", "/api/contacts", { firstName: "Blocked" }), 423, "workspace_suspended", "owner write");
+          // A write grant on a suspended workspace confers nothing (active_grant_id), so it is no workspace at all.
+          expect(await call(adminCookie, "POST", "/api/contacts", { firstName: "Blocked" }), 403, "no_active_workspace", "existing write grant");
+          expect(await call(adminCookie, "GET", "/api/contacts"), 403, "no_active_workspace", "existing write grant read");
+          assert.equal((await db.query("select count(*)::int n from public.contacts where workspace_id = $1 and first_name = 'Blocked'", [wsP])).rows[0].n, 0);
+          const newWrite = await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/access`, { mode: "write", reason: REASON, durationMinutes: 5 });
+          expect(newWrite, 423, "workspace_suspended", "new write grant");
+          await endGrant(write.id);
+          const read = await grantTo(wsP, "read", 5);
+          try {
+            const list = await call(adminCookie, "GET", "/api/contacts");
+            assert.equal(list.status, 200, list.text);
+            assert.ok(list.body.items.some((c: { id: string }) => c.id === pContact));
+            const page = await appFetch(app, "/dashboard", { cookie: adminCookie });
+            assert.match(page.text.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, ""), /Platform support access:.*\(suspended\).*Read-only/);
+          } finally {
+            await endGrant(read.id);
+          }
+          const filtered = await call(adminCookie, "GET", `/api/platform/workspaces?status=suspended&q=p6-alpha-${run}`);
+          assert.deepEqual(filtered.body.items.map((w: { id: string }) => w.id), [wsP]);
+
+          expect(await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/reactivate`, { reason: "x" }), 422, "validation_failed", "short reason");
+          const r = await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/reactivate`, { reason: "Billing resolved with the owner" });
+          assert.equal(r.status, 200, r.text);
+          reactivated = true;
+          assert.equal(r.body.workspace.status, "active");
+          const back = await call(pOwnerCookie, "GET", "/api/contacts");
+          assert.equal(back.status, 200, back.text);
+          assert.ok(back.body.items.some((c: { id: string }) => c.id === pContact), "records survive suspension");
+          const actions = (await platformAudit(wsP)).filter((a) => a.action.startsWith("workspace.") && a.action !== "workspace.provisioned");
+          assert.deepEqual(actions.map((a) => [a.action, a.actor_id, a.reason]).slice(-2),
+            [["workspace.suspended", admin.id, REASON], ["workspace.reactivated", admin.id, "Billing resolved with the owner"]]);
+        } finally {
+          await endGrant(write.id);
+          if (!reactivated) await call(adminCookie, "POST", `/api/platform/workspaces/${wsP}/reactivate`, { reason: "stack test cleanup reactivation" });
+        }
+      });
+
+      test("sensitive actions re-check the session: a logged-out AAL2 cookie is refused and nothing is recorded", async () => {
+        const second = await verifyWithApp(await appLogin(app, admin));
+        const before = (await db.query("select count(*)::int n from public.platform_audit_log where actor_id = $1", [admin.id])).rows[0].n;
+        assert.equal((await call(second, "POST", "/api/auth/logout")).status, 200);
+        const r = await call(second, "POST", `/api/platform/workspaces/${wsP}/suspend`, { reason: REASON });
+        assert.ok(r.status === 401, `${r.status} ${r.text}`);
+        const after = (await db.query("select count(*)::int n from public.platform_audit_log where actor_id = $1", [admin.id])).rows[0].n;
+        assert.equal(after, before);
+        assert.equal((await db.query("select status from public.workspaces where id = $1", [wsP])).rows[0].status, "active");
+      });
+
+      test("browser: AAL1 admin is sent to MFA, enrols in the UI, provisions, opens support access, sees the banner, ends it", async () => {
+        const shots = mkdtempSync(join(tmpdir(), "fna-p6-browser-"));
+        const base = app.url.replace("//127.0.0.1:", "//localhost:");
+        const bAdmin = await signUp(env, email("p6-browser-admin"), "P6 Browser Admin");
+        await db.query("insert into public.platform_admins (user_id) values ($1)", [bAdmin.id]);
+        const browser = await launchBrowser();
+        try {
+          const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+          ctx.setDefaultTimeout(20_000);
+          await ctx.addInitScript("window.__name = (f) => f");
+          const page = await ctx.newPage();
+          await page.goto(`${base}/login`);
+          await page.fill("#email", bAdmin.email);
+          await page.fill("#password", bAdmin.password);
+          await page.click("button[type=submit]");
+          await page.waitForURL(/\/no-access$/);
+          await page.getByRole("link", { name: "Verify authenticator for platform administration" }).click();
+          await page.waitForURL(/\/platform\/mfa$/);
+          await page.getByRole("button", { name: "Set up authenticator app" }).click();
+          const key = await page.locator("#mfa-secret").inputValue();
+          await page.getByRole("img", { name: "Authenticator QR code" }).waitFor();
+          await page.screenshot({ path: join(shots, "mfa-enrol.png"), fullPage: true });
+          await page.fill("#mfa-code", String((Number(totp(key)) + 1) % 1_000_000).padStart(6, "0"));
+          await page.getByRole("button", { name: "Verify" }).click();
+          await page.getByRole("alert").getByText("That code is not valid.", { exact: false }).waitFor();
+          await page.fill("#mfa-code", totp(key));
+          await page.getByRole("button", { name: "Verify" }).click();
+          await page.waitForURL(/\/platform$/);
+          await page.getByRole("heading", { name: "Workspaces", exact: true }).waitFor();
+          assert.equal(await page.locator(".sidebar").count(), 0, "no client sidebar in the console");
+
+          await page.getByRole("button", { name: "Provision workspace" }).click();
+          await page.fill("#prov-name", "P6 Browser Business");
+          assert.equal(await page.locator("#prov-slug").inputValue(), "p6-browser-business");
+          await page.fill("#prov-slug", `p6-browser-${run}`);
+          await page.fill("#prov-owner", email("p6-browser-owner"));
+          await page.fill("#prov-key", `p6-browser-${run}`);
+          await page.getByRole("dialog").getByRole("button", { name: "Provision" }).click();
+          await page.getByText("This link is shown only once.", { exact: false }).waitFor();
+          const link = await page.locator("#platform-invite-link").inputValue();
+          assert.match(link, /\/invite\/[0-9a-f]{64}$/);
+          await page.screenshot({ path: join(shots, "provisioned.png"), fullPage: true });
+          await page.getByRole("button", { name: "Done" }).click();
+
+          await page.fill("#ws-search", `p6-alpha-${run}`);
+          await page.getByRole("link", { name: BUSINESS }).click();
+          await page.waitForURL(new RegExp(`/platform/workspaces/${wsP}$`));
+          await page.getByText("1 active member(s)", { exact: false }).waitFor();
+          assert.equal(await page.getByRole("button", { name: "Replace owner invitation" }).count(), 0, "owner already joined");
+          await page.screenshot({ path: join(shots, "workspace-detail.png"), fullPage: true });
+          await page.selectOption("#grant-mode", "read");
+          await page.selectOption("#grant-duration", "15");
+          await page.fill("#grant-reason", "short");
+          await page.getByRole("button", { name: "Start support access" }).click();
+          await page.getByText("Give a reason of at least 10 characters.").waitFor();
+          await page.fill("#grant-reason", "Browser support check for P6");
+          await page.getByRole("button", { name: "Start support access" }).click();
+          await page.waitForURL(/\/dashboard$/);
+          const banner = page.getByRole("status", { name: "Platform support access" });
+          await banner.getByText(/P6 Alpha \(synthetic\) · Read-only · expires \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC \(1[45] min left\)/).waitFor();
+          await page.screenshot({ path: join(shots, "support-banner.png"), fullPage: true });
+          await banner.getByRole("button", { name: "End access" }).click();
+          await page.getByRole("dialog").getByRole("button", { name: "End access" }).click();
+          await page.waitForURL(/\/platform$/);
+          await page.getByText("No support access is active.").waitFor();
+          const live = await db.query("select count(*)::int n from public.platform_access_grants where admin_user_id = $1 and revoked_at is null and expires_at > now()", [bAdmin.id]);
+          assert.equal(live.rows[0].n, 0);
+
+          await page.getByRole("link", { name: "Audit log" }).click();
+          await page.waitForURL(/\/platform\/audit$/);
+          await page.getByText("Browser support check for P6").first().waitFor();
+          await page.screenshot({ path: join(shots, "audit.png"), fullPage: true });
+          assert.equal(TOKEN_LIKE.test(await page.content()), false, "no tokens on the audit page");
+          console.log(`P6 browser screenshots: ${shots}`);
+        } catch (err) {
+          let n = 0;
+          for (const c of browser.contexts()) {
+            for (const p of c.pages()) {
+              console.error(`P6 browser page ${n}: ${p.url()}`);
+              await p.screenshot({ path: join(shots, `failure-${n++}.png`), fullPage: true }).catch(() => undefined);
+            }
+          }
+          console.error(`P6 browser flow failed (screenshots so far: ${shots}):`, err);
           throw err;
         } finally {
           await browser.close().catch(() => undefined);

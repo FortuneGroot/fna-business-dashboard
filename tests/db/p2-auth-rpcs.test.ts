@@ -22,7 +22,7 @@ type Listed = { id: string; name: string; slug: string; status: string; role: st
 const list = (u: TestUser) => asUser(w.db, u, (q) => rpc<Listed[]>(q, "list_my_workspaces"));
 const grant = (mode: "read" | "write", ws = w.wsA) =>
   asUser(w.db, w.platform, (q) => rpc<{ id: string }>(q, "platform_grant_access", [ws, mode, `p2 rpc test ${mode} grant`, 15]));
-const revoke = (id: string) => asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [id]));
+const revoke = (id: string) => asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [id, "Support session finished"]));
 const requested = (u: TestUser, op: string, path: string) =>
   asUser(w.db, u, (q) => rpc<number>(q, "platform_storage_change_requested", [op, path]));
 const claim = (id: number, actor: TestUser) =>
@@ -139,7 +139,7 @@ describe("P2: audited platform Storage change RPCs", () => {
     try {
       await assert.rejects(requested(both, "upsert", logo()), /forbidden/);
     } finally {
-      await asUser(w.db, both, (q) => rpc(q, "platform_revoke_access", [g.id]));
+      await asUser(w.db, both, (q) => rpc(q, "platform_revoke_access", [g.id, "Support session finished"]));
     }
   });
 

@@ -66,7 +66,7 @@ describe("super-admin workspace access is explicit, time-boxed, and audited", ()
       asUser(w.db, w.platform, (q) => q.query(
         "insert into public.contacts (workspace_id, first_name) values ($1, 'x')", [w.wsA])),
       /row-level security/);
-    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
     assert.equal(await contactCount(w.platform), 0);
   });
 
@@ -86,7 +86,7 @@ describe("super-admin workspace access is explicit, time-boxed, and audited", ()
       asUser(w.db, w.platform, (q) => q.query(
         "insert into public.integrations (workspace_id, provider) values ($1, 'test_provider')", [w.wsA])),
       /row-level security/);
-    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
   });
 
   test("an expired grant ends access without any action", async () => {
@@ -158,7 +158,7 @@ describe("suspended workspaces lose ordinary access", () => {
     const grant = await asUser(w.db, w.platform, (q) =>
       rpc<{ id: string }>(q, "platform_grant_access", [w.wsA, "read", "Review account during suspension", 30]));
     assert.ok(await contactCount(w.platform) > 0);
-    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id]));
+    await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [grant.id, "Support session finished"]));
   });
 
   test("reactivation restores member access with no data loss", async () => {

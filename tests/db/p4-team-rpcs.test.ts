@@ -186,7 +186,7 @@ describe("P4: configuration changes are attributed (activity + audit)", () => {
       assert.deepEqual(activity.map((a) => [a.actor_id, a.actor_kind, a.payload.fields]), [[w.platform.id, "platform_admin", ["industry"]]]);
       assert.deepEqual(audit.map((a) => [a.action, a.actor_kind]), [["workspace_settings.update", "platform_admin"]]);
     } finally {
-      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [g.id]));
+      await asUser(w.db, w.platform, (q) => rpc(q, "platform_revoke_access", [g.id, "Support session finished"]));
     }
   });
 });

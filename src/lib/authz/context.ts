@@ -12,8 +12,8 @@ import {
 } from "@/lib/supabase/server";
 import {
   contextFromRpc,
+  denialRedirect,
   evaluateContext,
-  PAGE_DENIAL_REDIRECT,
   type ContextDenial,
   type ContextRequirement,
   type RequestContext,
@@ -157,6 +157,6 @@ export async function requirePageContext(requirement: ContextRequirement = {}): 
     throw err;
   }
   const denial = evaluateContext(ctx, requirement);
-  if (denial) redirect(PAGE_DENIAL_REDIRECT[denial]);
+  if (denial) redirect(denialRedirect(denial, ctx));
   return ctx!;
 }

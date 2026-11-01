@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Sidebar, useSidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { Footer } from "./Chrome";
+import { SupportAccessBanner } from "./SupportAccess";
 
 function AccessDeniedBanner() {
   const path = usePathname();
@@ -50,6 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="app-main">
         <TopBar path={path} onMenu={() => setOpen(true)} menuOpen={open} />
         <main id="main-content" className="app-content" tabIndex={-1}>
+          <SupportAccessBanner />
           <Suspense fallback={null}>
             <AccessDeniedBanner />
           </Suspense>
