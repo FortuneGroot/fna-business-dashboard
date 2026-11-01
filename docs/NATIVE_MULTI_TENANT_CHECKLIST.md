@@ -1,8 +1,8 @@
-# Native Multi-Tenant — P1 / P2 / P3 / P4 Checklist
+# Native Multi-Tenant — P1 / P2 / P3 / P4 / P5 Checklist
 
-Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record).
+Companion to `docs/NATIVE_MULTI_TENANT_SPEC.md` (§14 decisions, §15 P1 record, §16 P2 record, §17 P3 record, §18 P4 record, §19 P5 record).
 Status as of 2026-11-01. Branch `feat/native-multi-tenant`, committed locally only; nothing pushed or deployed.
-**Stop point: end of P4. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records and Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); legacy mode (default) is unchanged. Create/edit of records (P5) is next.**
+**Stop point: end of P5. With `AUTH_PROVIDER=supabase`, pages read each workspace's own records; Settings manages the team, invitations (links shown once; nothing sent), workspace profile, AI receptionist settings (stays off), and integrations (read-only); Contacts, Opportunities, Calendars, Tasks, and the inbox (internal notes only) create and edit native records. Legacy mode (default) is unchanged. The platform console (P6) is next.**
 
 Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot be verified on this machine (never counted as passed).
 
@@ -106,12 +106,25 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [ ] Overrides editor in Settings (API exists).
 - [ ] Logout-replay decision (above) still open.
 
+## P5 native records
+
+- [x] M18: atomic `save_contact`, `save_calendar`, `replace_availability` (security invoker, caller's JWT) and activity events with actor and changed field names only; rollback block.
+- [x] Contacts: create, edit, detail, notes, soft delete (owner/admin, audited), multi-word search, tag filter, keyset pages, exact totals.
+- [x] Opportunities: create, edit, move by stage id, soft delete; exact cents; won/lost and `closed_at` from the stage.
+- [x] Calendars: create/edit, member assignment, weekly availability; appointments create/reschedule/status with overlap refused (also under concurrency).
+- [x] Tasks: create/edit, assignment to active members only, status changes, exact counts.
+- [x] Inbox: conversation and message reads with paging; internal notes only; no send path; NET-1 still empty.
+- [x] Cross-workspace references and removed assignees refused (422); other workspaces' ids 404; client workspace ids ignored.
+- [x] UI in the existing pages, cards, tables, and modals; legacy mode renders the original pages (original inbox kept verbatim).
+- [x] Browser flow against the real local stack (contacts, opportunity to Won, calendar and booking with overlap error, task done, inbox note).
+- [ ] Board edits limited to the 8 opportunities shown per column; no delete for appointments/tasks (cancel/complete instead).
+
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 257, db 197, realpg 28, stack 46) | [x] all four suites PASS: unit 257, db 197, realpg 28, stack 46 |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 197/197 |
+| `npm test` | runner (minimums: unit 278, db 209, realpg 28, stack 53) | [x] all four suites PASS: unit 278, db 209, realpg 28, stack 53 |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 209/209 |
 | `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
@@ -126,7 +139,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | App reads native data (P3): API-1 shapes and parity with the owner's PostgREST view, ISO through APIs and pages, tenant config/public, health, retired endpoints, UI-1, native empty states | real Supabase local stack | [x] PASS (5 tests) |
 | P3 review fixes: pipeline columns and calendar cards by id | real Supabase local stack | [x] PASS (3 tests) |
 | P4 team and settings: INV, ROLE, MEM, SUSP, SET-1..7, browser flow; NET-1 (no outbound connection, no SMTP/SMS route) | real Supabase local stack + Chromium | [x] PASS (10 tests) |
-| UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run: sidebar 0.00% on all 20 pages; copy-only differences (§17.4) |
+| P5 native records: CRUD-1..5, workspace switching, browser flow (NET-1 still empty) | real Supabase local stack + Chromium | [x] PASS (7 tests) |
+| UI-2 visual diff against `docs/baseline/screenshots/` | disposable stack + built app + cached Chromium | [x] run after P5: sidebar 0.00% on all 20 pages; P5 pages 1.2–2.2% (native copy and controls); Settings/Onboarding differ by P4 content (§19.5) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
 ## Remaining blockers / before staging
@@ -136,4 +150,4 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 ## Not done by instruction
 
-No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), and the native Settings cards and invite landing page (P4).
+No production access, deployment, push, real invitations, outbound communications, or purchases. Authentication and data-layer changes are local and off by default (`AUTH_PROVIDER=legacy`); UI changes are the two access pages (P2), native copy in the existing layouts (P3), the native Settings cards and invite landing page (P4), and native create/edit controls in the existing record pages (P5).

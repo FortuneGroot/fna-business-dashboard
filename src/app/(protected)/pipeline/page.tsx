@@ -2,6 +2,7 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
+import { AddOpportunity, EditOpportunity } from "@/components/records/NativeBoard";
 import { getPageData } from "@/lib/data";
 import { pipelineColumns } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_STAGES, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
@@ -29,12 +30,15 @@ export default async function PipelinePage() {
   });
   const boardCount = native ? columns.reduce((s, c) => s + c.count, 0) : opps.length;
   const waiting = boardCount === 0;
+  const boardStages = workspace.stages.map((s) => ({ id: s.id, name: s.name }));
+  const canEdit = native && data.can("opportunities.write");
 
   return (
     <AppShell>
       <PageHead
         title="Opportunities"
         description={`Your sales board — opportunities grouped by stage. ${copy.sourceShort}`}
+        action={canEdit && !stagesBlocked ? <AddOpportunity stages={boardStages} /> : undefined}
       />
 
       <StatusBanner>
@@ -94,6 +98,13 @@ export default async function PipelinePage() {
                       <li key={o.externalOpportunityId} className="muted">
                         Opportunity
                         {o.monetaryValue != null ? ` · $${o.monetaryValue}` : ""}
+                        {canEdit ? (
+                          <EditOpportunity
+                            id={o.externalOpportunityId}
+                            stages={boardStages}
+                            canDelete={data.can("opportunities.delete")}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>

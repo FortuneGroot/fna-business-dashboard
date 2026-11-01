@@ -1,10 +1,17 @@
-import { getPageData } from "@/lib/data";
+import { getPageData, getPageScope } from "@/lib/data";
+import { NativeContacts } from "@/components/records/NativeContacts";
+import { listContacts } from "@/lib/native/contacts";
 import { ContactsClient } from "./ContactsClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function ContactsPage() {
   const { reader, native } = await getPageData();
+  if (native) {
+    const scope = await getPageScope();
+    const initial = await listContacts(scope, { limit: 50 });
+    return <NativeContacts initial={initial} permissions={scope.ctx.permissions} />;
+  }
   const contacts = await reader.listContacts();
   const waiting = contacts.length === 0;
   const rows = contacts.map((c) => ({

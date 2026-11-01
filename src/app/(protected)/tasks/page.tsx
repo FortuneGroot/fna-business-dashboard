@@ -2,13 +2,20 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { getPageData } from "@/lib/data";
+import { NativeTasks } from "@/components/records/NativeTasks";
+import { getPageData, getPageScope } from "@/lib/data";
+import { listTasks, taskCounts } from "@/lib/native/tasks";
 import { dataCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
 export default async function TasksPage() {
   const { reader, native } = await getPageData();
+  if (native) {
+    const scope = await getPageScope();
+    const [initial, counts] = await Promise.all([listTasks(scope, { limit: 50 }), taskCounts(scope)]);
+    return <NativeTasks initial={initial} counts={counts} canWrite={scope.ctx.permissions.includes("tasks.write")} />;
+  }
   const copy = dataCopy(native);
   const tasks = await reader.listTaskEvents(50);
   const waiting = tasks.length === 0;

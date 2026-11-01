@@ -1051,7 +1051,7 @@ The legacy migrations originally shared the 8-digit version `20260917`. They are
 | P2 Auth | Supabase auth behind `AUTH_PROVIDER`; request context; middleware | AUTH-* pass; legacy mode still passes the original 137 tests |
 | P3 Read parity | Existing pages and `/api/dashboard/*` read native tables via adapters | UI-1, UI-2 visual parity; API-1 shape tests — done locally (§17): API-1, ISO, and UI-1 pass on the real stack; UI-2 run with a local harness (sidebar 0.00% on all 20 pages; differences are copy) |
 | P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass — done locally (§18): INV, ROLE, MEM, SUSP, SET-1..7, browser flow, and NET-1 pass on the real stack |
-| P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) |
+| P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) — done locally (§19): CRUD-1..5, workspace switching, browser flow, and NET-1 pass on the real stack |
 | P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass |
 | P7 GHL removal | Delete §8.3 files; env cleanup | GHL-1, GHL-2 pass; build + all tests green |
 | P8 Staging rehearsal | T3–T4 on staging | Full suite green on staging; George signs off |
@@ -1509,3 +1509,59 @@ Local only: nothing pushed, deployed, or applied to a hosted project. No invitat
 | `npm run build` | Next.js 15.5.25 | PASS |
 
 The stack suite could not observe a mail catcher (the local config disables `local_smtp`); NET-1 instead asserts that the disposable config has no SMTP or SMS route and that the app opened no non-loopback connection.
+
+## 19. P5 implementation record (native records)
+
+Local only: nothing pushed, deployed, or applied to a hosted project. Nothing is sent externally: the inbox stores internal notes only, and no route, RPC, or grant lets a client create an outbound message or change delivery status. With `AUTH_PROVIDER=legacy` (the default) every P5 endpoint answers 404 and Contacts, Opportunities, Calendars, Tasks, and Conversations render exactly as before (the original inbox client is kept verbatim as `InboxClient.tsx`).
+
+### 19.1 Files
+
+| Area | Files |
+| --- | --- |
+| Migration | `supabase/migrations/20261101001700_native_crm.sql` (M18, additive): `save_contact(id, values, tags)`, `save_calendar(id, values, member_ids)`, `replace_availability(calendar, rules)` — security invoker, so RLS, column grants, and integrity triggers apply exactly as for direct PostgREST writes, each in one transaction; `private.record_crm_activity()` triggers on contacts, contact notes, opportunities, calendars, appointments, tasks, and messages (actor from `auth.uid()`, changed field names only; nothing recorded for writes without a JWT subject). Rollback block in `supabase/rollback/20261101_native_multi_tenant.down.sql` |
+| Domain modules | `src/lib/native/`: `contacts.ts`, `opportunities.ts`, `calendars.ts`, `tasks.ts`, `conversations.ts`, `reviews.ts`, `reports.ts`, `records.ts` (keyset paging, exact counts, search words) |
+| Routes | `/api/contacts`, `/api/contacts/[id]`, `/api/contacts/[id]/notes`, `/api/pipeline`, `/api/pipeline/stages/[id]`, `/api/opportunities`, `/api/opportunities/[id]` (GET/PATCH/DELETE), `/api/opportunities/[id]/move`, `/api/calendars`, `/api/calendars/[id]`, `/api/calendars/[id]/availability`, `/api/appointments`, `/api/appointments/[id]`, `/api/tasks`, `/api/tasks/[id]`, `/api/conversations`, `/api/conversations/[id]/messages`, `/api/conversations/[id]/notes`, `/api/reviews`, `/api/reports/summary` |
+| UI | `src/components/records/`: `NativeContacts.tsx`, `NativeBoard.tsx` (add/edit/move/delete opportunity), `NativeCalendar.tsx` (calendar editor with members and weekly availability, booking, appointment edit), `NativeTasks.tsx`, `NativeInbox.tsx`, `pickers.tsx`; `src/lib/ui/native-api.ts`. Pages under `src/app/(protected)/` choose native components only in supabase mode, using the existing `PageHead`, `Card`, `DataTable`, `Modal`, `Button`, and form classes |
+
+### 19.2 Behaviour
+
+- **Authority stays in the database.** Every read and write runs with the caller's JWT under RLS and column grants; the app checks the same permission first (`nativeApi`) and adds strict validation and §7.1 error mapping. Client-supplied workspace ids are dropped (ISO-F1); every referenced id (contact, stage, calendar, member, assignee, owner) must belong to the active workspace and, for people, be an active member — otherwise 422. Ids from another workspace answer 404.
+- **Contacts:** create/edit (name, email, phone, source, owner, tags, do-not-disturb) atomically with tags; detail with related counts; notes stamped with the author; soft delete (`contacts.delete`, owner/admin) through `soft_delete_contact` with an audit entry. List: multi-word search across name/email/phone, tag filter, newest first, keyset cursor, exact total.
+- **Opportunities:** create/edit with integer cents; moves are by stage id only (`/move`); the stage decides status (closing stages set won/lost and `closed_at`, reopening clears it). Delete and stage rename need owner/admin permissions.
+- **Calendars:** create/edit (`calendar.configure`) with an exact member set and weekly availability replaced atomically (overlapping windows 422). Appointments: create/reschedule/status changes; the database exclusion constraint refuses overlapping active bookings on one calendar (409 `overlap`, also under concurrency); cancelled bookings free the slot; inactive calendars refuse bookings.
+- **Tasks:** create/edit, assignment to active members only, status changes (open/done/cancelled), due dates with timezone offsets, exact open/completed/stale counts.
+- **Inbox:** conversation list (status filter, keyset) and message pages (newest first, keyset); `POST /api/conversations/[id]/notes` inserts `direction = internal`, `delivery_status = not_sent` with the author. No send path exists.
+- **Display:** money from integer cents; timestamps shown in UTC (`YYYY-MM-DD HH:MM`) so server and client render identically; booking forms take the browser's local time and say so. Empty states and error notices use the existing copy and components.
+
+### 19.3 Test IDs defined by this phase
+
+| ID | Test |
+| --- | --- |
+| CRUD-1 | Contacts: create, edit, notes, detail, search, tag filter, keyset pages with exact totals, duplicate email 409, malformed 422, foreign owner 422, employee delete 403 (app and RPC), owner soft delete with audit, foreign ids 404. |
+| CRUD-2 | Opportunities: exact cents; stage ids decide column and status; cross-workspace contact/stage/member 422; `stageId` in PATCH 422; employee delete/rename 403; reports and board show exact values. |
+| CRUD-3 | Calendars and appointments: member assignment (outsider/foreign 422), availability validation, overlap on create and reschedule, concurrent overlapping bookings (one 200, one 409), cancel frees the slot, inactive calendar refused, UTC display. |
+| CRUD-4 | Tasks: assignment, status changes, removed and foreign assignees 422, exact counts with paging, read-only overrides enforced by the app and by PostgREST. |
+| CRUD-5 | Inbox: conversation and message paging, internal notes stored as `internal`/`not_sent`, outbound inserts and delivery-status writes refused, foreign threads 404, no outbound connection. |
+
+### 19.4 Deviations and limitations
+
+1. The pipeline board still shows at most 8 opportunities per column (and the existing 500-row list cap); opportunities beyond that are reachable through the API but not editable from the board.
+2. Appointments and tasks have no delete route; appointments are cancelled by status, tasks are completed or edited.
+3. Booking and task forms take local time; lists display UTC.
+4. Conversations are not created by the app; they will come from channel ingestion in a later phase. The inbox reads them and accepts internal notes only.
+5. Permission overrides remain API-only (no editor in Settings), as in P4.
+
+### 19.5 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (257 previous + 21 P5: strict schemas for every P5 body and query, keyset cursors and tampering, 401 without a session on 29 handlers, employee 403 on delete/configure routes with no RPC call, read-only 403 on all 17 writes, 14 malformed inputs → 422, client workspace ids dropped, legacy 404, static guards: permission per handler, no service role, nothing outbound, internal-only message insert) | Node 24.20.0 | PASS 278/278 |
+| DB suite (197 previous + 12 P5: `save_contact`, `save_calendar`, `replace_availability` validation, cross-workspace and outsider refusal, override denial, activity events with actor and field names only, no events for server writes, clients cannot write activity directly) | PGlite + shim | PASS 209/209 |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 (unchanged) |
+| Stack suite (46 previous + 7 P5: CRUD-1..5, workspace switching, browser flow) | Real Supabase local stack (disposable) + `next build`/`next start` + Chromium 1243 | PASS 53/53 |
+| Browser flow (contact add with an invalid phone refused first, search, detail, note; opportunity $1,234.56 edited to Won; calendar created and booked at 10:00 New York time shown as 14:00 UTC, overlapping booking refused with a message; task added and completed; inbox internal note stored as `internal`/`not_sent`) | same, browser timezone America/New_York | PASS (screenshots in a temp directory) |
+| UI-2 visual harness | disposable stack + built app + Chromium | Sidebar 0.00% on all 20 pages; P5 pages 1.2–2.2% overall (native copy, filters, and action buttons); Settings and Onboarding differ by their P4 native content |
+| `tsc --noEmit -p .` | — | PASS |
+| `npm run build` | Next.js 15.5.25 | PASS |
+
+The first stack run of the workspace-switching test failed because the test created its "home" contact after accepting the invitation, and acceptance activates the invited workspace (M11). The test now creates the contact first, asserts its workspace in the database, asserts that acceptance switches the active workspace, and checks every listed id against the database instead of matching text. No application change was needed.

@@ -1,8 +1,10 @@
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
-import { Card, PageHead, EmptyState, Button } from "@/components/ui";
+import { Card, PageHead, EmptyState } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { getPageData } from "@/lib/data";
+import { BookAppointment, CalendarEditor, EditAppointment } from "@/components/records/NativeCalendar";
+import { getPageData, getPageScope } from "@/lib/data";
+import { listCalendars, type CalendarItem } from "@/lib/native/calendars";
 import { calendarAppointments } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_CALENDARS, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
@@ -12,11 +14,19 @@ export default async function CalendarPage() {
   const data = await getPageData();
   const { native } = data;
   const copy = dataCopy(native);
-  const [appointments, workspace] = await Promise.all([data.reader.listAppointments(), data.workspace()]);
+  const [appointments, workspace, nativeCalendars] = await Promise.all([
+    data.reader.listAppointments(),
+    data.workspace(),
+    native ? getPageScope().then(listCalendars) : Promise.resolve([] as CalendarItem[]),
+  ]);
   const waiting = appointments.length === 0;
   const calendars = workspace.calendars;
   const calendarsBlocked = !workspace.calendarsConfigured;
-  const noNativeCalendars = native && calendars.length === 0;
+  const noNativeCalendars = native && nativeCalendars.length === 0;
+  const canConfigure = native && data.can("calendar.configure");
+  const canBook = native && data.can("appointments.write");
+  const inactive = nativeCalendars.filter((c) => !c.active);
+  const bookable = nativeCalendars.filter((c) => c.active).map((c) => ({ id: c.id, name: c.name, durationMinutes: c.durationMinutes }));
   const statusCounts = appointments.reduce<Record<string, number>>((acc, a) => {
     const key = (a.status || "booked").toLowerCase();
     acc[key] = (acc[key] || 0) + 1;
@@ -33,6 +43,14 @@ export default async function CalendarPage() {
         description={`${
           native ? "Bookings on this workspace's calendars." : "Bookings from connected appointment workflows."
         } A website form preferred time is still a request, not a reserved slot. ${copy.sourceShort}`}
+        action={
+          native && !noNativeCalendars && (canBook || canConfigure) ? (
+            <div className="quick-actions">
+              {canBook && bookable.length ? <BookAppointment calendars={bookable} /> : null}
+              {canConfigure ? <CalendarEditor label="Create calendar" /> : null}
+            </div>
+          ) : undefined
+        }
       />
 
       <StatusBanner>
@@ -47,16 +65,7 @@ export default async function CalendarPage() {
 
       {noNativeCalendars ? (
         <div style={{ marginTop: "1.1rem" }}>
-          <Card
-            title="Calendars"
-            action={
-              data.can("calendar.configure") ? (
-                <Button size="sm" variant="secondary" disabled>
-                  Create calendar (coming soon)
-                </Button>
-              ) : undefined
-            }
-          >
+          <Card title="Calendars" action={canConfigure ? <CalendarEditor label="Create calendar" /> : undefined}>
             <EmptyState title="No calendars yet" note="Calendars created for this workspace appear here." />
           </Card>
         </div>
@@ -71,7 +80,11 @@ export default async function CalendarPage() {
           const shown = calendarAppointments(native, cal, appointments);
           const visible = shown.filter((a) => a.status !== "cancelled");
           return (
-            <Card key={native ? cal.id : cal.name} title={cal.name}>
+            <Card
+              key={native ? cal.id : cal.name}
+              title={cal.name}
+              action={canConfigure ? <CalendarEditor calendarId={cal.id} label="Edit" /> : undefined}
+            >
               <p className="muted" style={{ marginTop: 0 }}>
                 Duration: {cal.duration || "—"}
               </p>
@@ -89,6 +102,11 @@ export default async function CalendarPage() {
                       <li key={a.externalAppointmentId} className="muted">
                         {a.status || "booked"}
                         {a.start ? ` · ${a.start.slice(0, 16).replace("T", " ")}` : ""}
+                        {canBook && a.start && a.end ? (
+                          <EditAppointment
+                            appointment={{ id: a.externalAppointmentId, startsAt: a.start, endsAt: a.end, status: a.status || "booked" }}
+                          />
+                        ) : null}
                       </li>
                     ))}
                 </ul>
@@ -96,6 +114,11 @@ export default async function CalendarPage() {
             </Card>
           );
         })}
+        {inactive.map((cal) => (
+          <Card key={cal.id} title={cal.name} action={canConfigure ? <CalendarEditor calendarId={cal.id} label="Edit" /> : undefined}>
+            <p className="muted" style={{ margin: 0 }}>Not accepting bookings.</p>
+          </Card>
+        ))}
       </div>
     </AppShell>
   );

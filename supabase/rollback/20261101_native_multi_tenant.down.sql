@@ -1,10 +1,23 @@
--- Rollback for migrations 20261101000100 … 20261101001300, 20261101001500 and 20261101001600 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101001700 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M18 (P5)
+drop trigger if exists contacts_record_activity on public.contacts;
+drop trigger if exists contact_notes_record_activity on public.contact_notes;
+drop trigger if exists opportunities_record_activity on public.opportunities;
+drop trigger if exists calendars_record_activity on public.calendars;
+drop trigger if exists appointments_record_activity on public.appointments;
+drop trigger if exists tasks_record_activity on public.tasks;
+drop trigger if exists messages_record_activity on public.messages;
+drop function if exists private.record_crm_activity();
+drop function if exists public.save_contact(uuid, jsonb, text[]);
+drop function if exists public.save_calendar(uuid, jsonb, uuid[]);
+drop function if exists public.replace_availability(uuid, jsonb);
 
 -- M17 (P4)
 drop trigger if exists workspace_settings_record_change on public.workspace_settings;

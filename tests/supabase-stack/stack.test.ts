@@ -1719,6 +1719,523 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       });
     });
 
+    describe("native records through the app (P5)", () => {
+      let owner: Identity;
+      let emp: Identity;
+      let leaver: Identity;
+      let ws = "";
+      let ownerCookie = "";
+      let empCookie = "";
+      const stages: Record<string, string> = {};
+      let pipelineId = "";
+
+      type R = Awaited<ReturnType<typeof appFetch>>;
+      const expect = (r: R, status: number, code: string | null, label: string) =>
+        assert.deepEqual([r.status, code === null ? null : r.body?.code], [status, code], `${label}: ${r.text.slice(0, 240)}`);
+      const call = (cookie: string, method: string, path: string, json?: unknown) => appFetch(app, path, { method, cookie, json });
+      const joinWs = async (user: Identity, role: "admin" | "employee") => {
+        const inv = await rpc(env, owner.token, "create_invitation", { p_email: user.email, p_role: role, p_ttl_hours: 24 });
+        assert.equal(inv.status, 200, inv.text);
+        assert.equal((await rpc(env, user.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+      };
+      const newContact = async (cookie: string, json: Record<string, unknown>) => {
+        const r = await call(cookie, "POST", "/api/contacts", json);
+        assert.equal(r.status, 200, r.text);
+        return r.body.contact as { id: string; name: string };
+      };
+      const activity = async (entityId: string) =>
+        (await db.query<{ action: string; actor_id: string; payload: any }>(
+          "select action, actor_id, payload from public.activity_events where entity_id = $1 order by id", [entityId])).rows;
+
+      before(async () => {
+        owner = await signUp(env, email("crm-owner"), "CRM Owner");
+        emp = await signUp(env, email("crm-employee"), "CRM Employee");
+        leaver = await signUp(env, email("crm-leaver"), "CRM Leaver");
+        const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+          p_provisioning_key: `synthetic-crm-${run}`, p_name: "CRM (synthetic)", p_slug: `crm-synthetic-${run}`, p_owner_email: owner.email,
+        });
+        assert.equal(prov.status, 200, prov.text);
+        ws = prov.body.workspace_id;
+        assert.equal((await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token })).status, 200);
+        await joinWs(emp, "employee");
+        await joinWs(leaver, "employee");
+        ownerCookie = await appLogin(app, owner);
+        empCookie = await appLogin(app, emp);
+        const p = await call(ownerCookie, "GET", "/api/pipeline");
+        assert.equal(p.status, 200, p.text);
+        pipelineId = p.body.pipeline.id;
+        for (const s of p.body.pipeline.stages) stages[s.name] = s.id;
+        assert.equal(Object.keys(stages).length, 12);
+      });
+
+      test("CRUD-1 contacts: create, edit, notes, detail, search, tag filter, keyset pages, exact totals, soft delete", async () => {
+        const made: string[] = [];
+        for (let i = 0; i < 7; i++) {
+          made.push((await newContact(i % 2 ? empCookie : ownerCookie, {
+            firstName: `Pager${i}`, lastName: "Crm", email: `pager${i}-${run}@example.test`, tags: i < 3 ? ["vip"] : ["lead"],
+          })).id);
+        }
+        const pages: string[][] = [];
+        let cursor: string | null = null;
+        let totals = new Set<number>();
+        do {
+          const r: R = await call(ownerCookie, "GET", `/api/contacts?q=pager&limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+          assert.equal(r.status, 200, r.text);
+          pages.push(r.body.items.map((c: { id: string }) => c.id));
+          totals.add(r.body.total);
+          cursor = r.body.nextCursor;
+        } while (cursor);
+        assert.deepEqual(pages.map((p) => p.length), [3, 3, 1]);
+        assert.deepEqual(pages.flat(), [...made].reverse(), "newest first, no overlap, nothing skipped");
+        assert.deepEqual([...totals], [7]);
+        const vip = await call(ownerCookie, "GET", "/api/contacts?tag=vip&limit=100");
+        assert.deepEqual(vip.body.items.map((c: { id: string }) => c.id).sort(), made.slice(0, 3).sort());
+        assert.equal(vip.body.total, 3);
+        const one = await call(ownerCookie, "GET", "/api/contacts?q=pager4%20crm");
+        assert.deepEqual(one.body.items.map((c: { id: string }) => c.id), [made[4]]);
+        const injection = await call(ownerCookie, "GET", `/api/contacts?q=${encodeURIComponent("a,id.neq.0)or(x")}`);
+        assert.equal(injection.status, 200, "filter syntax in a search is treated as text");
+
+        const ada = await newContact(empCookie, { firstName: "Ada", lastName: "Crm", email: `ada-${run}@example.test`, phone: "781-964-0654",
+          ownerUserId: emp.id, tags: ["vip"], workspaceId: wsA });
+        assert.equal((await db.query("select workspace_id from public.contacts where id = $1", [ada.id])).rows[0].workspace_id, ws,
+          "a body workspaceId is ignored");
+        expect(await call(ownerCookie, "POST", "/api/contacts", { email: `ADA-${run}@example.test` }), 409, "duplicate_email", "duplicate email");
+        for (const body of [{}, { email: "nope" }, { firstName: "X", tags: ["a,b"] }, { firstName: "X", extra: 1 }, { firstName: "X", ownerUserId: "me" }]) {
+          expect(await call(ownerCookie, "POST", "/api/contacts", body), 422, "validation_failed", JSON.stringify(body));
+        }
+        for (const foreignOwner of [ownerA.id, outsider.id]) {
+          expect(await call(ownerCookie, "POST", "/api/contacts", { firstName: "X", ownerUserId: foreignOwner }), 422, "validation_failed",
+            `owner ${foreignOwner}`);
+        }
+        const edited = await call(empCookie, "PATCH", `/api/contacts/${ada.id}`, { lastName: "Lovelace", tags: ["vip", "engineer"], dnd: true });
+        assert.equal(edited.status, 200, edited.text);
+        assert.deepEqual([edited.body.contact.name, edited.body.contact.tags, edited.body.contact.dnd], ["Ada Lovelace", ["engineer", "vip"], true]);
+        const note = await call(empCookie, "POST", `/api/contacts/${ada.id}/notes`, { body: "Prefers mornings" });
+        assert.equal(note.status, 200, note.text);
+        assert.deepEqual([note.body.note.authorUserId, note.body.note.authorName], [emp.id, "CRM Employee"], "the database stamps the author");
+        const detail = await call(ownerCookie, "GET", `/api/contacts/${ada.id}`);
+        assert.deepEqual([detail.body.contact.email, detail.body.notes.length, detail.body.notes[0].body], [`ada-${run}@example.test`, 1, "Prefers mornings"]);
+        assert.deepEqual((await activity(ada.id)).map((a) => a.action), ["created", "updated", "note_added"]);
+        const updated = (await activity(ada.id))[1];
+        assert.deepEqual(updated.payload.fields.sort(), ["dnd", "last_name"], "activity records field names only");
+        assert.equal(JSON.stringify(updated.payload).includes("Lovelace"), false);
+
+        expect(await call(empCookie, "DELETE", `/api/contacts/${ada.id}`), 403, "forbidden", "employee deletes");
+        const direct = await rpc(env, emp.token, "soft_delete_contact", { p_id: ada.id });
+        assert.ok(direct.status >= 400 && /forbidden/.test(direct.text), `the database refuses the employee too: ${direct.text}`);
+        const before = (await call(ownerCookie, "GET", "/api/contacts?limit=1")).body.total;
+        assert.equal((await call(ownerCookie, "DELETE", `/api/contacts/${ada.id}`)).status, 200);
+        assert.equal((await call(ownerCookie, "GET", "/api/contacts?limit=1")).body.total, before - 1, "the total drops by one");
+        expect(await call(ownerCookie, "GET", `/api/contacts/${ada.id}`), 404, "not_found", "deleted detail");
+        expect(await call(ownerCookie, "PATCH", `/api/contacts/${ada.id}`, { firstName: "Back" }), 404, "not_found", "editing a deleted contact");
+        expect(await call(ownerCookie, "POST", `/api/contacts/${ada.id}/notes`, { body: "x" }), 404, "not_found", "noting a deleted contact");
+        assert.equal((await db.query("select deleted_at is not null d from public.contacts where id = $1", [ada.id])).rows[0].d, true, "soft deleted, not removed");
+        assert.ok((await db.query("select 1 from public.workspace_audit_log where workspace_id = $1 and action = 'contact.deleted' and actor_id = $2",
+          [ws, owner.id])).rowCount, "the deletion is audited");
+
+        for (const [method, path, json] of [["GET", `/api/contacts/${contactA}`], ["PATCH", `/api/contacts/${contactA}`, { firstName: "Hijack" }],
+          ["POST", `/api/contacts/${contactA}/notes`, { body: "x" }], ["DELETE", `/api/contacts/${contactA}`]] as [string, string, unknown?][]) {
+          expect(await call(ownerCookie, method, path, json), 404, "not_found", `${method} workspace A's contact`);
+        }
+        assert.equal((await db.query("select count(*)::int n from public.contact_notes where contact_id = $1", [contactA])).rows[0].n, 0);
+      });
+
+      test("CRUD-2 opportunities: stage ids decide columns and status; exact money; cross-workspace references refused", async () => {
+        const contact = await newContact(ownerCookie, { firstName: "Deal", lastName: "Maker" });
+        const create = (json: Record<string, unknown>, cookie = empCookie) => call(cookie, "POST", "/api/opportunities", json);
+        const roof = await create({ contactId: contact.id, stageId: stages["New Lead"], title: "Roof", valueCents: 150050, assignedUserId: emp.id });
+        assert.equal(roof.status, 200, roof.text);
+        assert.deepEqual([roof.body.opportunity.status, roof.body.opportunity.valueCents, roof.body.opportunity.pipelineId, roof.body.opportunity.stageName],
+          ["open", 150050, pipelineId, "New Lead"]);
+        const gutter = await create({ contactId: contact.id, stageId: stages["New Lead"], title: "Gutter", valueCents: 1 });
+        assert.equal(gutter.status, 200, gutter.text);
+
+        const foreignStage = (await rest(env, ownerA.token, "GET", "pipeline_stages?select=id&limit=1")).body[0].id;
+        for (const [json, label] of [
+          [{ contactId: contactA, stageId: stages["New Lead"], title: "X" }, "workspace A's contact"],
+          [{ contactId: contact.id, stageId: foreignStage, title: "X" }, "workspace A's stage"],
+          [{ contactId: contact.id, stageId: stages["New Lead"], title: "X", assignedUserId: ownerA.id }, "workspace A's member"],
+          [{ contactId: contact.id, stageId: stages["New Lead"], title: "X", valueCents: 1.5 }, "fractional cents"],
+          [{ contactId: contact.id, stageId: stages["New Lead"], title: "X", valueCents: -100 }, "negative value"],
+          [{ contactId: contact.id, stageId: "New Lead", title: "X" }, "stage by name"],
+        ] as [Record<string, unknown>, string][]) {
+          expect(await create(json), 422, "validation_failed", label);
+        }
+        const id = roof.body.opportunity.id;
+        expect(await call(empCookie, "POST", `/api/opportunities/${id}/move`, { stageId: foreignStage }), 422, "validation_failed", "move to a foreign stage");
+        const moved = await call(empCookie, "POST", `/api/opportunities/${id}/move`, { stageId: stages["Won"] });
+        assert.equal(moved.status, 200, moved.text);
+        assert.deepEqual([moved.body.opportunity.status, moved.body.opportunity.stageName, Boolean(moved.body.opportunity.closedAt)], ["won", "Won", true]);
+        assert.deepEqual((await activity(id)).map((a) => a.action), ["created", "won"]);
+        const back = await call(empCookie, "POST", `/api/opportunities/${id}/move`, { stageId: stages["Qualified"] });
+        assert.deepEqual([back.body.opportunity.status, back.body.opportunity.closedAt], ["open", null], "reopening clears closed_at");
+        const stageEvent = (await activity(id)).at(-1)!;
+        assert.deepEqual([stageEvent.action, stageEvent.payload.from_stage_id, stageEvent.payload.to_stage_id], ["stage_changed", stages["Won"], stages["Qualified"]]);
+        assert.equal((await call(empCookie, "POST", `/api/opportunities/${id}/move`, { stageId: stages["Won"] })).status, 200);
+
+        const edited = await call(empCookie, "PATCH", `/api/opportunities/${id}`, { title: "Roof replacement", valueCents: 150049 });
+        assert.deepEqual([edited.body.opportunity.title, edited.body.opportunity.valueCents], ["Roof replacement", 150049]);
+        expect(await call(empCookie, "PATCH", `/api/opportunities/${id}`, { stageId: stages["Lost"] }), 422, "validation_failed", "stage via PATCH");
+
+        const won = await call(ownerCookie, "GET", `/api/opportunities?stageId=${stages["Won"]}`);
+        assert.deepEqual([won.body.total, won.body.items[0].id], [1, id]);
+        const report = await call(ownerCookie, "GET", "/api/reports/summary");
+        assert.equal(report.status, 200, report.text);
+        assert.deepEqual([report.body.wonCount, report.body.wonValueCents], [1, 150049]);
+        const newLead = report.body.leadsByStage.find((s: { stageId: string }) => s.stageId === stages["New Lead"]);
+        assert.deepEqual([newLead.count, newLead.valueCents], [1, 1]);
+        const page = await appFetch(app, "/pipeline", { cookie: ownerCookie });
+        const text = page.text.replace(/<!-- -->/g, "");
+        assert.ok(text.includes("$1,500.49<") && text.includes("$0.01<"), "board values are exact");
+        assert.ok(text.includes("2 opportunities across 12 stage(s)"));
+        assert.ok(text.includes("Add opportunity"), "owners can add from the board");
+        assert.ok((await appFetch(app, "/pipeline", { cookie: empCookie })).text.includes("Add opportunity"), "employees hold opportunities.write");
+
+        expect(await call(empCookie, "DELETE", `/api/opportunities/${id}`), 403, "forbidden", "employee deletes");
+        expect(await call(empCookie, "PATCH", `/api/pipeline/stages/${stages["Qualified"]}`, { name: "Hot" }), 403, "forbidden", "employee renames a stage");
+        const renamed = await call(ownerCookie, "PATCH", `/api/pipeline/stages/${stages["Qualified"]}`, { name: "Hot Leads" });
+        assert.equal(renamed.body.stage.name, "Hot Leads");
+        assert.equal((await call(ownerCookie, "DELETE", `/api/opportunities/${id}`)).status, 200);
+        expect(await call(ownerCookie, "GET", `/api/opportunities/${id}`), 404, "not_found", "deleted opportunity");
+        const after = await call(ownerCookie, "GET", "/api/reports/summary");
+        assert.deepEqual([after.body.wonCount, after.body.wonValueCents], [0, 0], "deleted opportunities leave the totals");
+        const foreignOpp = (await rest(env, ownerA.token, "GET", "opportunities?select=id&limit=1")).body[0]?.id;
+        if (foreignOpp) {
+          expect(await call(ownerCookie, "POST", `/api/opportunities/${foreignOpp}/move`, { stageId: stages["Won"] }), 404, "not_found", "foreign move");
+          expect(await call(ownerCookie, "DELETE", `/api/opportunities/${foreignOpp}`), 404, "not_found", "foreign delete");
+        }
+      });
+
+      test("CRUD-3 calendars and appointments: members, availability, timestamps, and overlap under concurrency", async () => {
+        const create = (json: Record<string, unknown>, cookie = ownerCookie) => call(cookie, "POST", "/api/calendars", json);
+        expect(await create({ name: "X", slug: `x-${run}`, timezone: "UTC", durationMinutes: 30 }, empCookie), 403, "forbidden", "employee creates");
+        const cal = await create({ name: "Consults", slug: `consults-${run}`, timezone: "America/New_York", durationMinutes: 30, memberUserIds: [emp.id, owner.id] });
+        assert.equal(cal.status, 200, cal.text);
+        const calId = cal.body.calendar.id;
+        assert.deepEqual(cal.body.calendar.members.map((m: { userId: string }) => m.userId).sort(), [emp.id, owner.id].sort());
+        expect(await create({ name: "Dup", slug: `consults-${run}`, timezone: "UTC", durationMinutes: 30 }), 409, "duplicate_slug", "duplicate slug");
+        for (const member of [outsider.id, ownerA.id]) {
+          expect(await create({ name: "M", slug: `m-${member.slice(0, 8)}-${run}`, timezone: "UTC", durationMinutes: 30, memberUserIds: [member] }),
+            422, "validation_failed", `member ${member}`);
+        }
+        const avail = await call(ownerCookie, "PUT", `/api/calendars/${calId}/availability`,
+          { rules: [{ weekday: 1, start: "09:00", end: "12:00" }, { weekday: 1, start: "13:00", end: "17:00" }, { weekday: 3, start: "10:00", end: "14:00" }] });
+        assert.equal(avail.status, 200, avail.text);
+        assert.equal(avail.body.rules.length, 3);
+        expect(await call(ownerCookie, "PUT", `/api/calendars/${calId}/availability`, { rules: [{ weekday: 1, start: "09:00", end: "12:00" },
+          { weekday: 1, start: "11:00", end: "13:00" }] }), 422, "validation_failed", "overlapping windows");
+        assert.equal((await call(ownerCookie, "GET", "/api/calendars")).body.items.find((c: { id: string }) => c.id === calId).rules.length, 3,
+          "a refused replacement changes nothing");
+        expect(await call(empCookie, "PUT", `/api/calendars/${calId}/availability`, { rules: [] }), 403, "forbidden", "employee edits hours");
+        const patched = await call(ownerCookie, "PATCH", `/api/calendars/${calId}`, { memberUserIds: [owner.id], durationMinutes: 45 });
+        assert.deepEqual([patched.body.calendar.members.length, patched.body.calendar.durationMinutes], [1, 45]);
+
+        const contact = await newContact(empCookie, { firstName: "Booked", lastName: "Client" });
+        const book = (json: Record<string, unknown>) => call(empCookie, "POST", "/api/appointments", { calendarId: calId, contactId: contact.id, ...json });
+        const first = await book({ startsAt: "2031-06-02T09:00:00-04:00", endsAt: "2031-06-02T09:45:00-04:00", assignedUserId: emp.id });
+        assert.equal(first.status, 200, first.text);
+        assert.equal(Date.parse(first.body.appointment.startsAt), Date.parse("2031-06-02T13:00:00Z"), "offsets are honoured");
+        const racers = await Promise.all([
+          book({ startsAt: "2031-06-03T14:00:00Z", endsAt: "2031-06-03T14:45:00Z" }),
+          book({ startsAt: "2031-06-03T14:30:00Z", endsAt: "2031-06-03T15:15:00Z" }),
+        ]);
+        assert.deepEqual(racers.map((r) => r.status).sort(), [200, 409], racers.map((r) => r.text).join(" | "));
+        assert.equal(racers.find((r) => r.status === 409)!.body.code, "overlap");
+        const loser = racers.find((r) => r.status === 200)!.body.appointment;
+        expect(await book({ startsAt: "2031-06-02T13:30:00Z", endsAt: "2031-06-02T14:00:00Z" }), 409, "overlap", "overlapping booking");
+        expect(await call(empCookie, "PATCH", `/api/appointments/${loser.id}`, { startsAt: "2031-06-02T13:15:00Z", endsAt: "2031-06-02T13:50:00Z" }),
+          409, "overlap", "rescheduling onto a booking");
+        const cancelled = await call(empCookie, "PATCH", `/api/appointments/${first.body.appointment.id}`, { status: "cancelled" });
+        assert.equal(cancelled.body.appointment.status, "cancelled");
+        assert.equal((await book({ startsAt: "2031-06-02T13:30:00Z", endsAt: "2031-06-02T14:00:00Z" })).status, 200, "a cancelled slot is free again");
+        const moved = await call(empCookie, "PATCH", `/api/appointments/${loser.id}`, { startsAt: "2031-06-04T14:00:00Z", endsAt: "2031-06-04T14:45:00Z" });
+        assert.equal(moved.status, 200, moved.text);
+        assert.deepEqual((await activity(loser.id)).map((a) => a.action), ["created", "rescheduled"]);
+        for (const [json, label] of [
+          [{ startsAt: "2031-06-05T14:00:00Z", endsAt: "2031-06-05T13:00:00Z" }, "end before start"],
+          [{ startsAt: "2031-06-05T14:00:00Z", endsAt: "2031-06-06T15:00:00Z" }, "longer than a day"],
+          [{ startsAt: "2031-06-05 14:00", endsAt: "2031-06-05 15:00" }, "no offset"],
+          [{ startsAt: "2031-06-05T14:00:00Z", endsAt: "2031-06-05T15:00:00Z", contactId: contactA }, "workspace A's contact"],
+          [{ startsAt: "2031-06-05T14:00:00Z", endsAt: "2031-06-05T15:00:00Z", assignedUserId: employeeA.id }, "workspace A's member"],
+        ] as [Record<string, unknown>, string][]) {
+          expect(await book(json), 422, "validation_failed", label);
+        }
+        const range = await call(ownerCookie, "GET", `/api/appointments?calendarId=${calId}&from=2031-06-02T00:00:00Z&to=2031-06-04T00:00:00Z`);
+        assert.equal(range.status, 200, range.text);
+        assert.deepEqual(range.body.items.map((a: { status: string }) => a.status), ["cancelled", "booked"], "soonest first, range applied");
+        expect(await call(ownerCookie, "GET", "/api/appointments?from=2031-01-01T00:00:00Z&to=2032-06-01T00:00:00Z"), 422, "validation_failed", "range too long");
+
+        assert.equal((await call(ownerCookie, "PATCH", `/api/calendars/${calId}`, { active: false })).status, 200);
+        expect(await book({ startsAt: "2031-06-07T14:00:00Z", endsAt: "2031-06-07T14:30:00Z" }), 422, "validation_failed", "inactive calendar");
+        const calendarPage = await appFetch(app, "/calendar", { cookie: ownerCookie });
+        assert.ok(calendarPage.text.includes("Not accepting bookings."), "inactive calendars stay listed for editing");
+        assert.equal((await call(ownerCookie, "PATCH", `/api/calendars/${calId}`, { active: true })).status, 200);
+        const shown = (await appFetch(app, "/calendar", { cookie: ownerCookie })).text.replace(/<!-- -->/g, "");
+        assert.ok(shown.includes("booked · 2031-06-02 13:30") && shown.includes("Book appointment"), "bookings render with UTC times");
+        expect(await call(ownerCookie, "PATCH", `/api/calendars/${calId}`, { slug: "Bad Slug" }), 422, "validation_failed", "bad slug");
+      });
+
+      test("CRUD-4 tasks: assignment, status changes, removed and foreign assignees refused, read-only overrides enforced twice", async () => {
+        const create = (json: Record<string, unknown>, cookie = ownerCookie) => call(cookie, "POST", "/api/tasks", json);
+        const t = await create({ title: "Call back", assignedUserId: emp.id, dueAt: "2031-06-01T15:00:00-04:00" });
+        assert.equal(t.status, 200, t.text);
+        assert.deepEqual([t.body.task.assignedName, t.body.task.status, Date.parse(t.body.task.dueAt)], ["CRM Employee", "open", Date.parse("2031-06-01T19:00:00Z")]);
+        const done = await call(empCookie, "PATCH", `/api/tasks/${t.body.task.id}`, { status: "done" });
+        assert.equal(done.body.task.status, "done");
+        assert.deepEqual((await activity(t.body.task.id)).map((a) => a.action), ["created", "completed"]);
+
+        const leaverTask = await create({ title: "Leaver work", assignedUserId: leaver.id });
+        assert.equal(leaverTask.status, 200, leaverTask.text);
+        assert.equal((await call(ownerCookie, "DELETE", `/api/team/${leaver.id}`)).status, 200);
+        expect(await create({ title: "After removal", assignedUserId: leaver.id }), 422, "validation_failed", "removed assignee");
+        expect(await call(ownerCookie, "PATCH", `/api/tasks/${leaverTask.body.task.id}`, { assignedUserId: leaver.id }), 422, "validation_failed",
+          "reassigning to a removed member");
+        expect(await call(ownerCookie, "POST", "/api/contacts", { firstName: "X", ownerUserId: leaver.id }), 422, "validation_failed", "removed contact owner");
+        for (const foreign of [employeeA.id, outsider.id]) {
+          expect(await create({ title: "Foreign", assignedUserId: foreign }), 422, "validation_failed", `assignee ${foreign}`);
+        }
+        expect(await create({ title: "Linked", contactId: contactA }), 422, "validation_failed", "workspace A's contact");
+        for (const body of [{ title: "" }, { title: "x", status: "late" }, { title: "x", dueAt: "soon" }]) {
+          expect(await create(body), 422, "validation_failed", JSON.stringify(body));
+        }
+
+        for (let i = 0; i < 4; i++) assert.equal((await create({ title: `Batch ${i}` })).status, 200);
+        const open = await call(ownerCookie, "GET", "/api/tasks?status=open&limit=2");
+        const openCount = (await db.query<{ n: number }>("select count(*)::int n from public.tasks where workspace_id = $1 and status = 'open' and deleted_at is null", [ws])).rows[0].n;
+        assert.equal(open.body.total, openCount);
+        const second = await call(ownerCookie, "GET", `/api/tasks?status=open&limit=2&cursor=${encodeURIComponent(open.body.nextCursor)}`);
+        assert.equal(second.body.items.some((x: { id: string }) => open.body.items.some((y: { id: string }) => y.id === x.id)), false, "pages do not overlap");
+        const tasksPage = (await appFetch(app, "/tasks", { cookie: ownerCookie })).text.replace(/<!-- -->/g, "");
+        assert.ok(tasksPage.includes(`${openCount} open · 1 completed`), "the page shows exact counts");
+
+        const ov = await call(ownerCookie, "PATCH", `/api/team/${emp.id}`, { overrides: { "tasks.write": false, "conversations.write": false, "contacts.write": false } });
+        assert.equal(ov.status, 200, ov.text);
+        try {
+          expect(await create({ title: "Denied" }, empCookie), 403, "forbidden", "read-only tasks");
+          expect(await call(empCookie, "PATCH", `/api/tasks/${t.body.task.id}`, { status: "open" }), 403, "forbidden", "read-only status change");
+          expect(await call(empCookie, "POST", "/api/contacts", { firstName: "Denied" }), 403, "forbidden", "read-only contacts");
+          const directTask = await rest(env, emp.token, "POST", "tasks", { workspace_id: ws, title: "Direct" });
+          assert.ok(directTask.status >= 400, `the database refuses a read-only grant too: ${directTask.status}`);
+          const directContact = await rest(env, emp.token, "POST", "contacts", { workspace_id: ws, first_name: "Direct" });
+          assert.ok(directContact.status >= 400, `contacts: ${directContact.status}`);
+          assert.equal((await call(empCookie, "GET", "/api/tasks?limit=1")).status, 200, "reading still works");
+          assert.equal((await appFetch(app, "/tasks", { cookie: empCookie })).text.includes("Add task"), false, "the page hides the control");
+        } finally {
+          const cleared = await call(ownerCookie, "PATCH", `/api/team/${emp.id}`, { overrides: { "tasks.write": null, "conversations.write": null, "contacts.write": null } });
+          assert.equal(cleared.status, 200, cleared.text);
+        }
+        assert.equal((await create({ title: "Allowed again" }, empCookie)).status, 200);
+      });
+
+      test("CRUD-5 inbox: conversations and messages read with pagination; internal notes only; nothing can be sent", async () => {
+        const contact = await newContact(ownerCookie, { firstName: "Inbox", lastName: "Contact" });
+        const convo = (await db.query<{ id: string }>(
+          "insert into public.conversations (workspace_id, contact_id, channel, status) values ($1, $2, 'sms', 'open') returning id",
+          [ws, contact.id])).rows[0].id;
+        for (let i = 0; i < 3; i++) {
+          await db.query(`insert into public.messages (workspace_id, conversation_id, direction, body, delivery_status, created_at)
+            values ($1, $2, 'inbound', $3, 'delivered', now() - make_interval(mins => $4))`, [ws, convo, `Inbound ${i}`, 10 - i]);
+        }
+        const list = await call(empCookie, "GET", "/api/conversations?status=open");
+        assert.equal(list.status, 200, list.text);
+        assert.ok(list.body.items.some((c: { id: string; contactName: string }) => c.id === convo && c.contactName === "Inbox Contact"));
+        const m1 = await call(empCookie, "GET", `/api/conversations/${convo}/messages?limit=2`);
+        assert.deepEqual(m1.body.items.map((m: { body: string }) => m.body), ["Inbound 2", "Inbound 1"]);
+        const m2 = await call(empCookie, "GET", `/api/conversations/${convo}/messages?limit=2&cursor=${encodeURIComponent(m1.body.nextCursor)}`);
+        assert.deepEqual([m2.body.items.map((m: { body: string }) => m.body), m2.body.nextCursor], [["Inbound 0"], null]);
+
+        const note = await call(empCookie, "POST", `/api/conversations/${convo}/notes`, { body: "Customer prefers texts after 5pm" });
+        assert.equal(note.status, 200, note.text);
+        assert.deepEqual([note.body.message.direction, note.body.message.deliveryStatus, note.body.message.authorUserId], ["internal", "not_sent", emp.id]);
+        const stored = await db.query("select direction, delivery_status, author_user_id from public.messages where id = $1", [note.body.message.id]);
+        assert.deepEqual(stored.rows[0], { direction: "internal", delivery_status: "not_sent", author_user_id: emp.id });
+        expect(await call(empCookie, "POST", `/api/conversations/${convo}/notes`, { body: "x", direction: "outbound" }), 422, "validation_failed", "outbound via API");
+        const outbound = await rest(env, owner.token, "POST", "messages", { workspace_id: ws, conversation_id: convo, direction: "outbound", body: "Hi" });
+        assert.ok(outbound.status >= 400, `clients cannot insert outbound messages: ${outbound.status} ${outbound.text}`);
+        const queued = await rest(env, owner.token, "POST", "messages", { workspace_id: ws, conversation_id: convo, direction: "internal", body: "x", delivery_status: "queued" });
+        assert.ok(queued.status >= 400, `clients cannot set delivery status: ${queued.status}`);
+        assert.equal((await db.query("select count(*)::int n from public.messages where conversation_id = $1 and direction <> 'inbound'", [convo])).rows[0].n, 1);
+        const foreignConvo = await db.query<{ id: string }>("select id from public.conversations where workspace_id = $1 limit 1", [wsA]);
+        if (foreignConvo.rowCount) {
+          expect(await call(ownerCookie, "GET", `/api/conversations/${foreignConvo.rows[0].id}/messages`), 404, "not_found", "foreign thread");
+          expect(await call(ownerCookie, "POST", `/api/conversations/${foreignConvo.rows[0].id}/notes`, { body: "x" }), 404, "not_found", "foreign note");
+        }
+        const inbox = await appFetch(app, "/inbox", { cookie: ownerCookie });
+        assert.ok(inbox.text.includes("Inbox Contact") && inbox.text.includes("Conversation Threads"));
+        assert.equal(app.outbound().length, 0, "no outbound connection attempted");
+      });
+
+      test("workspace switching: records follow the active workspace; ids of the other workspace answer 404", async () => {
+        const mine = await newContact(ownerCookie, { firstName: "Switch", lastName: "Home" });
+        assert.equal((await db.query("select workspace_id from public.contacts where id = $1", [mine.id])).rows[0].workspace_id, ws);
+        const inv = await rpc(env, ownerB.token, "create_invitation", { p_email: owner.email, p_role: "employee", p_ttl_hours: 24 });
+        assert.equal(inv.status, 200, inv.text);
+        assert.equal((await rpc(env, owner.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+        assert.equal((await call(ownerCookie, "GET", "/api/auth/me")).body.workspace.id, wsB, "accepting an invitation activates its workspace");
+        const back = await call(ownerCookie, "POST", "/api/workspaces/active", { workspaceId: ws });
+        assert.equal(back.status, 200, back.text);
+        assert.equal((await call(ownerCookie, "GET", `/api/contacts/${mine.id}`)).status, 200, "home contact visible at home");
+        const toB = await call(ownerCookie, "POST", "/api/workspaces/active", { workspaceId: wsB });
+        assert.equal(toB.status, 200, toB.text);
+        try {
+          const listB = await call(ownerCookie, "GET", "/api/contacts?limit=100");
+          const countB = (await db.query<{ n: number }>("select count(*)::int n from public.contacts where workspace_id = $1 and deleted_at is null", [wsB])).rows[0].n;
+          assert.equal(listB.body.total, countB);
+          const items = listB.body.items as { id: string; name: string }[];
+          const owners = await db.query<{ id: string; workspace_id: string }>("select id, workspace_id from public.contacts where id = any($1::uuid[])",
+            [items.map((c) => c.id)]);
+          const foreign = owners.rows.filter((r) => r.workspace_id !== wsB);
+          assert.deepEqual(foreign, [], `every listed contact belongs to workspace B: ${JSON.stringify(items.map((c) => c.name))}`);
+          assert.equal(items.some((c) => c.id === mine.id), false, "the home contact is not listed");
+          expect(await call(ownerCookie, "GET", `/api/contacts/${mine.id}`), 404, "not_found", "home contact from B");
+          expect(await call(ownerCookie, "PATCH", `/api/contacts/${mine.id}`, { firstName: "X" }), 404, "not_found", "home contact edit from B");
+          expect(await call(ownerCookie, "DELETE", `/api/contacts/${contactB}`), 403, "forbidden", "employee in B cannot delete");
+          const inB = await newContact(ownerCookie, { firstName: "Made", lastName: "InB" });
+          assert.equal((await db.query("select workspace_id from public.contacts where id = $1", [inB.id])).rows[0].workspace_id, wsB);
+          assert.equal((await appFetch(app, "/contacts", { cookie: ownerCookie })).text.includes("Switch Home"), false);
+        } finally {
+          const home = await call(ownerCookie, "POST", "/api/workspaces/active", { workspaceId: ws });
+          assert.equal(home.status, 200, home.text);
+        }
+        assert.equal((await call(ownerCookie, "GET", `/api/contacts/${mine.id}`)).status, 200);
+      });
+
+      test("browser: contacts, opportunities, calendars, tasks, and inbox notes work in the existing pages", async () => {
+        const shots = mkdtempSync(join(tmpdir(), "fna-p5-browser-"));
+        const base = app.url.replace("//127.0.0.1:", "//localhost:");
+        const bOwner = await signUp(env, email("crm-browser"), "CRM Browser Owner");
+        const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+          p_provisioning_key: `synthetic-crm-browser-${run}`, p_name: "CRM Browser (synthetic)", p_slug: `crm-browser-${run}`, p_owner_email: bOwner.email,
+        });
+        assert.equal(prov.status, 200, prov.text);
+        const bws = prov.body.workspace_id;
+        assert.equal((await rpc(env, bOwner.token, "accept_invitation", { p_token: prov.body.invite_token })).status, 200);
+        const browser = await launchBrowser();
+        try {
+          const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 }, timezoneId: "America/New_York" });
+          ctx.setDefaultTimeout(20_000);
+          await ctx.addInitScript("window.__name = (f) => f");
+          const page = await ctx.newPage();
+          const go = async (path: string) => {
+            await page.goto(`${base}${path}`);
+            await page.waitForLoadState("networkidle");
+          };
+          await page.goto(`${base}/login`);
+          await page.fill("#email", bOwner.email);
+          await page.fill("#password", bOwner.password);
+          await page.click("button[type=submit]");
+          await page.waitForURL(/\/dashboard$/);
+
+          await go("/contacts");
+          await page.getByRole("button", { name: "Add a contact" }).click();
+          const dialog = page.getByRole("dialog");
+          await dialog.locator("#c-first").fill("Browser");
+          await dialog.locator("#c-last").fill("Contact");
+          await dialog.locator("#c-email").fill(`browser-${run}@example.test`);
+          await dialog.locator("#c-phone").fill("call me");
+          await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+          await page.getByRole("alert").getByText("Enter a valid phone number").waitFor();
+          await dialog.locator("#c-phone").fill("781-964-0654");
+          await dialog.locator("#c-tags").fill("vip, browser");
+          await dialog.getByRole("button", { name: "Add contact", exact: true }).click();
+          await page.getByText("Browser Contact was added.").waitFor();
+          await page.fill("#contact-search", "browser");
+          await page.getByRole("button", { name: "Open Browser Contact" }).click();
+          await page.locator("#c-note").fill("Met at the browser test");
+          await page.getByRole("button", { name: "Save note" }).click();
+          await page.getByText("Met at the browser test").waitFor();
+          await page.screenshot({ path: join(shots, "contacts.png"), fullPage: true });
+          await page.getByRole("button", { name: "Close dialog" }).click();
+
+          await go("/pipeline");
+          await page.getByRole("button", { name: "Add opportunity" }).click();
+          await page.locator("#opp-contact option", { hasText: "Browser Contact" }).waitFor({ state: "attached" });
+          await page.selectOption("#opp-contact", { label: "Browser Contact" });
+          await page.fill("#opp-title", "Browser deal");
+          await page.selectOption("#opp-stage", { label: "New Lead" });
+          await page.fill("#opp-value", "1234.56");
+          await page.getByRole("dialog").getByRole("button", { name: "Add opportunity" }).click();
+          await page.getByText("$1,234.56 combined").waitFor();
+          await page.getByRole("button", { name: "Edit opportunity" }).click();
+          await page.getByRole("dialog").getByText("Browser Contact · $1,234.56 · open").waitFor();
+          await page.getByRole("dialog").getByLabel("Stage").selectOption({ label: "Won" });
+          await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+          await page.getByRole("dialog").waitFor({ state: "detached" });
+          const opp = await db.query<{ status: string; value_cents: string; closed: boolean }>(
+            "select status, value_cents::text, closed_at is not null closed from public.opportunities where workspace_id = $1", [bws]);
+          assert.deepEqual(opp.rows, [{ status: "won", value_cents: "123456", closed: true }]);
+          await page.screenshot({ path: join(shots, "pipeline.png"), fullPage: true });
+
+          await go("/calendar");
+          await page.getByRole("button", { name: "Create calendar" }).click();
+          await page.fill("#cal-name", "Browser Calls");
+          assert.equal(await page.locator("#cal-slug").inputValue(), "browser-calls");
+          await page.getByLabel("CRM Browser Owner").check();
+          await page.getByRole("dialog").getByRole("button", { name: "Create calendar" }).click();
+          await page.getByRole("heading", { name: "Browser Calls" }).waitFor();
+          await page.getByRole("button", { name: "Book appointment" }).click();
+          await page.locator("#appt-contact option", { hasText: "Browser Contact" }).waitFor({ state: "attached" });
+          await page.selectOption("#appt-contact", { label: "Browser Contact" });
+          await page.fill("#appt-start", "2031-07-01T10:00");
+          assert.equal(await page.locator("#appt-end").inputValue(), "2031-07-01T10:30", "the end follows the calendar duration");
+          await page.getByRole("dialog").getByRole("button", { name: "Book appointment" }).click();
+          await page.getByText("booked · 2031-07-01 14:00").waitFor();
+          await page.getByRole("button", { name: "Book appointment" }).click();
+          await page.locator("#appt-contact option", { hasText: "Browser Contact" }).waitFor({ state: "attached" });
+          await page.selectOption("#appt-contact", { label: "Browser Contact" });
+          await page.fill("#appt-start", "2031-07-01T10:15");
+          await page.getByRole("dialog").getByRole("button", { name: "Book appointment" }).click();
+          await page.getByText("That time overlaps another booking on this calendar.").waitFor();
+          await page.screenshot({ path: join(shots, "calendar-overlap.png"), fullPage: true });
+          await page.getByRole("button", { name: "Close dialog" }).click();
+          const appts = await db.query<{ starts_at: Date }>("select starts_at from public.appointments where workspace_id = $1", [bws]);
+          assert.deepEqual(appts.rows.map((r) => r.starts_at.toISOString()), ["2031-07-01T14:00:00.000Z"], "10:00 New York is 14:00 UTC");
+
+          await go("/tasks");
+          await page.getByRole("button", { name: "Add task" }).click();
+          await page.fill("#task-title", "Browser follow-up");
+          await page.locator("#task-assignee option", { hasText: "CRM Browser Owner" }).waitFor({ state: "attached" });
+          await page.selectOption("#task-assignee", { label: "CRM Browser Owner" });
+          await page.getByRole("dialog").getByRole("button", { name: "Add task" }).click();
+          await page.getByText(/Browser follow-up · open/).waitFor();
+          await page.getByRole("button", { name: "Mark Browser follow-up done" }).click();
+          await page.getByText(/Browser follow-up · done/).waitFor();
+          await page.getByText("1 task(s) · 0 open · 1 completed.").waitFor();
+          await page.screenshot({ path: join(shots, "tasks.png"), fullPage: true });
+
+          const contactId = (await db.query<{ id: string }>("select id from public.contacts where workspace_id = $1", [bws])).rows[0].id;
+          const convo = (await db.query<{ id: string }>(
+            "insert into public.conversations (workspace_id, contact_id, channel, status) values ($1, $2, 'email', 'open') returning id", [bws, contactId])).rows[0].id;
+          await db.query("insert into public.messages (workspace_id, conversation_id, direction, body, delivery_status) values ($1, $2, 'inbound', 'Is Tuesday free?', 'delivered')",
+            [bws, convo]);
+          await go("/inbox");
+          await page.getByRole("button", { name: "Open conversation with Browser Contact" }).click();
+          await page.getByText("Is Tuesday free?").waitFor();
+          await page.fill("#convo-note", "Offered Tuesday 10am by phone");
+          await page.getByRole("button", { name: "Save internal note" }).click();
+          await page.getByRole("dialog").getByText("Offered Tuesday 10am by phone").waitFor();
+          await page.getByRole("dialog").getByText("Internal note", { exact: true }).waitFor();
+          await page.screenshot({ path: join(shots, "inbox.png"), fullPage: true });
+          const msgs = await db.query("select direction, delivery_status from public.messages where conversation_id = $1 order by created_at", [convo]);
+          assert.deepEqual(msgs.rows, [{ direction: "inbound", delivery_status: "delivered" }, { direction: "internal", delivery_status: "not_sent" }]);
+          console.log(`P5 browser screenshots: ${shots}`);
+        } catch (err) {
+          let n = 0;
+          for (const c of browser.contexts()) {
+            for (const p of c.pages()) {
+              console.error(`P5 browser page ${n}: ${p.url()}`);
+              await p.screenshot({ path: join(shots, `failure-${n++}.png`), fullPage: true }).catch(() => undefined);
+            }
+          }
+          console.error(`P5 browser flow failed (screenshots so far: ${shots}):`, err);
+          throw err;
+        } finally {
+          await browser.close().catch(() => undefined);
+        }
+      });
+    });
+
     // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit
     // these attempts in practice; the 429 → rate_limited mapping is proven in tests/p2-auth.test.ts.
     test("AUTH-1: repeated failed sign-ins only ever answer generic 401 or 429 rate_limited", async () => {
