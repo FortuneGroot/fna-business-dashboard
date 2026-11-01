@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth";
+import { legacyOnlyEndpoint } from "@/lib/auth/legacy-only";
 import { loadEnv } from "@/lib/env";
 import {
   getStorageMode,
@@ -23,6 +24,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const { error } = await requireApiRole(req, "ADMIN");
   if (error) return error;
+  const unavailable = legacyOnlyEndpoint();
+  if (unavailable) return unavailable;
   const env = loadEnv();
   const store = getSyncStore();
   const stats = await store.stats();

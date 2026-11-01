@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-// A minimal local stand-in for GoTrue, PostgREST RPC, and Storage on 127.0.0.1, for deterministic
-// route tests (token expiry and refresh, injected RPC failures, Storage writes held in flight or losing
-// their response, and the database's attribution of tagged writes). Keys are placeholders, not secrets.
+// A minimal local stand-in for GoTrue, PostgREST (RPC and RLS-filtered table reads), and Storage on
+// 127.0.0.1, for deterministic route tests (token expiry and refresh, injected RPC and read failures,
+// Storage writes held in flight or losing their response, and the database's attribution of tagged
+// writes). Keys are placeholders, not secrets.
 
 export type FakeUser = { id: string; email: string; name: string };
 export type FakeSession = {
@@ -21,7 +22,36 @@ type StorageRequest = {
   token?: string; claimedAt?: number; applied?: boolean; outcome?: "succeeded" | "failed";
 };
 type StoredObject = { version: number; token: string | null; writtenBy: "service" | "user" };
+type Row = Record<string, unknown>;
 const LEASE_MS = 120_000;
+
+/** The read permission each workspace table's select policy requires (M10). */
+const TABLE_PERMISSION: Record<string, string> = {
+  workspace_settings: "settings.read", contacts: "contacts.read", contact_tags: "contacts.read",
+  pipelines: "pipeline.read", pipeline_stages: "pipeline.read", opportunities: "pipeline.read",
+  calendars: "calendar.read", appointments: "calendar.read", conversations: "conversations.read",
+  messages: "conversations.read", tasks: "tasks.read", reviews: "reviews.read", activity_events: "dashboard.read",
+};
+
+function compare(a: unknown, b: unknown): number {
+  if (a === b) return 0;
+  if (a === null || a === undefined) return 1;
+  if (b === null || b === undefined) return -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
+  return String(a) < String(b) ? -1 : 1;
+}
+
+/** PostgREST filters used by the data layer: eq, is.null, in.(…). */
+function matches(row: Row, column: string, filter: string): boolean {
+  const value = row[column];
+  if (filter === "is.null") return value === null || value === undefined;
+  if (filter.startsWith("eq.")) return String(value) === filter.slice(3);
+  if (filter.startsWith("in.(") && filter.endsWith(")")) {
+    return filter.slice(4, -1).split(",").map((v) => v.replace(/^"|"$/g, "")).includes(String(value));
+  }
+  throw new Error(`fake: unsupported filter ${column}=${filter}`);
+}
 
 const b64 = (v: unknown) => Buffer.from(typeof v === "string" ? v : JSON.stringify(v)).toString("base64url");
 
@@ -47,7 +77,60 @@ export async function startFakeSupabase() {
     dropWriteResponse: null as "before_commit" | "after_commit" | null,
     /** Record the claim, then drop the connection instead of answering. */
     dropClaimResponse: false,
+    /** Answer table reads of this table ("*" for all) with a database error. */
+    tableFails: null as string | null,
   };
+  /** Workspace tables for PostgREST reads, filtered as RLS would for the caller's request context. */
+  const tables = new Map<string, Row[]>();
+  /** The API's per-response row cap (config.toml max_rows). */
+  const limits = { maxRows: 1000 };
+
+  /** GET/HEAD /rest/v1/<table>: RLS (active workspace + table read permission), filters, order, range, count. */
+  function readTable(table: string, url: URL, method: string, prefer: string, userId: string | null, service: boolean): Reply & { range?: string } {
+    if (!userId && !service) return { status: 401, body: { code: "42501", message: `permission denied for table ${table}` } };
+    if (faults.tableFails === "*" || faults.tableFails === table) return { status: 500, body: { code: "XX000", message: "injected failure" } };
+    const ctx = userId ? contexts.get(userId) : undefined;
+    const ws = (ctx?.workspace as { id?: string } | null | undefined)?.id;
+    const perms = (ctx?.permissions as string[] | undefined) ?? [];
+    const visible = (t: string, r: Row) =>
+      service || (t === "profiles" ? true : Boolean(ws) && r.workspace_id === ws && perms.includes(TABLE_PERMISSION[t] ?? "∅"));
+    let found = (tables.get(table) ?? []).filter((r) => visible(table, r));
+    for (const [column, filter] of url.searchParams) {
+      if (["select", "order", "limit", "offset"].includes(column)) continue;
+      found = found.filter((r) => matches(r, column, filter));
+    }
+    const order = url.searchParams.get("order");
+    if (order) {
+      const keys = order.split(",").map((k) => { const [col, dir] = k.split("."); return { col, desc: dir === "desc" }; });
+      found = [...found].sort((a, b) => {
+        for (const k of keys) {
+          const c = compare(a[k.col], b[k.col]);
+          if (c) return k.desc ? -c : c;
+        }
+        return 0;
+      });
+    }
+    const totalCount = found.length;
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? Infinity), limits.maxRows);
+    found = found.slice(offset, offset + limit);
+    const select = url.searchParams.get("select") ?? "*";
+    const embed = select.match(/(\w+)\(([\w, ]+)\)/);
+    if (embed) {
+      const [, child, cols] = embed;
+      const fk = `${table.replace(/s$/, "")}_id`;
+      found = found.map((r) => ({
+        ...r,
+        [child]: (tables.get(child) ?? [])
+          .filter((c) => visible(child, c) && c[fk] === r.id)
+          .map((c) => Object.fromEntries(cols.split(",").map((k) => [k.trim(), c[k.trim()]]))),
+      }));
+    }
+    const range = /count=exact/.test(prefer)
+      ? `${found.length ? `${offset}-${offset + found.length - 1}` : "*"}/${totalCount}`
+      : undefined;
+    return { status: 200, body: method === "HEAD" ? null : found, range };
+  }
   const storageArrivals: string[] = [];
 
   /**
@@ -182,6 +265,13 @@ export async function startFakeSupabase() {
       if (rpcName === "platform_storage_change_claimed" && faults.dropClaimResponse) return void res.destroy();
       return send(res, reply);
     }
+    const tableName = url.pathname.match(/^\/rest\/v1\/([a-z_]+)$/)?.[1];
+    if (tableName && (req.method === "GET" || req.method === "HEAD")) {
+      const reply = readTable(tableName, url, req.method, String(req.headers.prefer ?? ""), userId, service);
+      if (reply.status !== 200) return send(res, reply);
+      res.writeHead(200, { "content-type": "application/json", ...(reply.range ? { "content-range": reply.range } : {}) });
+      return void res.end(reply.body === null ? undefined : JSON.stringify(reply.body));
+    }
     // Service-role writes may be held in flight or lose their response; members (any user bearer)
     // write directly, as the members-only Storage policies allow.
     const write = async (commit: () => Reply): Promise<void> => {
@@ -232,7 +322,11 @@ export async function startFakeSupabase() {
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   return {
-    url, anonKey, serviceKey, calls, objects, requests, faults, contexts, issue, storageArrivals,
+    url, anonKey, serviceKey, calls, objects, requests, faults, contexts, issue, storageArrivals, tables, limits,
+    /** Adds rows to a table (PostgREST reads apply RLS from the caller's request context). */
+    seed: (table: string, rows: Row[]) => tables.set(table, [...(tables.get(table) ?? []), ...rows]),
+    /** PostgREST table reads (not RPCs) made so far. */
+    tableCalls: () => calls.filter((c) => /^\/rest\/v1\/(?!rpc\/)[a-z_]+/.test(c.path)),
     /** Moves request `id`'s claim back past its lease, as if the clock had advanced. */
     expireLease: (id: number) => {
       const r = requests.get(id);

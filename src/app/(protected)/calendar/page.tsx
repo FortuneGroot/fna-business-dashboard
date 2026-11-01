@@ -1,26 +1,21 @@
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
-import { Card, PageHead, EmptyState } from "@/components/ui";
+import { Card, PageHead, EmptyState, Button } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { getSyncStore } from "@/lib/sync";
-import {
-  configuredCalendars,
-  looksLikePlaceholderCalendars,
-} from "@/lib/tenant-ui";
-import {
-  PLACEHOLDER_CONFIG_CALENDARS,
-  SYNC_SOURCE_SHORT,
-  syncBannerWaiting,
-  syncColumnEmpty,
-} from "@/lib/ui/sync-copy";
+import { getPageData } from "@/lib/data";
+import { PLACEHOLDER_CONFIG_CALENDARS, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
 export default async function CalendarPage() {
-  const appointments = await getSyncStore().listAppointments();
+  const data = await getPageData();
+  const { native } = data;
+  const copy = dataCopy(native);
+  const [appointments, workspace] = await Promise.all([data.reader.listAppointments(), data.workspace()]);
   const waiting = appointments.length === 0;
-  const calendars = configuredCalendars();
-  const calendarsBlocked = looksLikePlaceholderCalendars();
+  const calendars = workspace.calendars;
+  const calendarsBlocked = !workspace.calendarsConfigured;
+  const noNativeCalendars = native && calendars.length === 0;
   const statusCounts = appointments.reduce<Record<string, number>>((acc, a) => {
     const key = (a.status || "booked").toLowerCase();
     acc[key] = (acc[key] || 0) + 1;
@@ -34,20 +29,39 @@ export default async function CalendarPage() {
     <AppShell>
       <PageHead
         title="Calendars"
-        description={`Bookings from connected appointment workflows. A website form preferred time is still a request, not a reserved slot. ${SYNC_SOURCE_SHORT}`}
+        description={`${
+          native ? "Bookings on this workspace's calendars." : "Bookings from connected appointment workflows."
+        } A website form preferred time is still a request, not a reserved slot. ${copy.sourceShort}`}
       />
 
       <StatusBanner>
-        {calendarsBlocked
-          ? PLACEHOLDER_CONFIG_CALENDARS
-          : waiting
-            ? syncBannerWaiting("appointments")
-            : `${appointments.length} appointment(s) synced${statusSummary ? ` — ${statusSummary}` : ""}.`}
+        {noNativeCalendars
+          ? copy.bannerWaiting("calendars")
+          : calendarsBlocked
+            ? PLACEHOLDER_CONFIG_CALENDARS
+            : waiting
+              ? copy.bannerWaiting("appointments")
+              : `${appointments.length} appointment(s)${native ? "" : " synced"}${statusSummary ? ` — ${statusSummary}` : ""}.`}
       </StatusBanner>
 
-      {waiting ? (
+      {noNativeCalendars ? (
         <div style={{ marginTop: "1.1rem" }}>
-          <WaitingForSync entity="appointments" />
+          <Card
+            title="Calendars"
+            action={
+              data.can("calendar.configure") ? (
+                <Button size="sm" variant="secondary" disabled>
+                  Create calendar (coming soon)
+                </Button>
+              ) : undefined
+            }
+          >
+            <EmptyState title="No calendars yet" note="Calendars created for this workspace appear here." />
+          </Card>
+        </div>
+      ) : waiting ? (
+        <div style={{ marginTop: "1.1rem" }}>
+          <WaitingForSync entity="appointments" native={native} />
         </div>
       ) : null}
 

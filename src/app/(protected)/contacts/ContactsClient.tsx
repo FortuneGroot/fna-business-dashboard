@@ -5,7 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, DataTable, Button } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
+import { dataCopy } from "@/lib/ui/sync-copy";
 
 export type ContactRow = {
   id: string;
@@ -19,10 +19,13 @@ export type ContactRow = {
 export function ContactsClient({
   contacts,
   waiting,
+  native = false,
 }: {
   contacts: ContactRow[];
   waiting: boolean;
+  native?: boolean;
 }) {
+  const copy = dataCopy(native);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
 
@@ -57,17 +60,17 @@ export function ContactsClient({
 
   return (
     <AppShell>
-      <PageHead title="Contacts" description={SYNC_SOURCE_SHORT} />
+      <PageHead title="Contacts" description={copy.sourceShort} />
 
       <StatusBanner>
         {waiting
-          ? syncBannerWaiting("contacts")
-          : `${contacts.length} contact(s) from workflow sync. Phone/email masked in this view.`}
+          ? copy.bannerWaiting("contacts")
+          : `${contacts.length} contact(s) ${native ? "in this workspace" : "from workflow sync"}. Phone/email masked in this view.`}
       </StatusBanner>
 
       <div className="grid grid-2" style={{ margin: "0 0 1.1rem" }}>
         <div>
-          <label htmlFor="contact-search">Search synced contacts</label>
+          <label htmlFor="contact-search">{native ? "Search contacts" : "Search synced contacts"}</label>
           <input
             id="contact-search"
             type="search"
@@ -96,8 +99,10 @@ export function ContactsClient({
         </div>
       </div>
       <p className="muted" style={{ marginTop: 0 }}>
-        Search and source filters apply only to contacts already synced into this dashboard.
-        Adding contacts is not available yet.
+        {native
+          ? "Search and source filters apply to this workspace's contacts."
+          : "Search and source filters apply only to contacts already synced into this dashboard."}
+        {" "}Adding contacts is not available yet.
       </p>
 
       <Card
@@ -109,7 +114,7 @@ export function ContactsClient({
         }
       >
         {waiting ? (
-          <WaitingForSync entity="contacts" />
+          <WaitingForSync entity="contacts" native={native} />
         ) : (
           <DataTable
             columns={["Name", "Phone", "Email", "Source", "Last Activity"]}
@@ -118,7 +123,9 @@ export function ContactsClient({
             emptyNote={
               query || source
                 ? "Try a different search or clear the source filter."
-                : "Contacts will appear here once sync events arrive."
+                : native
+                  ? "Contacts added to this workspace appear here."
+                  : "Contacts will appear here once sync events arrive."
             }
           />
         )}

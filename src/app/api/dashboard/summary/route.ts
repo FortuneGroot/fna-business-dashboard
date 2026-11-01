@@ -1,18 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
-import { getSyncStore } from "@/lib/sync";
+import { NextRequest } from "next/server";
+import { readApi } from "@/lib/data/api";
+import type { SummaryResponse } from "@/lib/data/dashboard-api";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
-  const store = getSyncStore();
-  const summary = await store.summary();
-  return NextResponse.json({
+  return readApi(req, "dashboard.read", async ({ reader }): Promise<SummaryResponse> => ({
     ok: true,
-    source: "sync-store",
-    storageMode: store.storageMode,
-    summary,
-  });
+    source: reader.source,
+    storageMode: reader.storageMode,
+    summary: await reader.summary(),
+  }));
 }

@@ -128,6 +128,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [tenant, setTenant] = useState<TenantChrome | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
   const [permissions, setPermissions] = useState<string[] | null>(null);
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/tenant/public")
       .then((r) => r.json())
@@ -139,11 +140,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         const next = d?.user?.role;
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
         if (Array.isArray(d?.permissions)) setPermissions(d.permissions);
+        if (typeof d?.workspace?.name === "string" && d.workspace.name) setWorkspaceName(d.workspace.name);
       })
       .catch(() => undefined);
   }, []);
 
-  const clientName = tenant?.client?.businessName || BRAND.name;
+  const clientName = workspaceName || tenant?.client?.businessName || BRAND.name;
   const legal = tenant?.platform?.legal || BRAND.legal;
   const productLine = "Business Dashboard";
 

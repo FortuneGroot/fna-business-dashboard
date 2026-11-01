@@ -31,6 +31,59 @@ export const SYNC_SOURCE_DETAIL =
 export const SYNC_BANNER_ACTIVE =
   "Synced from connected workflows. Your CRM remains the source of record.";
 
+/**
+ * Page copy by data source. `sync` is the legacy webhook-sync wording above, unchanged; `native` is
+ * for workspaces reading their own records (AUTH_PROVIDER=supabase), with no sync or CRM language.
+ */
+export type DataCopy = {
+  sourceShort: string;
+  sourceDetail: string;
+  bannerActive: string;
+  bannerWaiting(entity: string): string;
+  waitingTitle(entity: string): string;
+  waitingNote(entity: string): string;
+};
+
+/** Legacy entity labels ("task events") read as record names in native copy ("tasks"). */
+const NATIVE_NOUN: Record<string, string> = {
+  metrics: "records",
+  leads: "contacts",
+  "task events": "tasks",
+  "review events": "reviews",
+  "conversation events": "conversations",
+  "report data": "records",
+};
+
+export function nativeNoun(entity: string): string {
+  return NATIVE_NOUN[entity] ?? entity;
+}
+
+export const SYNC_COPY: DataCopy = {
+  sourceShort: SYNC_SOURCE_SHORT,
+  sourceDetail: SYNC_SOURCE_DETAIL,
+  bannerActive: SYNC_BANNER_ACTIVE,
+  bannerWaiting: syncBannerWaiting,
+  waitingTitle: () => SYNC_WAITING_TITLE,
+  waitingNote: syncWaitingNote,
+};
+
+export const NATIVE_COPY: DataCopy = {
+  sourceShort: "Figures come from this workspace's records. Values stay at — until records exist.",
+  sourceDetail: "Data on this page comes from this workspace's own records.",
+  bannerActive: "Showing this workspace's records.",
+  bannerWaiting: (entity) => `No ${nativeNoun(entity)} yet.`,
+  waitingTitle: (entity) => `No ${nativeNoun(entity)} yet`,
+  waitingNote: (entity) => {
+    const noun = nativeNoun(entity);
+    const verb = noun.endsWith("s") ? "appear" : "appears";
+    return `${noun.replace(/^./, (c) => c.toUpperCase())} added to this workspace ${verb} here. Nothing is invented here.`;
+  },
+};
+
+export function dataCopy(native: boolean): DataCopy {
+  return native ? NATIVE_COPY : SYNC_COPY;
+}
+
 export const PLACEHOLDER_CONFIG_STAGES =
   "Pipeline stages still need final setup. Contact Fortune & Automations if this persists.";
 

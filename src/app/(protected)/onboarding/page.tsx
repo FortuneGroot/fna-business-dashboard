@@ -6,9 +6,45 @@ import {
   toPublicReadinessPayload,
 } from "@/lib/onboarding";
 import { getTenantConfig } from "@/lib/tenant";
-import { getSyncStore } from "@/lib/sync";
+import { getPageData } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
+
+type ReadinessView = {
+  status?: string;
+  checks?: { id?: string; label?: string; detail?: string; status?: string }[];
+};
+
+/** Native workspaces: setup status from the workspace's own records (no CRM configuration). */
+function nativeReadiness(contactsCount: number, calendarsConfigured: boolean): ReadinessView {
+  const checks = [
+    {
+      id: "calendar",
+      label: "Create a calendar",
+      detail: "Add a calendar so appointments can be booked and confirmed by your team.",
+      status: calendarsConfigured ? "pass" : "pending",
+    },
+    {
+      id: "contact",
+      label: "Add your first contact",
+      detail: "Contacts you add appear across the dashboard — no sample data is seeded here.",
+      status: contactsCount > 0 ? "pass" : "pending",
+    },
+    {
+      id: "automations",
+      label: "Set up automations",
+      detail: "Follow-up and reminder workflows turn on only after an owner explicitly approves them.",
+      status: "pending",
+    },
+    {
+      id: "payments",
+      label: "Connect payments",
+      detail: "Invoicing and payment collection become available once a payment processor is connected.",
+      status: "pending",
+    },
+  ];
+  return { status: checks.every((c) => c.status === "pass") ? "READY" : "IN PROGRESS", checks };
+}
 
 const FALLBACK_STEPS = [
   {
@@ -35,10 +71,12 @@ const FALLBACK_STEPS = [
 
 export default async function OnboardingPage() {
   await requirePageRole("OWNER", "onboarding.read");
-  const config = getTenantConfig();
-  const report = evaluateClientReadiness(config);
-  const publicReport = toPublicReadinessPayload(report);
-  const summary = await getSyncStore().summary();
+  const data = await getPageData();
+  const { native } = data;
+  const summary = await data.reader.summary();
+  const publicReport: ReadinessView = native
+    ? nativeReadiness(summary.contactsCount, (await data.workspace()).calendarsConfigured)
+    : toPublicReadinessPayload(evaluateClientReadiness(getTenantConfig()));
 
   const checks = publicReport.checks?.length
     ? publicReport.checks.map((c) => {
@@ -62,7 +100,11 @@ export default async function OnboardingPage() {
     <AppShell>
       <PageHead
         title="Onboarding / Setup Checklist"
-        description="Owner-only setup status from your configuration and sync activity. Nothing is marked done until it is genuinely connected."
+        description={
+          native
+            ? "Owner-only setup status for this workspace. Nothing is marked done until it is genuinely set up."
+            : "Owner-only setup status from your configuration and sync activity. Nothing is marked done until it is genuinely connected."
+        }
       />
 
       <Card
@@ -73,14 +115,21 @@ export default async function OnboardingPage() {
           </Badge>
         }
       >
-        <p className="muted" style={{ marginTop: 0 }}>
-          Sync waiting: {summary.waitingForSync ? "yes — no events yet" : "no — events received"}.
-          Last sync event:{" "}
-          {summary.lastEventAt
-            ? summary.lastEventAt.slice(0, 19).replace("T", " ")
-            : "none yet"}
-          .
-        </p>
+        {native ? (
+          <p className="muted" style={{ marginTop: 0 }}>
+            Workspace records: {summary.waitingForSync ? "none yet" : "added"}. Last activity:{" "}
+            {summary.lastEventAt ? summary.lastEventAt.slice(0, 19).replace("T", " ") : "none yet"}.
+          </p>
+        ) : (
+          <p className="muted" style={{ marginTop: 0 }}>
+            Sync waiting: {summary.waitingForSync ? "yes — no events yet" : "no — events received"}.
+            Last sync event:{" "}
+            {summary.lastEventAt
+              ? summary.lastEventAt.slice(0, 19).replace("T", " ")
+              : "none yet"}
+            .
+          </p>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
           {checks.map((s, i) => (
             <div

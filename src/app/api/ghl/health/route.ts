@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkGhlConnection, GhlRefusedError } from "@/lib/ghl";
 import { isAuthEnforced, mustProtectRoutes, readSessionFromCookieHeader } from "@/lib/auth";
+import { legacyOnlyEndpoint } from "@/lib/auth/legacy-only";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
  * Authenticated callers (when AUTH_SECRET set) get the full health payload.
  */
 export async function GET(req: NextRequest) {
+  const unavailable = legacyOnlyEndpoint();
+  if (unavailable) return unavailable;
   const enforced = isAuthEnforced();
   const session = enforced
     ? await readSessionFromCookieHeader(req.headers.get("cookie"))

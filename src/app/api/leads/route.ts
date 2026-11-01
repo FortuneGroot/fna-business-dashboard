@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { legacyOnlyEndpoint } from "@/lib/auth/legacy-only";
 import { loadEnv } from "@/lib/env";
 import { logEvent } from "@/lib/logging";
 import { validateInboundLead } from "@/lib/leads";
@@ -7,6 +8,8 @@ import { dedupeKey, mapLeadToGhlPayload } from "@/lib/mapping";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const unavailable = legacyOnlyEndpoint();
+  if (unavailable) return unavailable;
   const env = loadEnv();
   const body = await req.json().catch(() => null);
   const result = validateInboundLead(body);

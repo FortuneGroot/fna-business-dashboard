@@ -1,31 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
-import { getSyncStore } from "@/lib/sync";
+import { NextRequest } from "next/server";
+import { readApi } from "@/lib/data/api";
+import { appointmentRow, type AppointmentsResponse } from "@/lib/data/dashboard-api";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
-  const store = getSyncStore();
-  const appointments = await store.listAppointments();
-  const summary = await store.summary();
-  return NextResponse.json({
-    ok: true,
-    source: "sync-store",
-    storageMode: store.storageMode,
-    appointments: appointments.map((a) => ({
-      id: a.externalAppointmentId,
-      contactId: a.contactId || "—",
-      calendarId: a.calendarId || "—",
-      calendarName: a.calendarName || "—",
-      status: a.status || "—",
-      start: a.start || "—",
-      end: a.end || "—",
-      timezone: a.timezone || "—",
-      assignedUser: a.assignedUser || "—",
-      updatedAt: a.updatedAt,
-    })),
-    waitingForSync: summary.waitingForSync,
+  return readApi(req, "calendar.read", async ({ reader }): Promise<AppointmentsResponse> => {
+    const [appointments, waitingForSync] = await Promise.all([reader.listAppointments(), reader.waitingForSync()]);
+    return {
+      ok: true,
+      source: reader.source,
+      storageMode: reader.storageMode,
+      appointments: appointments.map(appointmentRow),
+      waitingForSync,
+    };
   });
 }

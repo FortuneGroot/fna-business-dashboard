@@ -1049,7 +1049,7 @@ The legacy migrations originally shared the 8-digit version `20260917`. They are
 | P0 Prerequisites | Docker Desktop + Supabase CLI locally (D1); decisions D1–D7 resolved | `supabase start` works locally — **BLOCKED** (Docker/WSL/Supabase CLI not installed); PGlite + real local PostgreSQL used meanwhile (§15) |
 | P1 Schema | M1–M14 + rollback script + DB tests | Done locally: PGlite/shim and real-PostgreSQL suites green. `supabase db reset` and HTTP/JWT/Storage checks **BLOCKED** until the Supabase CLI stack runs |
 | P2 Auth | Supabase auth behind `AUTH_PROVIDER`; request context; middleware | AUTH-* pass; legacy mode still passes the original 137 tests |
-| P3 Read parity | Existing pages and `/api/dashboard/*` read native tables via adapters | UI-1, UI-2 visual parity; API-1 shape tests |
+| P3 Read parity | Existing pages and `/api/dashboard/*` read native tables via adapters | UI-1, UI-2 visual parity; API-1 shape tests — done locally (§17): API-1, ISO, and UI-1 pass on the real stack; UI-2 run with a local harness (sidebar 0.00% on all 20 pages; differences are copy) |
 | P4 Team & settings | Team, invitations, settings, AI config, integrations list inside existing Settings layout | INV-*, ROLE-*, SET-* pass |
 | P5 Native CRUD | Create/edit on Contacts, Opportunities (move), Calendars, Tasks, Inbox notes | CRUD-* pass; no outbound calls (NET-1) |
 | P6 Platform console | `/platform` workspaces, provision, suspend, access grants, audit | PLAT-*, SUSP-* pass |
@@ -1393,3 +1393,48 @@ Finding: recovery could finalize and release a claim while its operation might s
 | Unknown state preserved; late writes cannot take effect | After the lease, recording `failed` closes the token under the claim row lock shared with the trigger; a write already committing is waited for (→ `succeeded`), a later one is refused (`platform_operation_closed`) and leaves the object unchanged | Real PostgreSQL (independent sessions): recovery blocks on an uncommitted in-flight write and records `succeeded` after it commits, or `failed` if it aborts; recovery first → the late write blocks, then is refused and nothing is stored. Unit, PGlite, stack (real Storage API): the fenced late write is refused and the member's object stands |
 
 Residual, documented: if the tombstone cleanup after a successful delete fails, the old logo stays under `<ws>/.platform-trash/` inside the workspace's own folder. M16 was amended in place again (never pushed or applied outside disposable local stacks).
+
+## 17. P3 implementation record (read parity)
+
+Local only: nothing pushed, deployed, or applied to a hosted project; no invitations or outbound messages. With `AUTH_PROVIDER=legacy` (the default) every page and API reads the legacy sync store and tenant config exactly as before. No migrations in this phase.
+
+### 17.1 Files
+
+| Area | Files |
+| --- | --- |
+| Data layer | `src/lib/data/`: `types.ts` (`DashboardReader`, `WorkspaceView`, `DataSource`), `query.ts` (`fromWorkspace` adds `workspace_id = <active workspace>` to every query on top of RLS; `DataUnavailableError`; 500-row list cap; exact HEAD counts), `dashboard-adapters.ts` (pure native row → existing record mappers), one reader per area (`contacts`, `pipeline`, `calendars`, `conversations`, `tasks`, `reviews`, `activity`, `reports`, `workspace`), `native.ts` / `legacy.ts` (the two `DataSource`s), `index.ts` (`getPageData()`, per-request cached), `api.ts` (`readApi(req, permission, build)`), `dashboard-api.ts` (the pre-migration `/api/dashboard/*` response types and row mappers, moved unchanged from the routes) |
+| Request context | `src/lib/authz/context.ts`: per-request `getPageSupabase()` shared by the context and the readers |
+| APIs | `/api/dashboard/{summary,contacts,opportunities,appointments,conversations,events}` on `readApi` with `dashboard.read` / `contacts.read` / `pipeline.read` / `calendar.read` / `conversations.read` / `dashboard.read`; `/api/tenant/config` (`settings.read`; owner block only with `settings.write`); `/api/tenant/public` (platform brand only in supabase mode); `/api/health` (database check through `rpc request_context` with the anon key in supabase mode); `src/lib/auth/legacy-only.ts` for the retired endpoints |
+| Pages | Dashboard, Inbox, Contacts, Opportunities, Calendars, Tasks, Reputation, Reports, Setup, Help, Resources read through `getPageData()`; Settings reads the native role and the workspace summary; markup, classes, and layout unchanged |
+| Copy | `src/lib/ui/sync-copy.ts`: `dataCopy(native)` → `SYNC_COPY` (legacy strings, unchanged) or `NATIVE_COPY` (no sync, CRM, or workflow wording); `WaitingForSync` takes `native` |
+| Tests | `tests/p3-data.test.ts` (unit, 23), `tests/helpers/fake-supabase.ts` (PostgREST table reads with modelled RLS, filters, ordering, `max_rows`, embeds, exact counts, fault injection), `tests/helpers/api-shapes.ts` (runtime API-1 schemas: required keys, types, no extra keys), `tests/supabase-stack/stack.test.ts` nested "the app reads each workspace's native data (P3)" (5), `tests/visual/ui2-visual-parity.ts` (UI-2 harness, not part of `npm test`) |
+
+### 17.2 Behaviour
+
+- **Isolation:** every native read uses the signed-in user's JWT (never the service role), filters on the active workspace from the request context (never a client-supplied id), and RLS re-checks. Soft-deleted rows are excluded explicitly, so counts and "last activity" do not vary with the reader's delete permission.
+- **Shapes (API-1):** `/api/dashboard/*` return the pre-migration shapes. Metadata: `source: "workspace"`, `storageMode: "postgres"` (legacy: `"sync-store"` and the store's mode). Amounts are cents ÷ 100. Message bodies are never returned (summaries only, as before); internal notes are `direction: "unknown"`, `eventType: "conversation.internal"`. Contact email/phone stay masked.
+- **Errors:** 401/403/423 per §7.1 before any data read; a failed table read → 503 `unavailable` with refreshed cookies applied; `Cache-Control: private, no-store`.
+- **Pipeline value** pages through results until an empty page, so it is correct beyond PostgREST `max_rows`.
+- **Retired endpoints (supabase mode):** `/api/sync/health`, `/api/onboarding/readiness`, `/api/events` (after their auth check), `/api/ghl/health`, `/api/leads` → 404 `{code:"not_available"}`. They no longer serve the single-tenant F&A store to other workspaces. `/api/webhooks/ghl` is unchanged until P7.
+- **Copy:** native pages say "No contacts yet", "in this workspace", "Last activity", and so on; legacy pages keep "Waiting for sync". A workspace without calendars shows "No calendars yet" with a disabled "Create calendar (coming soon)" for `calendar.configure` holders. Setup shows a native readiness checklist (calendar, first contact, automations, payments).
+
+### 17.3 Deviations from the spec text
+
+1. `src/lib/tenant.ts` stays for legacy mode; the spec's `getWorkspaceConfig` is `loadWorkspaceView` in `src/lib/data/workspace.ts`.
+2. Legacy-only endpoints answer 404 in supabase mode instead of being rewritten (their data has no native equivalent until P7).
+3. Lists are capped at 500 rows (counts are exact); paging UI is P5.
+4. A role without a page's read permission sees the empty state instead of a redirect (all current roles hold every read permission, §4).
+5. Settings keeps its layout; in supabase mode the owner's Integrations card says no integrations are connected (no CRM text) and System status shows the workspace summary. The full Settings rewrite is P4.
+6. Visual parity (UI-2) runs as a local harness with a cached `playwright-core` and Chromium rather than a pinned `@playwright/test` dependency; no package was added.
+
+### 17.4 Results (2026-11-01, this machine)
+
+| Check | Environment | Result |
+| --- | --- | --- |
+| Unit suite (205 previous + 23 P3: adapters, API-1 shapes for every endpoint, exact mapped records and summary, workspace B sees only B, every read carries the user JWT and the workspace filter, paging past `max_rows`, empty workspace, 401/403/permission matrix, 503 with refreshed cookies, tenant config/public, health, retired endpoints, legacy mode unchanged with no Supabase calls, static guards) | Node 24.20.0 | PASS 228/228 |
+| DB suite | PGlite + shim | PASS 187/187 (unchanged) |
+| Concurrency suite | Real local PostgreSQL 18.6 | PASS 28/28 (unchanged) |
+| Stack suite (28 previous + 5 P3: API-1 shapes and parity with the owner's own PostgREST view; ISO through APIs and pages; tenant config/public, health, retired endpoints; UI-1 on 19 routes with seeded data; native empty states and admin Setup/Resources gates) | Real Supabase local stack (disposable) + `next build`/`next start` | PASS 33/33 |
+| UI-2 (`tests/visual/ui2-visual-parity.ts`, 1440×900 full page, empty workspace named like the baseline, per-channel tolerance 40) | Disposable stack + built app + Chromium 1243 | All 20 routes 200. Sidebar 0.00% on every page; top bar 0.00%, or 1.27% where the baseline was captured 1425 px wide (the 15 px scrollbar strip). Page differences are copy only: login, marketing, payments, privacy, terms 0.00%; support 0.91% to reporting 2.53%; settings 1.71%; dashboard 6.71%, help 9.87% (empty workspace has no support email/phone; F&A's were in the baseline); onboarding 62.70% (21 legacy CRM checks replaced by the 4-item native checklist, so the page is shorter) |
+| `tsc --noEmit -p .` | — | PASS |
+| `npm run build` | Next.js 15.5.25 | PASS |

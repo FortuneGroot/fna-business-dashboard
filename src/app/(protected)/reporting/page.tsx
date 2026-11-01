@@ -2,42 +2,44 @@ import { AppShell } from "@/components/AppShell";
 import { Card, MetricTile, EmptyState, PageHead } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { SidebarIcon } from "@/components/Sidebar";
-import { getSyncStore } from "@/lib/sync";
+import { getPageData } from "@/lib/data";
 import Link from "next/link";
-import { SYNC_SOURCE_SHORT } from "@/lib/ui/sync-copy";
+import { dataCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReportingPage() {
-  const summary = await getSyncStore().summary();
+  const { reader, native } = await getPageData();
+  const copy = dataCopy(native);
+  const summary = await reader.summary();
   const waiting = summary.waitingForSync;
 
   const metrics = [
     {
-      label: "Leads Synced",
+      label: native ? "Contacts" : "Leads Synced",
       value: waiting ? "—" : String(summary.contactsCount),
-      note: "Contacts received from connected workflow sync.",
+      note: native ? "Contacts in this workspace." : "Contacts received from connected workflow sync.",
       icon: "contacts" as const,
       href: "/contacts",
     },
     {
       label: "Won Count",
       value: waiting ? "—" : String(summary.wonCount),
-      note: "From won-opportunity sync events.",
+      note: native ? "Opportunities marked won." : "From won-opportunity sync events.",
       icon: "reports" as const,
       href: "/pipeline",
     },
     {
       label: "Open Pipeline Value",
       value: waiting ? "—" : `$${summary.openPipelineValue.toLocaleString()}`,
-      note: "Sum of open synced opportunities.",
+      note: native ? "Sum of open opportunities." : "Sum of open synced opportunities.",
       icon: "opportunities" as const,
       href: "/pipeline",
     },
     {
-      label: "Appointments Synced",
+      label: native ? "Appointments" : "Appointments Synced",
       value: waiting ? "—" : String(summary.appointmentsCount),
-      note: "From appointment sync events.",
+      note: native ? "Appointments on this workspace's calendars." : "From appointment sync events.",
       icon: "calendar" as const,
       href: "/calendar",
     },
@@ -45,7 +47,7 @@ export default async function ReportingPage() {
 
   return (
     <AppShell>
-      <PageHead title="Reports" description={SYNC_SOURCE_SHORT} />
+      <PageHead title="Reports" description={copy.sourceShort} />
 
       <div className="grid grid-4">
         {metrics.map((m) => (
@@ -63,11 +65,11 @@ export default async function ReportingPage() {
       <div style={{ marginTop: "1.1rem" }}>
         <Card title="Trend">
           {waiting ? (
-            <WaitingForSync entity="report data" />
+            <WaitingForSync entity="report data" native={native} />
           ) : (
             <EmptyState
               title="Totals only for now"
-              note={`Last successful sync event: ${
+              note={`${native ? "Last activity" : "Last successful sync event"}: ${
                 summary.lastEventAt
                   ? summary.lastEventAt.slice(0, 19).replace("T", " ")
                   : "none yet"

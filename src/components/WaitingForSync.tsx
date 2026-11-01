@@ -1,11 +1,14 @@
 import { EmptyState } from "@/components/ui";
-import { SYNC_WAITING_TITLE, syncWaitingNote } from "@/lib/ui/sync-copy";
+import { dataCopy } from "@/lib/ui/sync-copy";
 
-/** Shared empty state when webhook sync has not populated the store yet. */
+/** Shared empty state: sync not yet populated (legacy) or no workspace records yet (`native`). */
 export function WaitingForSync({
   entity = "data",
+  native = false,
 }: {
   entity?: string;
+  native?: boolean;
 }) {
-  return <EmptyState title={SYNC_WAITING_TITLE} note={syncWaitingNote(entity)} />;
+  const copy = dataCopy(native);
+  return <EmptyState title={copy.waitingTitle(entity)} note={copy.waitingNote(entity)} />;
 }

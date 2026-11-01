@@ -1,28 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
-import { getSyncStore } from "@/lib/sync";
+import { NextRequest } from "next/server";
+import { readApi } from "@/lib/data/api";
+import { conversationRow, type ConversationsResponse } from "@/lib/data/dashboard-api";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
-  const store = getSyncStore();
-  const conversations = await store.listConversationEvents(100);
-  const summary = await store.summary();
-  return NextResponse.json({
-    ok: true,
-    source: "sync-store",
-    storageMode: store.storageMode,
-    conversations: conversations.map((c) => ({
-      id: c.id,
-      contactId: c.contactId || "—",
-      direction: c.direction || "unknown",
-      channel: c.channel || "—",
-      eventType: c.eventType,
-      timestamp: c.timestamp,
-      summary: c.summary || "—",
-    })),
-    waitingForSync: summary.waitingForSync,
+  return readApi(req, "conversations.read", async ({ reader }): Promise<ConversationsResponse> => {
+    const [conversations, waitingForSync] = await Promise.all([
+      reader.listConversationEvents(100),
+      reader.waitingForSync(),
+    ]);
+    return {
+      ok: true,
+      source: reader.source,
+      storageMode: reader.storageMode,
+      conversations: conversations.map(conversationRow),
+      waitingForSync,
+    };
   });
 }

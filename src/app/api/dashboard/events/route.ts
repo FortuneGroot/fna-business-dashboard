@@ -1,27 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
-import { getSyncStore } from "@/lib/sync";
+import { NextRequest } from "next/server";
+import { readApi } from "@/lib/data/api";
+import { eventRow, type EventsResponse } from "@/lib/data/dashboard-api";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
-  const store = getSyncStore();
-  const events = await store.listAuditEvents(100);
-  const summary = await store.summary();
-  return NextResponse.json({
-    ok: true,
-    source: "sync-store",
-    storageMode: store.storageMode,
-    events: events.map((e) => ({
-      id: e.id,
-      eventType: e.eventType,
-      receivedAt: e.receivedAt,
-      locationId: e.locationId,
-      entityRefs: e.entityRefs,
-      note: e.note || "—",
-    })),
-    waitingForSync: summary.waitingForSync,
+  return readApi(req, "dashboard.read", async ({ reader }): Promise<EventsResponse> => {
+    const [events, waitingForSync] = await Promise.all([reader.listAuditEvents(100), reader.waitingForSync()]);
+    return {
+      ok: true,
+      source: reader.source,
+      storageMode: reader.storageMode,
+      events: events.map(eventRow),
+      waitingForSync,
+    };
   });
 }

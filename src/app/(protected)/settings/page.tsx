@@ -18,7 +18,7 @@ type Health = {
 
 type TenantConfig = {
   client?: { businessName?: string; timezone?: string };
-  owner?: { pipelineName?: string; locationConfigured?: boolean };
+  owner?: { pipelineName?: string; locationConfigured?: boolean; stagesCount?: number };
 };
 
 type SyncHealth = {
@@ -35,6 +35,7 @@ export default function SettingsPage() {
   const [tenant, setTenant] = useState<TenantConfig | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [role, setRole] = useState<AuthRole | null>(null);
+  const [native, setNative] = useState(false);
   const [err, setErr] = useState("");
   const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthorized" | "error">(
     "loading"
@@ -44,17 +45,20 @@ export default function SettingsPage() {
     setLoadState("loading");
     setErr("");
     try {
-      const [meRes, healthRes, tenantRes, syncRes] = await Promise.all([
+      const [meRes, healthRes, tenantRes] = await Promise.all([
         fetch("/api/auth/me"),
         fetch("/api/health"),
         fetch("/api/tenant/config"),
-        fetch("/api/sync/health"),
       ]);
+      let isNative = false;
       if (meRes.ok) {
         const me = await meRes.json();
-        const next = me?.user?.role;
+        isNative = Boolean(me?.workspace);
+        const next = me?.user?.role ?? me?.legacyRole;
         if (next === "OWNER" || next === "ADMIN" || next === "CLIENT") setRole(next);
       }
+      setNative(isNative);
+      const syncRes = await fetch(isNative ? "/api/dashboard/summary" : "/api/sync/health");
       if (healthRes.status === 401 || healthRes.status === 403) {
         setLoadState("unauthorized");
         setErr("Your session expired or you are not signed in. Sign out and sign back in.");
@@ -74,7 +78,8 @@ export default function SettingsPage() {
       setHealth(healthJson);
       setTenant((await tenantRes.json()) as TenantConfig);
       if (syncRes.ok) {
-        setSyncHealth((await syncRes.json()) as SyncHealth);
+        const body = await syncRes.json();
+        setSyncHealth(isNative ? ({ ...body.summary, storageMode: body.storageMode } as SyncHealth) : (body as SyncHealth));
       } else if (syncRes.status === 403) {
         setSyncHealth(null);
       }
@@ -136,7 +141,18 @@ export default function SettingsPage() {
           </p>
         </Card>
 
-        {isOwner ? (
+        {isOwner && native ? (
+          <Card title="Integrations" action={<Badge tone="neutral">Not connected</Badge>}>
+            <p>No integrations are connected to this workspace yet.</p>
+            {tenant?.owner?.pipelineName ? (
+              <p className="muted">
+                Pipeline: {tenant.owner.pipelineName}
+                {tenant.owner.stagesCount ? ` · ${tenant.owner.stagesCount} stages` : ""}
+              </p>
+            ) : null}
+            <p className="muted">Lists and metrics come from this workspace&apos;s own records.</p>
+          </Card>
+        ) : isOwner ? (
           <Card title="Integrations" action={<Badge tone={crmTone}>{crmLabel}</Badge>}>
             <p>
               {connected
@@ -174,7 +190,7 @@ export default function SettingsPage() {
             {syncHealth ? (
               <>
                 <p style={{ marginTop: 0 }}>
-                  Last sync event:{" "}
+                  {native ? "Last activity:" : "Last sync event:"}{" "}
                   {syncHealth.lastEventAt
                     ? syncHealth.lastEventAt.slice(0, 19).replace("T", " ")
                     : "none yet"}

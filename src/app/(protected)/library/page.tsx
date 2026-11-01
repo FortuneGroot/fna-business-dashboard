@@ -6,7 +6,7 @@ import snippets from "@/content/snippets.json";
 import alerts from "@/content/alerts.json";
 import { requirePageRole } from "@/lib/auth/guards";
 import { applyClientBusinessName } from "@/lib/mapping";
-import { clientBusinessName } from "@/lib/tenant";
+import { getPageData } from "@/lib/data";
 import { sanitizeClientFacingCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ function clientFacingTitle(name: string | undefined, fallback: string): string {
 
 export default async function LibraryPage() {
   await requirePageRole("ADMIN", "library.read");
-  const biz = clientBusinessName();
+  const biz = (await (await getPageData()).workspace()).businessName;
   const resolvedSnippets = snippets.map((s) => ({
     ...s,
     body: sanitizeClientFacingCopy(applyClientBusinessName(s.body, biz)),

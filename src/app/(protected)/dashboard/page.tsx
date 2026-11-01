@@ -3,23 +3,24 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, MetricTile, Badge, EmptyState, QuickActions, Button } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { SidebarIcon } from "@/components/Sidebar";
-import { getSyncStore } from "@/lib/sync";
-import { clientBusinessName, platformProductName } from "@/lib/tenant";
-import {
-  SYNC_BANNER_ACTIVE,
-  SYNC_SOURCE_DETAIL,
-  syncBannerWaiting,
-} from "@/lib/ui/sync-copy";
+import { getPageData } from "@/lib/data";
+import { platformProductName } from "@/lib/tenant";
+import { dataCopy } from "@/lib/ui/sync-copy";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const store = getSyncStore();
-  const summary = await store.summary();
-  const events = await store.listAuditEvents(8);
-  const conversations = await store.listConversationEvents(40);
-  const reviews = await store.listReviewEvents(20);
+  const data = await getPageData();
+  const { reader, native } = data;
+  const copy = dataCopy(native);
+  const [summary, events, conversations, reviews, workspace] = await Promise.all([
+    reader.summary(),
+    reader.listAuditEvents(8),
+    reader.listConversationEvents(40),
+    reader.listReviewEvents(20),
+    data.workspace(),
+  ]);
   const waiting = summary.waitingForSync;
   const needsAttention = conversations.filter((c) =>
     /handoff|human|escalat/i.test(`${c.eventType || ""} ${c.summary || ""}`)
@@ -29,42 +30,42 @@ export default async function DashboardPage() {
     {
       label: "New Leads",
       value: waiting ? "—" : String(summary.contactsCount),
-      note: "Contacts received from connected workflow sync.",
+      note: native ? "Contacts in this workspace." : "Contacts received from connected workflow sync.",
       icon: "contacts" as const,
       href: "/contacts",
     },
     {
       label: "Pipeline Value",
       value: waiting ? "—" : `$${summary.openPipelineValue.toLocaleString()}`,
-      note: "Open opportunity value from synced opportunities.",
+      note: native ? "Open opportunity value in this workspace." : "Open opportunity value from synced opportunities.",
       icon: "opportunities" as const,
       href: "/pipeline",
     },
     {
       label: "Appointments",
       value: waiting ? "—" : String(summary.appointmentsCount),
-      note: "Appointments synced from booking workflows.",
+      note: native ? "Appointments on this workspace's calendars." : "Appointments synced from booking workflows.",
       icon: "calendar" as const,
       href: "/calendar",
     },
     {
-      label: "Conversation Events",
+      label: native ? "Messages" : "Conversation Events",
       value: waiting ? "—" : String(summary.conversationEventsCount),
-      note: "Inbound/outbound/handoff events (summary only).",
+      note: native ? "Inbound, outbound, and internal messages." : "Inbound/outbound/handoff events (summary only).",
       icon: "conversations" as const,
       href: "/inbox",
     },
     {
       label: "Won Opportunities",
       value: waiting ? "—" : String(summary.wonCount),
-      note: "Won events from opportunity sync.",
+      note: native ? "Opportunities marked won." : "Won events from opportunity sync.",
       icon: "reports" as const,
       href: "/reporting",
     },
     {
-      label: "Last Sync Event",
+      label: native ? "Last Activity" : "Last Sync Event",
       value: waiting ? "—" : summary.lastEventAt ? summary.lastEventAt.slice(0, 16).replace("T", " ") : "—",
-      note: "Timestamp of the most recent synced update.",
+      note: native ? "Timestamp of the most recent update in this workspace." : "Timestamp of the most recent synced update.",
       icon: "automations" as const,
       href: "/reporting",
     },
@@ -76,13 +77,13 @@ export default async function DashboardPage() {
         <Badge tone="gold">Business Dashboard</Badge>
         <h1 style={{ marginTop: "0.6rem" }}>{platformProductName()}</h1>
         <p>
-          Client: <strong>{clientBusinessName()}</strong>. AUTOMATION · WEBSITES · BRANDING · SYSTEMS.
-          {` ${SYNC_SOURCE_DETAIL}`}
+          Client: <strong>{workspace.businessName}</strong>. AUTOMATION · WEBSITES · BRANDING · SYSTEMS.
+          {` ${copy.sourceDetail}`}
         </p>
       </section>
 
       <StatusBanner>
-        {waiting ? syncBannerWaiting("metrics") : SYNC_BANNER_ACTIVE}
+        {waiting ? copy.bannerWaiting("metrics") : copy.bannerActive}
       </StatusBanner>
 
       <div className="grid grid-4" style={{ marginTop: "1.1rem" }}>
@@ -108,10 +109,10 @@ export default async function DashboardPage() {
           }
         >
           {waiting ? (
-            <WaitingForSync entity="leads" />
+            <WaitingForSync entity="leads" native={native} />
           ) : needsAttention.length === 0 ? (
             <EmptyState
-              title={`${summary.contactsCount} contact(s) synced`}
+              title={native ? `${summary.contactsCount} contact(s)` : `${summary.contactsCount} contact(s) synced`}
               note="No handoff or escalation events right now. Use Contacts and Opportunities for detail."
             />
           ) : (
@@ -134,11 +135,15 @@ export default async function DashboardPage() {
           }
         >
           {waiting ? (
-            <WaitingForSync entity="review events" />
+            <WaitingForSync entity="review events" native={native} />
           ) : (
             <EmptyState
-              title={`${reviews.length} review event(s)`}
-              note="Review request and feedback updates appear when reputation workflows send events."
+              title={native ? `${reviews.length} review(s)` : `${reviews.length} review event(s)`}
+              note={
+                native
+                  ? "Reviews recorded for this workspace appear here."
+                  : "Review request and feedback updates appear when reputation workflows send events."
+              }
             />
           )}
         </Card>
@@ -147,7 +152,7 @@ export default async function DashboardPage() {
       <div className="grid grid-2" style={{ marginTop: "1.1rem" }}>
         <Card title="Recent Activity">
           {waiting || events.length === 0 ? (
-            <WaitingForSync entity="activity" />
+            <WaitingForSync entity="activity" native={native} />
           ) : (
             <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
               {events.map((e) => (

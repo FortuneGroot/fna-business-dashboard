@@ -5,7 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, DataTable, Button, LoadError } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
+import { dataCopy } from "@/lib/ui/sync-copy";
 
 const FILTERS = ["All", "Unread", "Awaiting Reply"] as const;
 
@@ -27,6 +27,8 @@ export default function InboxPage() {
   const [waiting, setWaiting] = useState(true);
   const [state, setState] = useState<LoadState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
+  const [native, setNative] = useState(false);
+  const copy = dataCopy(native);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -47,6 +49,7 @@ export default function InboxPage() {
       }
       const data = await res.json();
       const list = Array.isArray(data.conversations) ? data.conversations : [];
+      setNative(data.source === "workspace");
       setRows(list);
       setWaiting(Boolean(data.waitingForSync) || list.length === 0);
       setState("ready");
@@ -91,7 +94,11 @@ export default function InboxPage() {
     <AppShell>
       <PageHead
         title="Conversations"
-        description={`${SYNC_SOURCE_SHORT} Full message history is not replicated in this plan.`}
+        description={
+          native
+            ? `${copy.sourceShort} Message text is not shown in this list.`
+            : `${copy.sourceShort} Full message history is not replicated in this plan.`
+        }
       />
 
       {state === "unauthorized" || state === "error" ? (
@@ -101,8 +108,10 @@ export default function InboxPage() {
           {state === "loading"
             ? "Loading sync state…"
             : waiting
-              ? syncBannerWaiting("conversation events")
-              : "Showing synced conversation events. Do not send from this view until messaging channels are live."}
+              ? copy.bannerWaiting("conversation events")
+              : native
+                ? "Showing this workspace's messages. Do not send from this view until messaging channels are live."
+                : "Showing synced conversation events. Do not send from this view until messaging channels are live."}
         </StatusBanner>
       )}
 
@@ -124,13 +133,17 @@ export default function InboxPage() {
         {state === "loading" ? (
           <EmptyLoading />
         ) : waiting || state !== "ready" ? (
-          <WaitingForSync entity="conversations" />
+          <WaitingForSync entity="conversations" native={native} />
         ) : (
           <DataTable
             columns={["Contact", "Channel", "Last Message", "Last Activity"]}
             rows={tableRows}
             emptyTitle="No conversations awaiting reply yet"
-            emptyNote="Threads will appear here once conversation sync events arrive."
+            emptyNote={
+              native
+                ? "Conversations in this workspace appear here."
+                : "Threads will appear here once conversation sync events arrive."
+            }
           />
         )}
       </Card>

@@ -1,31 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth";
-import { getSyncStore } from "@/lib/sync";
+import { NextRequest } from "next/server";
+import { readApi } from "@/lib/data/api";
+import { contactRow, type ContactsResponse } from "@/lib/data/dashboard-api";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const denied = await requireApiSession(req);
-  if (denied) return denied;
-  const store = getSyncStore();
-  const contacts = await store.listContacts();
-  const summary = await store.summary();
-  return NextResponse.json({
-    ok: true,
-    source: "sync-store",
-    storageMode: store.storageMode,
-    contacts: contacts.map((c) => ({
-      id: c.externalContactId,
-      displayName: c.displayName || [c.firstName, c.lastName].filter(Boolean).join(" ") || "—",
-      email: c.email ? "[redacted]" : undefined,
-      phone: c.phone ? "[redacted]" : undefined,
-      hasEmail: Boolean(c.email),
-      hasPhone: Boolean(c.phone),
-      source: c.source || "—",
-      tags: c.tags,
-      assignedUser: c.assignedUser || "—",
-      updatedAt: c.updatedAt,
-    })),
-    waitingForSync: summary.waitingForSync,
+  return readApi(req, "contacts.read", async ({ reader }): Promise<ContactsResponse> => {
+    const [contacts, waitingForSync] = await Promise.all([reader.listContacts(), reader.waitingForSync()]);
+    return {
+      ok: true,
+      source: reader.source,
+      storageMode: reader.storageMode,
+      contacts: contacts.map(contactRow),
+      waitingForSync,
+    };
   });
 }

@@ -11,6 +11,7 @@ import {
   signJwt, signUp, startApp, startStack, storage, upgradeToAal2, upgradeToAal2Session,
   type App, type HttpResult, type Identity, type Stack, type StackEnv,
 } from "./stack";
+import { DASHBOARD_ENDPOINTS, dashboardShapeErrors } from "../helpers/api-shapes";
 
 const MIGRATIONS_DIR = join(__dirname, "..", "..", "supabase", "migrations");
 const LEGACY_TABLES = [
@@ -944,6 +945,189 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       const afterRevoke = await put(adminCookie);
       assert.equal(afterRevoke.status, 403, afterRevoke.text);
       assert.equal((await storageAudit(writeGrant)).length, total, "nothing is recorded after revocation");
+    });
+
+    // P3: pages and /api/dashboard/* read each workspace's native tables through the app, as the
+    // signed-in user. Business records are created with the owners' own JWTs; reviews and activity
+    // events have no client write path yet, so the superuser setup connection inserts those rows.
+    describe("the app reads each workspace's native data (P3)", () => {
+      let cookieA = "";
+      let cookieB = "";
+      const A = { contact: "", openOpp: "", wonOpp: "", calendar: "", appointment: "", message: "", task: "" };
+      let contactBOnly = "";
+      const NOTE_BODY = `P3 private note body ${run}`;
+
+      const created = async (token: string, table: string, row: Record<string, unknown>) => {
+        const r = await rest(env, token, "POST", table, row);
+        assert.equal(r.status, 201, `${table}: ${r.status} ${r.text}`);
+        return r.body[0].id as string;
+      };
+      const stagesOf = async (token: string) => {
+        const r = await rest(env, token, "GET", "pipeline_stages?select=id,name,pipeline_id&order=position");
+        assert.equal(r.status, 200, r.text);
+        return r.body as { id: string; name: string; pipeline_id: string }[];
+      };
+      const list = async (token: string, path: string) => {
+        const r = await rest(env, token, "GET", path);
+        assert.equal(r.status, 200, r.text);
+        return r.body as Record<string, any>[];
+      };
+
+      before(async () => {
+        cookieA = await appLogin(app, ownerA);
+        cookieB = await appLogin(app, ownerB);
+        const stagesA = await stagesOf(ownerA.token);
+        const lead = stagesA.find((s) => s.name === "New Lead")!;
+        const won = stagesA.find((s) => s.name === "Won")!;
+        A.contact = await created(ownerA.token, "contacts", { workspace_id: wsA, first_name: "P3 Ada", last_name: "Native",
+          email: `p3-ada-${run}@example.test`, phone: "555-0199", source: "website" });
+        assert.equal((await rest(env, ownerA.token, "POST", "contact_tags", { workspace_id: wsA, contact_id: A.contact, tag: "p3-vip" })).status, 201);
+        A.openOpp = await created(ownerA.token, "opportunities", { workspace_id: wsA, contact_id: A.contact, pipeline_id: lead.pipeline_id,
+          stage_id: lead.id, title: "P3 open", value_cents: 125050 });
+        A.wonOpp = await created(ownerA.token, "opportunities", { workspace_id: wsA, contact_id: A.contact, pipeline_id: won.pipeline_id,
+          stage_id: won.id, title: "P3 won", value_cents: 50000 });
+        A.calendar = await created(ownerA.token, "calendars", { workspace_id: wsA, name: "P3 Discovery", slug: `p3-discovery-${run}`,
+          duration_minutes: 30, is_primary: true });
+        A.appointment = await created(ownerA.token, "appointments", { workspace_id: wsA, calendar_id: A.calendar, contact_id: A.contact,
+          starts_at: "2031-03-04T15:00:00Z", ends_at: "2031-03-04T15:30:00Z" });
+        const conversation = await created(ownerA.token, "conversations", { workspace_id: wsA, contact_id: A.contact, channel: "sms" });
+        A.message = await created(ownerA.token, "messages", { workspace_id: wsA, conversation_id: conversation, direction: "internal", body: NOTE_BODY });
+        A.task = await created(ownerA.token, "tasks", { workspace_id: wsA, title: "P3 call back", contact_id: A.contact });
+        contactBOnly = await created(ownerB.token, "contacts", { workspace_id: wsB, first_name: "P3 Bravo-only", source: "referral" });
+        await db.query(`insert into public.reviews (workspace_id, contact_id, rating, source) values ($1, $2, 5, 'manual')`,
+          [wsA, A.contact]);
+        await db.query(
+          `insert into public.activity_events (workspace_id, entity_type, entity_id, action, actor_id, actor_kind)
+           values ($1, 'contact', $2, 'created', $3, 'member')`, [wsA, A.contact, ownerA.id]);
+      });
+
+      const seededA = () => Object.values(A);
+
+      test("API-1: every /api/dashboard/* response validates against the pre-migration shape and matches the owner's own PostgREST view", async () => {
+        for (const endpoint of DASHBOARD_ENDPOINTS) {
+          const r = await appFetch(app, `/api/dashboard/${endpoint}`, { cookie: cookieA });
+          assert.equal(r.status, 200, `${endpoint}: ${r.status} ${r.text.slice(0, 200)}`);
+          assert.deepEqual(dashboardShapeErrors(endpoint, r.body), [], endpoint);
+          assert.deepEqual([r.body.source, r.body.storageMode], ["workspace", "postgres"], endpoint);
+          assert.equal(r.text.includes(contactBOnly), false, `${endpoint} leaked workspace B`);
+          assert.equal(r.text.includes(NOTE_BODY), false, `${endpoint} exposed a message body`);
+        }
+
+        const contacts = (await appFetch(app, "/api/dashboard/contacts", { cookie: cookieA })).body.contacts as Record<string, any>[];
+        const visible = await list(ownerA.token, "contacts?select=id&deleted_at=is.null");
+        assert.deepEqual(contacts.map((c) => c.id).sort(), visible.map((c) => c.id).sort(), "same rows as the owner's PostgREST view");
+        assert.deepEqual(contacts.find((c) => c.id === A.contact), { id: A.contact, displayName: "P3 Ada Native", email: "[redacted]",
+          phone: "[redacted]", hasEmail: true, hasPhone: true, source: "website", tags: ["p3-vip"], assignedUser: "—",
+          updatedAt: contacts.find((c) => c.id === A.contact)!.updatedAt });
+
+        const opps = (await appFetch(app, "/api/dashboard/opportunities", { cookie: cookieA })).body.opportunities as Record<string, any>[];
+        const open = opps.find((o) => o.id === A.openOpp)!;
+        const wonOpp = opps.find((o) => o.id === A.wonOpp)!;
+        assert.deepEqual([open.stageName, open.status, open.monetaryValue], ["New Lead", "open", 1250.5]);
+        assert.deepEqual([wonOpp.stageName, wonOpp.status, wonOpp.monetaryValue], ["Won", "won", 500]);
+
+        const appts = (await appFetch(app, "/api/dashboard/appointments", { cookie: cookieA })).body.appointments as Record<string, any>[];
+        const appt = appts.find((a) => a.id === A.appointment)!;
+        assert.deepEqual([appt.calendarName, appt.status, appt.contactId], ["P3 Discovery", "booked", A.contact]);
+
+        const convos = (await appFetch(app, "/api/dashboard/conversations", { cookie: cookieA })).body.conversations as Record<string, any>[];
+        const note = convos.find((c) => c.id === A.message)!;
+        assert.deepEqual([note.direction, note.channel, note.summary, note.contactId], ["unknown", "sms", "Internal note", A.contact]);
+
+        const events = (await appFetch(app, "/api/dashboard/events", { cookie: cookieA })).body.events as Record<string, any>[];
+        assert.ok(events.some((e) => e.eventType === "lead.created" && e.entityRefs.contactId === A.contact && e.locationId === wsA),
+          JSON.stringify(events));
+
+        const { summary } = (await appFetch(app, "/api/dashboard/summary", { cookie: cookieA })).body;
+        const oppRows = await list(ownerA.token, "opportunities?select=status,value_cents&deleted_at=is.null");
+        assert.deepEqual(
+          [summary.contactsCount, summary.opportunitiesCount, summary.wonCount, summary.openPipelineValue, summary.waitingForSync],
+          [visible.length, oppRows.length, oppRows.filter((o) => o.status === "won").length,
+            oppRows.filter((o) => o.status === "open").reduce((s, o) => s + Number(o.value_cents), 0) / 100, false]);
+        assert.equal(summary.appointmentsCount, (await list(ownerA.token, "appointments?select=id")).length);
+        assert.equal(summary.conversationEventsCount, (await list(ownerA.token, "messages?select=id")).length);
+        assert.ok(summary.lastEventAt, "last activity is reported");
+      });
+
+      test("ISO: workspace B's owner never receives workspace A's records through the app's APIs or pages", async () => {
+        for (const endpoint of DASHBOARD_ENDPOINTS) {
+          const r = await appFetch(app, `/api/dashboard/${endpoint}`, { cookie: cookieB });
+          assert.equal(r.status, 200, endpoint);
+          for (const secret of [...seededA(), wsA, "P3 Ada", "P3 Discovery"]) {
+            assert.equal(r.text.includes(secret), false, `${endpoint}: workspace A value ${secret} reached workspace B`);
+          }
+        }
+        const contacts = (await appFetch(app, "/api/dashboard/contacts", { cookie: cookieB })).body.contacts as { id: string }[];
+        assert.ok(contacts.some((c) => c.id === contactBOnly));
+        for (const path of ["/dashboard", "/contacts", "/pipeline", "/calendar", "/tasks", "/reviews", "/reporting"]) {
+          const page = await appFetch(app, path, { cookie: cookieB });
+          assert.equal(page.status, 200, path);
+          for (const secret of ["P3 Ada", "P3 Discovery", "P3 call back"]) {
+            assert.equal(page.text.includes(secret), false, `${path}: workspace A value ${secret} rendered for workspace B`);
+          }
+        }
+      });
+
+      test("tenant config, public branding, health, and retired legacy endpoints", async () => {
+        const [settings] = await list(ownerA.token, "workspace_settings?select=business_name");
+        const config = await appFetch(app, "/api/tenant/config", { cookie: cookieA });
+        assert.equal(config.status, 200, config.text);
+        assert.equal(config.body.client.businessName, settings.business_name);
+        assert.deepEqual(config.body.owner, { pipelineName: config.body.owner.pipelineName, stagesCount: 12 });
+        const pub = await appFetch(app, "/api/tenant/public");
+        assert.equal(pub.body.client.businessName, pub.body.platform.brandName, "public branding is the platform's only");
+        const health = await appFetch(app, "/api/health");
+        assert.deepEqual([health.status, health.body.ok, health.body.db, health.body.authProvider], [200, true, "ok", "supabase"]);
+        assert.deepEqual([(await appFetch(app, "/api/ghl/health")).status], [404]);
+        const sync = await appFetch(app, "/api/sync/health", { cookie: cookieA });
+        assert.deepEqual([sync.status, sync.body.code], [404, "not_available"]);
+      });
+
+      test("UI-1: the owner gets 200 with no page errors on all 15 sidebar destinations plus support, training, privacy, and terms", async () => {
+        const destinations = ["/dashboard", "/inbox", "/contacts", "/pipeline", "/calendar", "/tasks", "/automations", "/marketing",
+          "/reviews", "/payments", "/reporting", "/settings", "/onboarding", "/help", "/library",
+          "/support", "/training", "/privacy", "/terms"];
+        for (const path of destinations) {
+          const r = await appFetch(app, path, { cookie: cookieA });
+          assert.equal(r.status, 200, `${path}: ${r.status}`);
+          for (const marker of ["__next_error__", "Application error", "Internal Server Error", "This page could not be found"]) {
+            assert.equal(r.text.includes(marker), false, `${path}: page error marker ${marker}`);
+          }
+          assert.equal(r.text.includes("Waiting for sync"), false, `${path}: legacy sync copy in native mode`);
+        }
+        const expectations: [string, string[]][] = [
+          ["/dashboard", ["Needs Attention", "Recent Activity", "lead.created"]],
+          ["/contacts", ["P3 Ada Native", "in this workspace"]],
+          ["/pipeline", ["New Lead", "Won", "Long-Term Nurture"]],
+          ["/calendar", ["P3 Discovery", "30 min"]],
+          ["/tasks", ["P3 call back"]],
+          ["/reviews", ["5/5"]],
+        ];
+        for (const [path, markers] of expectations) {
+          const r = await appFetch(app, path, { cookie: cookieA });
+          for (const m of markers) assert.ok(r.text.includes(m), `${path} should render "${m}"`);
+        }
+      });
+
+      test("UI-1: native empty states, and Setup hidden for admins (Resources stays visible to them)", async () => {
+        const tasksB = await appFetch(app, "/tasks", { cookie: cookieB });
+        assert.equal(tasksB.status, 200);
+        assert.ok(tasksB.text.includes("No tasks yet"), "native empty-state copy");
+        const calendarB = await appFetch(app, "/calendar", { cookie: cookieB });
+        assert.ok(calendarB.text.includes("No calendars yet"), "a workspace without calendars shows the native empty state");
+        assert.ok(calendarB.text.includes("Create calendar"), "owners hold calendar.configure");
+
+        const admin = await signUp(env, email("app-admin-a"), "App Admin A");
+        const inv = await rpc(env, ownerA.token, "create_invitation", { p_email: admin.email, p_role: "admin", p_ttl_hours: 72 });
+        assert.equal(inv.status, 200, inv.text);
+        assert.equal((await rpc(env, admin.token, "accept_invitation", { p_token: inv.body.token })).status, 200);
+        const cookie = await appLogin(app, admin);
+        const setup = pageRedirect(await appFetch(app, "/onboarding", { cookie }), "admin /onboarding",
+          ["Configuration readiness", "Onboarding / Setup Checklist"]);
+        assert.deepEqual([setup.pathname, setup.searchParams.get("denied")], ["/dashboard", "1"]);
+        assert.equal((await appFetch(app, "/library", { cookie })).status, 200);
+        assert.equal((await appFetch(app, "/contacts", { cookie })).status, 200);
+      });
     });
 
     // Last: it may use up the local sign-in rate limit for this IP. The local stack did not rate-limit

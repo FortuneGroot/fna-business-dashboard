@@ -2,45 +2,47 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { PageHead, Card, MetricTile, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { getSyncStore } from "@/lib/sync";
-import { clientReviewUrl } from "@/lib/tenant";
-import { SYNC_SOURCE_SHORT, syncBannerWaiting } from "@/lib/ui/sync-copy";
+import { getPageData } from "@/lib/data";
+import { dataCopy } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReviewsPage() {
-  const reviews = await getSyncStore().listReviewEvents(50);
+  const data = await getPageData();
+  const { native } = data;
+  const copy = dataCopy(native);
+  const [reviews, workspace] = await Promise.all([data.reader.listReviewEvents(50), data.workspace()]);
   const waiting = reviews.length === 0;
   const requested = reviews.filter((r) => r.kind === "review-requested").length;
   const feedback = reviews.filter((r) => r.kind === "feedback-received").length;
-  const reviewUrl = clientReviewUrl();
+  const reviewUrl = workspace.reviewUrl;
 
   const metrics = [
     {
-      label: "Review events",
+      label: native ? "Reviews" : "Review events",
       value: waiting ? "—" : String(reviews.length),
-      note: "Synced review request and feedback events only.",
+      note: native ? "Reviews recorded for this workspace." : "Synced review request and feedback events only.",
     },
     {
       label: "Requests sent",
       value: waiting ? "—" : String(requested),
-      note: "Review-request events received.",
+      note: native ? "Review requests are not available yet." : "Review-request events received.",
     },
     {
       label: "Feedback received",
       value: waiting ? "—" : String(feedback),
-      note: "Feedback-received events only.",
+      note: native ? "Reviews received." : "Feedback-received events only.",
     },
   ];
 
   return (
     <AppShell>
-      <PageHead title="Reputation" description={SYNC_SOURCE_SHORT} />
+      <PageHead title="Reputation" description={copy.sourceShort} />
 
       <StatusBanner>
         {waiting
-          ? syncBannerWaiting("review events")
-          : `${reviews.length} review event(s) synced.${reviewUrl ? " Client review URL is configured." : ""}`}
+          ? copy.bannerWaiting("review events")
+          : `${reviews.length} ${native ? "review(s)" : "review event(s) synced"}.${reviewUrl ? " Client review URL is configured." : ""}`}
       </StatusBanner>
 
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
@@ -50,9 +52,9 @@ export default async function ReviewsPage() {
       </div>
 
       <div style={{ marginTop: "1.1rem" }}>
-        <Card title="Review events" action={<Badge tone="neutral">{reviews.length}</Badge>}>
+        <Card title={native ? "Reviews" : "Review events"} action={<Badge tone="neutral">{reviews.length}</Badge>}>
           {waiting ? (
-            <WaitingForSync entity="review events" />
+            <WaitingForSync entity="review events" native={native} />
           ) : (
             <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
               {reviews.map((r) => (

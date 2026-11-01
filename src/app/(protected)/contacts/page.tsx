@@ -1,10 +1,11 @@
-import { getSyncStore } from "@/lib/sync";
+import { getPageData } from "@/lib/data";
 import { ContactsClient } from "./ContactsClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function ContactsPage() {
-  const contacts = await getSyncStore().listContacts();
+  const { reader, native } = await getPageData();
+  const contacts = await reader.listContacts();
   const waiting = contacts.length === 0;
   const rows = contacts.map((c) => ({
     id: c.externalContactId,
@@ -18,5 +19,5 @@ export default async function ContactsPage() {
     updatedAt: c.updatedAt ? c.updatedAt.slice(0, 16).replace("T", " ") : "—",
   }));
 
-  return <ContactsClient contacts={rows} waiting={waiting} />;
+  return <ContactsClient contacts={rows} waiting={waiting} native={native} />;
 }

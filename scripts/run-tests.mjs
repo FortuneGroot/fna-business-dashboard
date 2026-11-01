@@ -32,10 +32,10 @@ const SUITES = {
       "tests/sync.test.ts", "tests/onboarding.test.ts", "tests/tenant.test.ts", "tests/auth.test.ts",
       "tests/client-facing-copy.test.ts", "tests/supabase-rest-auth.test.ts", "tests/authorization.test.ts",
       "tests/security-scan.test.ts", "tests/run-tests.test.ts", "tests/stack-helpers.test.ts",
-      "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts",
+      "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts", "tests/p3-data.test.ts",
     ],
     timeoutMs: 60_000,
-    min: 205,
+    min: 228,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
@@ -53,7 +53,7 @@ const SUITES = {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
-    min: 28,
+    min: 33,
   },
 };
 

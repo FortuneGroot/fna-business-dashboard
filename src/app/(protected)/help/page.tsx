@@ -1,22 +1,17 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, PageHead, Button } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
-import {
-  clientBookingUrl,
-  clientBusinessName,
-  clientSupportEmail,
-  getTenantConfig,
-  platformProductName,
-} from "@/lib/tenant";
+import { getPageData } from "@/lib/data";
+import { platformProductName } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
-export default function HelpPage() {
-  const cfg = getTenantConfig();
-  const biz = clientBusinessName();
-  const supportEmail = clientSupportEmail() || cfg.business.supportEmail || "";
-  const phone = cfg.business.businessPhone || cfg.ghl.phoneNumber || "";
-  const booking = clientBookingUrl();
+export default async function HelpPage() {
+  const workspace = await (await getPageData()).workspace();
+  const biz = workspace.businessName;
+  const supportEmail = workspace.supportEmail;
+  const phone = workspace.phone;
+  const booking = workspace.bookingUrl;
   const product = platformProductName();
 
   return (
@@ -31,7 +26,7 @@ export default function HelpPage() {
           <p>
             You are using the <strong>{product}</strong> for{" "}
             <strong>{biz}</strong>
-            {cfg.business.industry ? ` (${cfg.business.industry})` : ""}.
+            {workspace.industry ? ` (${workspace.industry})` : ""}.
           </p>
           <p className="muted">{BRAND.voice}</p>
           <p>

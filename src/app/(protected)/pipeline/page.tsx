@@ -2,27 +2,20 @@ import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, EmptyState, Badge } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
-import { getSyncStore } from "@/lib/sync";
-import {
-  configuredPipelineName,
-  configuredStageNames,
-  looksLikePlaceholderStages,
-} from "@/lib/tenant-ui";
-import {
-  PLACEHOLDER_CONFIG_STAGES,
-  SYNC_SOURCE_SHORT,
-  syncBannerWaiting,
-  syncColumnEmpty,
-} from "@/lib/ui/sync-copy";
+import { getPageData } from "@/lib/data";
+import { PLACEHOLDER_CONFIG_STAGES, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage() {
-  const opps = await getSyncStore().listOpportunities();
+  const data = await getPageData();
+  const { native } = data;
+  const copy = dataCopy(native);
+  const [opps, workspace] = await Promise.all([data.reader.listOpportunities(), data.workspace()]);
   const waiting = opps.length === 0;
-  const stages = configuredStageNames();
-  const pipelineName = configuredPipelineName();
-  const stagesBlocked = looksLikePlaceholderStages();
+  const stages = workspace.stageNames;
+  const pipelineName = workspace.pipelineName;
+  const stagesBlocked = !workspace.stagesConfigured;
 
   const byStage = (stage: string) =>
     opps.filter((o) => {
@@ -34,14 +27,14 @@ export default async function PipelinePage() {
     <AppShell>
       <PageHead
         title="Opportunities"
-        description={`Your sales board — opportunities grouped by stage. ${SYNC_SOURCE_SHORT}`}
+        description={`Your sales board — opportunities grouped by stage. ${copy.sourceShort}`}
       />
 
       <StatusBanner>
         {stagesBlocked
           ? PLACEHOLDER_CONFIG_STAGES
           : waiting
-            ? syncBannerWaiting("opportunities")
+            ? copy.bannerWaiting("opportunities")
             : `${pipelineName} · ${opps.length} open item(s) across ${stages.length} stage(s). Won is not cash until reconciled in Payments.`}
       </StatusBanner>
 
@@ -66,7 +59,7 @@ export default async function PipelinePage() {
 
       {waiting ? (
         <div style={{ marginTop: "1.1rem" }}>
-          <WaitingForSync entity="opportunities" />
+          <WaitingForSync entity="opportunities" native={native} />
         </div>
       ) : null}
 

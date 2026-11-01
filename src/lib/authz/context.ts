@@ -115,11 +115,16 @@ export async function sessionStillValid(supabase: SupabaseClient, ctx: RequestCo
   return !error && data.user?.id === ctx.userId;
 }
 
-/** Request-scoped (React cache) context for server components. */
-export const getRequestContext = cache(async (): Promise<RequestContext | null> => {
+/** Request-scoped (React cache) Supabase client for server components, carrying the user's JWT. */
+export const getPageSupabase = cache(async (): Promise<SupabaseClient> => {
   const config = supabaseAuthConfig();
   if (!config) throw new AuthMisconfiguredError();
-  return loadRequestContext(await supabaseForServerComponent(config));
+  return supabaseForServerComponent(config);
+});
+
+/** Request-scoped (React cache) context for server components. */
+export const getRequestContext = cache(async (): Promise<RequestContext | null> => {
+  return loadRequestContext(await getPageSupabase());
 });
 
 export type WorkspaceListItem = {
