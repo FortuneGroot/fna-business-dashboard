@@ -48,6 +48,17 @@ export function fromLocalInput(value: string): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/**
+ * True when a `datetime-local` value names a clock time that does not exist in the browser's time
+ * zone (skipped when clocks move forward). Browsers silently shift such a value by the gap.
+ */
+export function isSkippedLocalTime(value: string): boolean {
+  const iso = fromLocalInput(value);
+  return iso !== null && toLocalInput(iso) !== value.slice(0, 16);
+}
+
+export const SKIPPED_TIME_MESSAGE = "That time does not exist in your time zone (the clocks change then). Choose another time.";
+
 /** Dollars text ("12.34") → whole cents, or null when it is not a non-negative amount with ≤ 2 decimals. */
 export function toCents(text: string): number | null {
   const t = text.trim().replace(/^\$/, "").replace(/,/g, "");

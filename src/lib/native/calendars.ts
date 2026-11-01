@@ -289,6 +289,17 @@ export async function updateAppointment(scope: DataScope, id: string, input: z.i
   if (input.status !== undefined) patch.status = input.status;
   if (input.notes !== undefined) patch.notes = input.notes;
   if (input.assignedUserId !== undefined) patch.assigned_user_id = input.assignedUserId ? input.assignedUserId.toLowerCase() : null;
+  if (input.startsAt !== undefined || input.endsAt !== undefined) {
+    const current = check(
+      await scope.supabase.from("appointments").select("starts_at, ends_at").eq("workspace_id", activeWorkspaceId(scope)).eq("id", id)
+        .is("deleted_at", null).maybeSingle()
+    ) as { starts_at: string; ends_at: string } | null;
+    if (!current) throw notFound();
+    const start = Date.parse(input.startsAt ?? current.starts_at);
+    const end = Date.parse(input.endsAt ?? current.ends_at);
+    if (end <= start) throw invalid({ endsAt: "End must be after start" });
+    if (end - start > DAY_MS) throw invalid({ endsAt: "An appointment can last at most 24 hours" });
+  }
   const res = await scope.supabase.from("appointments").update(patch).eq("workspace_id", activeWorkspaceId(scope)).eq("id", id)
     .is("deleted_at", null).select(APPOINTMENT_COLUMNS).maybeSingle();
   appointmentFailure(res);

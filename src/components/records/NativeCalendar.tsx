@@ -3,7 +3,16 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Modal } from "@/components/ui";
-import { api, failure, fromLocalInput, loadMembers, toLocalInput, type Member } from "@/lib/ui/native-api";
+import {
+  SKIPPED_TIME_MESSAGE,
+  api,
+  failure,
+  fromLocalInput,
+  isSkippedLocalTime,
+  loadMembers,
+  toLocalInput,
+  type Member,
+} from "@/lib/ui/native-api";
 import { ContactPicker, MemberSelect } from "./pickers";
 
 /* Calendar and appointment controls for native workspaces (AUTH_PROVIDER=supabase). Cards stay
@@ -244,6 +253,10 @@ export function BookAppointment({ calendars }: { calendars: BookingCalendar[] })
       setError("Choose a start and end time.");
       return;
     }
+    if (isSkippedLocalTime(start) || isSkippedLocalTime(end)) {
+      setError(SKIPPED_TIME_MESSAGE);
+      return;
+    }
     setBusy(true);
     const { status, body } = await api("/api/appointments", {
       method: "POST",
@@ -324,6 +337,10 @@ export function EditAppointment({ appointment }: { appointment: EditableAppointm
     const endsAt = fromLocalInput(end);
     if (!startsAt || !endsAt) {
       setError("Choose a start and end time.");
+      return;
+    }
+    if (isSkippedLocalTime(start) || isSkippedLocalTime(end)) {
+      setError(SKIPPED_TIME_MESSAGE);
       return;
     }
     const patch: Record<string, unknown> = {};

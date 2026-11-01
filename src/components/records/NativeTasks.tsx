@@ -5,7 +5,17 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { StatusBanner } from "@/components/Chrome";
 import { Badge, Button, Card, EmptyState, Modal, PageHead } from "@/components/ui";
-import { api, failure, fromLocalInput, loadMembers, toLocalInput, when, type Member } from "@/lib/ui/native-api";
+import {
+  SKIPPED_TIME_MESSAGE,
+  api,
+  failure,
+  fromLocalInput,
+  isSkippedLocalTime,
+  loadMembers,
+  toLocalInput,
+  when,
+  type Member,
+} from "@/lib/ui/native-api";
 import { dataCopy } from "@/lib/ui/sync-copy";
 import { ContactPicker, MemberSelect } from "./pickers";
 
@@ -68,6 +78,10 @@ export function NativeTasks({ initial, counts, canWrite }: { initial: TaskPage; 
     const dueAt = form.due ? fromLocalInput(form.due) : null;
     if (form.due && !dueAt) {
       setError("Choose a valid due date.");
+      return;
+    }
+    if (form.due && isSkippedLocalTime(form.due)) {
+      setError(SKIPPED_TIME_MESSAGE);
       return;
     }
     const body = {

@@ -10,6 +10,12 @@ import { PLACEHOLDER_CONFIG_CALENDARS, dataCopy, syncColumnEmpty } from "@/lib/u
 
 export const dynamic = "force-dynamic";
 
+/** Native booking times are shown in UTC (CRUD-3) and say so; the booking form uses local time. */
+function utcLabel(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 export default async function CalendarPage() {
   const data = await getPageData();
   const { native } = data;
@@ -101,7 +107,7 @@ export default async function CalendarPage() {
                     .map((a) => (
                       <li key={a.externalAppointmentId} className="muted">
                         {a.status || "booked"}
-                        {a.start ? ` · ${a.start.slice(0, 16).replace("T", " ")}` : ""}
+                        {a.start ? ` · ${native ? utcLabel(a.start) : a.start.slice(0, 16).replace("T", " ")}` : ""}
                         {canBook && a.start && a.end ? (
                           <EditAppointment
                             appointment={{ id: a.externalAppointmentId, startsAt: a.start, endsAt: a.end, status: a.status || "booked" }}
