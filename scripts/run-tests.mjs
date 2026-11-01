@@ -37,14 +37,14 @@ const SUITES = {
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
     ],
     timeoutMs: 60_000,
-    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1.
-    min: 243,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10.
+    min: 253,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
     timeoutMs: 60_000,
-    min: 218,
+    min: 225,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
@@ -56,14 +56,14 @@ const SUITES = {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
-    min: 63,
+    min: 67,
     serial: true,
   },
   acceptance: {
     label: "local acceptance rehearsals (fresh disposable stacks: P1–P7 journeys, hardening, backup/restore, scale)",
     files: () => list("tests/acceptance"),
     timeoutMs: 1_800_000,
-    min: 33,
+    min: 38,
     // Each file starts its own stack on the same ports, so files run one at a time.
     serial: true,
   },

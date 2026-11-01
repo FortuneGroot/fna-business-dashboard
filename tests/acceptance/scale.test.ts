@@ -55,10 +55,13 @@ async function walk(path: string, limit: number, expected: string[], label: stri
   return pages;
 }
 
+// The M21 logout check runs once per HTTP request as its own statement; it is excluded so the
+// count stays a measure of data statements (request growth already shows up in those).
 async function statements(): Promise<number> {
   const r = await db.query<{ n: string }>(
     `select coalesce(sum(calls), 0)::text n from extensions.pg_stat_statements
-     where userid in ('authenticated'::regrole, 'authenticator'::regrole, 'anon'::regrole, 'service_role'::regrole)`);
+     where userid in ('authenticated'::regrole, 'authenticator'::regrole, 'anon'::regrole, 'service_role'::regrole)
+       and query not ilike '%check_request_session%'`);
   return Number(r.rows[0].n);
 }
 
@@ -292,5 +295,8 @@ describe("scale: more than 1,000 records per list in one synthetic business", ()
       assert.ok(r.big.queries <= r.small.queries + 6, `${r.path}: ${r.big.queries} statements with large data vs ${r.small.queries} with small (N+1?)`);
       assert.ok(r.big.ms < 3000, `${r.path}: ${r.big.ms} ms with large data`);
     }
+    const checks = await db.query<{ n: string }>(
+      "select coalesce(sum(calls), 0)::text n from extensions.pg_stat_statements where query ilike '%check_request_session%'");
+    assert.ok(Number(checks.rows[0].n) > 0, "the logout pre-request check ran on these requests");
   });
 });
