@@ -121,6 +121,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 
 ## P6 platform console
 
+- [x] M20 (Codex review): `replace_availability` locks the calendar row first; real-PostgreSQL two-session regression (both orders) plus a control proving the unlocked version merges schedules.
 - [x] M19: `platform_status`, search/detail/grants/audit pages, reason-bearing `platform_revoke_access(grant, reason)` (live grants only; one-argument form no longer client-callable); rollback block.
 - [x] Console outside the client sidebar (existing top bar, cards, tables, modals); legacy mode 404.
 - [x] Platform authority = `platform_admins` row + AAL2, independent of membership; members 403/404, listed AAL1 admins `mfa_required` and redirected to MFA; decided in middleware before rendering.

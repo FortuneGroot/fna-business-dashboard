@@ -22,7 +22,7 @@ require George's explicit approval (spec §9.2 P9, §11).
 - [ ] Create the separate staging Supabase project (D4). Record its project ref in the runbook, never in the repository.
 - [ ] Back up staging (even if empty) and record where the backup lives.
 - [ ] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
-- [ ] `supabase db push` M1–M14 to staging; `supabase migration list` shows local and remote identical.
+- [ ] `supabase db push` the required manifest (§5) to staging; `supabase migration list` shows local and remote identical. M15 is not part of it.
 - [ ] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
 - [ ] T2: create George's auth user, register him as platform admin, enrol MFA (D6). **Blocker:** `scripts/bootstrap-platform-admin.ts` (spec §6.4, A2) was never written; every test suite stands in for it with a direct `insert into public.platform_admins`. Either write and review the script (refuses non-local targets without `--env staging|production` plus a typed confirmation), or have the operator run that one-row insert in the staging SQL editor after confirming George's `auth.users` id, and record it.
 - [ ] T3: provision the F&A workspace (`provisioning_key = 'fa-live'`); open the owner link (shown once, nothing is emailed) and accept it as George.
@@ -40,7 +40,7 @@ require George's explicit approval (spec §9.2 P9, §11).
 - [ ] Paid plan in place (D5). Logout-replay decision recorded and implemented if required.
 - [ ] Verified production backup; restore procedure tested on staging.
 - [ ] Disable the GHL webhook (or confirm nothing posts to it) before promoting a P7 build.
-- [ ] Reconcile production migration history exactly as rehearsed; then push M1–M14.
+- [ ] Reconcile production migration history exactly as rehearsed; then push the required manifest (§5), the same files staging received. Never M15.
 - [ ] Bootstrap George as platform admin, enrol MFA, provision F&A, accept the owner invitation.
 - [ ] Set `AUTH_PROVIDER=supabase`; promote the build. Keep the legacy `AUTH_*` credentials in place.
 - [ ] Smoke: login with MFA, dashboard, contacts, pipeline, calendar, tasks, inbox notes, settings/team, `/api/health` reports `authProvider: "supabase"`.
@@ -76,3 +76,33 @@ require George's explicit approval (spec §9.2 P9, §11).
 | Legacy mode, no GHL | 15 | tenant config, public branding, health, and retired legacy endpoints |
 | No outbound requests | 15, 16 | NET-1 |
 | Navigation and design | 5 (sidebar) | UI-1 (all destinations, empty states); UI-2 visual run |
+
+## 5. Required migration manifest (staging, then production)
+
+Exactly these files, in this order. `tests/db/migrations.test.ts` fails if this list and `supabase/migrations/` disagree.
+
+| # | File |
+| --- | --- |
+| legacy | `20260917121316_sync_store.sql` |
+| legacy | `20260917185155_auth_sessions.sql` |
+| M1 | `20261101000100_extensions_schemas.sql` |
+| M2 | `20261101000200_identity_platform.sql` |
+| M3 | `20261101000300_membership_access.sql` |
+| M4 | `20261101000400_authz_helpers.sql` |
+| M5 | `20261101000500_workspace_config.sql` |
+| M6 | `20261101000600_crm_core.sql` |
+| M7 | `20261101000700_scheduling.sql` |
+| M8 | `20261101000800_engagement_audit.sql` |
+| M9 | `20261101000900_triggers_integrity.sql` |
+| M10 | `20261101001000_rls_policies_grants.sql` |
+| M11 | `20261101001100_rpc_membership_invites.sql` |
+| M12 | `20261101001200_rpc_platform_provisioning.sql` |
+| M13 | `20261101001300_storage_reporting_views.sql` |
+| M14 | `20261101001400_legacy_lockdown.sql` |
+| M16 | `20261101001500_auth_session_platform_storage.sql` |
+| M17 | `20261101001600_team_settings.sql` |
+| M18 | `20261101001700_native_crm.sql` |
+| M19 | `20261101001800_platform_console.sql` |
+| M20 | `20261101001900_availability_lock.sql` |
+
+**Excluded: M15** (drop `sync_*` and `auth_sessions`). It is destructive, deferred until after T6 and a verified backup (§3), and not written. The legacy files are reconciled per `docs/MIGRATION_VERSION_MAPPING.md` rather than re-applied blindly.

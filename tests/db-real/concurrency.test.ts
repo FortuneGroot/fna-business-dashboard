@@ -338,6 +338,93 @@ describe("real PostgreSQL: concurrent owner changes serialize on the workspace l
   });
 });
 
+describe("real PostgreSQL: concurrent availability replacement serializes per calendar", () => {
+  const REPLACE = "select public.replace_availability($1, $2::jsonb)";
+  const MORNINGS = [{ weekday: 1, start: "09:00", end: "12:00" }, { weekday: 3, start: "09:00", end: "12:00" }];
+  const AFTERNOONS = [{ weekday: 2, start: "13:00", end: "17:00" }, { weekday: 4, start: "13:00", end: "17:00" }, { weekday: 5, start: "13:00", end: "15:00" }];
+  const asRows = (rules: { weekday: number; start: string; end: string }[]) =>
+    rules.map((r) => `${r.weekday} ${r.start}-${r.end}`).sort();
+
+  async function calendarWithHours() {
+    const { ws, owner1, owner2 } = await twoOwnerWorkspace();
+    const c = await server.connect();
+    try {
+      const [cal] = await requestAs<{ r: string }>(c, owner1, "select public.save_calendar(null, $1::jsonb) r",
+        [JSON.stringify({ name: "Chairs", slug: `chairs-${seq}`, duration_minutes: 60 })]);
+      await requestAs(c, owner1, REPLACE, [cal.r, JSON.stringify([{ weekday: 0, start: "10:00", end: "11:00" }])]);
+      return { ws, owner1, owner2, calendar: cal.r };
+    } finally {
+      await c.end();
+    }
+  }
+
+  async function schedule(calendar: string): Promise<string[]> {
+    const r = await admin.query<{ s: string }>(
+      `select weekday || ' ' || to_char(start_time, 'HH24:MI') || '-' || to_char(end_time, 'HH24:MI') s
+       from public.availability_rules where calendar_id = $1 order by 1`, [calendar]);
+    return r.rows.map((x) => x.s);
+  }
+
+  test("two owners replacing the same hours at once: the second waits, and the result is exactly its submission", async () => {
+    for (const [first, second] of [[MORNINGS, AFTERNOONS], [AFTERNOONS, MORNINGS]]) {
+      const { owner1, owner2, calendar } = await calendarWithHours();
+      const r = await race(
+        { user: owner1, sql: REPLACE, params: [calendar, JSON.stringify(first)] },
+        { user: owner2, sql: REPLACE, params: [calendar, JSON.stringify(second)] });
+      assert.equal(r.raced, "pending", "the second replacement waits for the first transaction");
+      assert.ok(r.blocked >= 1, "the second replacement is waiting on a lock");
+      assert.equal(r.outcome.ok, true, errorOf(r.outcome));
+      assert.deepEqual(await schedule(calendar), asRows(second), "final hours equal one complete submission, never a merge");
+    }
+  });
+
+  test("replacing hours on different calendars does not wait", async () => {
+    const one = await calendarWithHours();
+    const c = await server.connect();
+    let other = "";
+    try {
+      other = (await requestAs<{ r: string }>(c, one.owner1, "select public.save_calendar(null, $1::jsonb) r",
+        [JSON.stringify({ name: "Rooms", slug: `rooms-${seq}`, duration_minutes: 30 })]))[0].r;
+    } finally {
+      await c.end();
+    }
+    const a = await server.connect();
+    const b = await server.connect();
+    try {
+      await beginAs(a, one.owner1);
+      await a.query(REPLACE, [one.calendar, JSON.stringify(MORNINGS)]);
+      const done = await Promise.race([
+        requestAs(b, one.owner2, REPLACE, [other, JSON.stringify(AFTERNOONS)]).then(() => "done"),
+        sleep(3000).then(() => "blocked"),
+      ]);
+      assert.equal(done, "done");
+      await a.query("commit");
+    } finally {
+      await a.end();
+      await b.end();
+    }
+    assert.deepEqual(await schedule(one.calendar), asRows(MORNINGS));
+    assert.deepEqual(await schedule(other), asRows(AFTERNOONS));
+  });
+
+  test("control: without the calendar lock the same race merges both submissions", async () => {
+    const original = (await admin.query<{ def: string }>(
+      "select pg_get_functiondef('public.replace_availability(uuid, jsonb)'::regprocedure) def")).rows[0].def;
+    assert.match(original, /for update/i);
+    await admin.query(original.replace(/\n\s*for update;/i, ";"));
+    try {
+      const { owner1, owner2, calendar } = await calendarWithHours();
+      const r = await race(
+        { user: owner1, sql: REPLACE, params: [calendar, JSON.stringify(MORNINGS)] },
+        { user: owner2, sql: REPLACE, params: [calendar, JSON.stringify(AFTERNOONS)] });
+      assert.equal(r.outcome.ok, true);
+      assert.deepEqual(await schedule(calendar), [...asRows(MORNINGS), ...asRows(AFTERNOONS)].sort(), "without the lock both schedules merge");
+    } finally {
+      await admin.query(original);
+    }
+  });
+});
+
 describe("real PostgreSQL: concurrent provisioning", () => {
   const PROVISION = "select public.platform_provision_workspace($1, $2, $3, $4) r";
 

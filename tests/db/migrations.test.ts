@@ -32,6 +32,15 @@ describe("migrations apply to a clean local database", () => {
     assert.deepEqual(files.slice(0, 2), ["20260917121316_sync_store.sql", "20260917185155_auth_sessions.sql"]);
   });
 
+  test("the staging/production manifest in the cutover checklist lists exactly the repository migrations, never M15", () => {
+    const checklist = readFileSync(join(__dirname, "..", "..", "docs", "STAGING_CUTOVER_CHECKLIST.md"), "utf8");
+    const section = checklist.split(/^## 5\. Required migration manifest/m)[1]?.split(/^## /m)[0] ?? "";
+    const listed = [...section.matchAll(/^\| (legacy|M\d+) \| `(\d{14}_[a-z0-9_]+\.sql)` \|/gm)];
+    assert.deepEqual(listed.map((m) => m[2]), migrationFiles(), "manifest must equal supabase/migrations in order");
+    assert.ok(!listed.some((m) => m[1] === "M15"), "M15 is never part of the deployable manifest");
+    assert.match(section, /Excluded: M15/);
+  });
+
   test("all migrations apply in order", async () => {
     const files = migrationFiles();
     assert.ok(files.length >= 15, `expected legacy + 13 new migrations, found ${files.length}`);

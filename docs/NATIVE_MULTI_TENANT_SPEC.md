@@ -1037,6 +1037,13 @@ docs/GHL_SYNC_WEBHOOK_CONTRACT.md  docs/GHL_WORKFLOW_SYNC_MAP.md  docs/WEBHOOK_S
 | M13 | `20261101001300_storage_reporting_views.sql` | `security_invoker` reporting view; `workspace-assets` bucket + policies (created only when `storage.buckets` exists) | M12 |
 | M14 | `20261101001400_legacy_lockdown.sql` | legacy `auth_sessions` + nine `sync_*` tables: revoke `anon`/`authenticated`/PUBLIC, enable default-deny RLS (no policies), explicit `service_role` select/insert/update/delete. No data, column, or table changes. | legacy files |
 | M15 | `2026MMDD000000_retire_legacy.sql` (not written) | drop `sync_*` and `auth_sessions` — **only after T6 and a verified backup** | T6 |
+| M16 | `20261101001500_auth_session_platform_storage.sql` | `list_my_workspaces`, audited platform Storage change RPCs and trigger (§16) | M13 |
+| M17 | `20261101001600_team_settings.sql` | team listing, atomic overrides, invitation sign-up email, config-change audit triggers (§18) | M16 |
+| M18 | `20261101001700_native_crm.sql` | `save_contact`, `save_calendar`, `replace_availability`, CRM activity triggers (§19) | M17 |
+| M19 | `20261101001800_platform_console.sql` | platform console RPCs (§20) | M18 |
+| M20 | `20261101001900_availability_lock.sql` | `replace_availability` locks the calendar row first, so concurrent replacements serialize | M18 |
+
+The numbers after M14 skip M15, which stays reserved for the destructive legacy drop. The deployable manifest is the two legacy files plus M1–M14 and M16–M20 (`docs/STAGING_CUTOVER_CHECKLIST.md` §5).
 
 M1–M13 are additive and leave the legacy tables' structure and data untouched. M14 changes only privileges and RLS on the legacy tables; the legacy app reaches them exclusively with the server-side service-role key, which keeps full access. Rollback (`supabase/rollback/20261101_native_multi_tenant.down.sql`) reverts M1–M13 and deliberately does **not** revert M14.
 
