@@ -82,6 +82,8 @@ create table storage.objects (
   name       text not null,
   owner_id   text,
   metadata   jsonb,
+  user_metadata jsonb,
+  version    text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (bucket_id, name)

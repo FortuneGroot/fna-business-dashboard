@@ -792,10 +792,18 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.deepEqual(ok.body, { ok: true, objectPath: logoPath, requestId: ok.body.requestId, outcome: "succeeded" });
         const stored = await storage(env, ownerA.token, "GET", `workspace-assets/${logoPath}`);
         assert.equal(stored.status, 200, "the owner can read the logo the platform admin uploaded");
+        const tagged = await db.query<{ tagged: boolean }>(
+          `select o.user_metadata ->> 'platform_operation' = c.token::text tagged
+           from storage.objects o join private.platform_storage_changes c on c.request_id = $2
+           where o.bucket_id = 'workspace-assets' and o.name = $1`, [logoPath, ok.body.requestId]);
+        assert.deepEqual(tagged.rows, [{ tagged: true }], "the real upload carries this operation's token");
+        assert.equal(JSON.stringify(ok.body).includes("platform_operation"), false);
         const del = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
         assert.equal(del.status, 200, del.text);
-        const left = await db.query("select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and name = $1", [logoPath]);
-        assert.equal(left.rows[0].n, 0);
+        const left = await db.query(
+          "select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and (name = $1 or name like $2)",
+          [logoPath, `${wsA}/.platform-trash/%`]);
+        assert.equal(left.rows[0].n, 0, "logo deleted (moved to its tombstone) and the tombstone cleaned up");
 
         const audit = await storageAudit(writeGrant);
         assert.deepEqual(audit.map((a) => [a.action, a.metadata.outcome, a.target, a.actor_id, a.actor_kind, a.metadata.via]), [
@@ -809,11 +817,12 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         // Finding 1: outcomes are server-only. The platform admin's own JWT cannot record or fabricate one,
         // and the old client-controlled (bigint, boolean) signature no longer exists.
         const fabricate = await rpc(env, aal2.access_token, "platform_storage_change_finished",
-          { p_request_id: ok.body.requestId, p_actor_id: admin.id });
+          { p_request_id: ok.body.requestId, p_actor_id: admin.id, p_operation_returned: true });
         assert.ok(fabricate.status === 401 || fabricate.status === 403, `direct completion: ${fabricate.status} ${fabricate.text}`);
-        const oldSignature = await rpc(env, aal2.access_token, "platform_storage_change_finished",
-          { p_request_id: ok.body.requestId, p_succeeded: true });
-        assert.equal(oldSignature.status, 404, oldSignature.text);
+        for (const args of [{ p_request_id: ok.body.requestId, p_succeeded: true }, { p_request_id: ok.body.requestId, p_actor_id: admin.id }]) {
+          const oldSignature = await rpc(env, aal2.access_token, "platform_storage_change_finished", args);
+          assert.equal(oldSignature.status, 404, `old signature ${Object.keys(args).join(",")}: ${oldSignature.text}`);
+        }
         const spoofRequest = await rpc(env, aal2.access_token, "platform_storage_change_requested",
           { p_operation: "upsert", p_object_path: logoPath });
         assert.equal(spoofRequest.status, 200, "a request alone is allowed (it is only a request)");
@@ -827,7 +836,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         // Finding 2: completion failure is explicit and recoverable. Make the completion RPC fail for the
         // server, perform a real change, then restore it and recover the pending request.
         let pendingId = 0;
-        await db.query("revoke execute on function public.platform_storage_change_finished(bigint, uuid) from service_role");
+        await db.query("revoke execute on function public.platform_storage_change_finished(bigint, uuid, boolean) from service_role");
         try {
           const pending = await put(adminCookie);
           assert.equal(pending.status, 503, pending.text);
@@ -842,7 +851,7 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
           const blocked = await put(adminCookie);
           assert.deepEqual([blocked.status, blocked.body.code], [409, "change_pending"], "no new change while one is pending");
         } finally {
-          await db.query("grant execute on function public.platform_storage_change_finished(bigint, uuid) to service_role");
+          await db.query("grant execute on function public.platform_storage_change_finished(bigint, uuid, boolean) to service_role");
         }
         const recovered = await appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId: pendingId } });
         assert.equal(recovered.status, 200, recovered.text);
@@ -856,6 +865,65 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.deepEqual(await outcomeRows(spoofRequest.body), []);
         const cleanup = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
         assert.equal(cleanup.status, 200, cleanup.text);
+
+        // Audit lifecycle with the real Storage API. The server's own steps (claim as the service role,
+        // then its tagged write) are driven directly so the write can be held "in flight" while the
+        // admin calls the app's recovery endpoint.
+        const recover = (requestId: number) =>
+          appFetch(app, "/api/platform/workspace-logo", { method: "POST", cookie: adminCookie, json: { requestId } });
+        const serverClaim = async () => {
+          const r = await rpc(env, aal2.access_token, "platform_storage_change_requested", { p_operation: "upsert", p_object_path: logoPath });
+          assert.equal(r.status, 200, r.text);
+          const c = await rpc(env, env.serviceRoleKey, "platform_storage_change_claimed", { p_request_id: r.body, p_actor_id: admin.id });
+          assert.equal(c.status, 200, c.text);
+          return { id: Number(r.body), token: String(c.body) };
+        };
+        const realUpload = (bearer: string, metadata: Record<string, unknown>) =>
+          fetch(`${env.apiUrl}/storage/v1/object/workspace-assets/${logoPath}`, {
+            method: "POST",
+            headers: { apikey: env.anonKey, Authorization: `Bearer ${bearer}`, "Content-Type": "image/png", "x-upsert": "true",
+              "x-metadata": Buffer.from(JSON.stringify(metadata)).toString("base64") },
+            body: png,
+          });
+        const logoOwner = async () => (await db.query<{ owner_id: string | null; tagged: string | null }>(
+          `select nullif(owner_id, '') owner_id, user_metadata ->> 'platform_operation' tagged
+           from storage.objects where bucket_id = 'workspace-assets' and name = $1`, [logoPath])).rows[0];
+
+        // Recovery racing an in-flight write: nothing is recorded and the claim is kept.
+        const flight = await serverClaim();
+        const early = await recover(flight.id);
+        assert.deepEqual([early.status, early.body.code, early.body.requestId], [409, "operation_in_progress", flight.id], early.text);
+        assert.equal(early.headers.get("retry-after"), "120");
+        assert.deepEqual(await outcomeRows(flight.id), [], "no outcome while the operation may still be running");
+        const blockedByFlight = await put(adminCookie);
+        assert.deepEqual([blockedByFlight.status, blockedByFlight.body.code], [409, "change_pending"], "the claim is not released");
+        const landed = await realUpload(env.serviceRoleKey, { platform_operation: flight.token });
+        assert.equal(landed.status, 200, await landed.text());
+        const afterFlight = await recover(flight.id);
+        assert.deepEqual([afterFlight.status, afterFlight.body.outcome], [200, "succeeded"], "its own write committed");
+        assert.equal((await logoOwner())?.tagged, flight.token);
+
+        // A member writes the same object while a platform request is pending: never a platform success.
+        // The real Storage API commits member and server uploads alike, so attribution rests on the
+        // pending token, which only the server knows; a re-upload carrying the previous operation's
+        // token over unchanged is neither attributed nor refused. After the lease, recording 'failed'
+        // fences the operation's late write.
+        const pendingOp = await serverClaim();
+        const memberCarryOver = await realUpload(ownerA.token, { platform_operation: flight.token });
+        assert.equal(memberCarryOver.status, 200, await memberCarryOver.text());
+        const memberWrite = await realUpload(ownerA.token, { note: "member logo" });
+        assert.equal(memberWrite.status, 200, await memberWrite.text());
+        assert.equal((await logoOwner())?.owner_id, ownerA.id, "the member's own write is stored");
+        assert.equal((await recover(pendingOp.id)).status, 409, "still within the lease");
+        await db.query("update private.platform_storage_changes set claimed_at = claimed_at - interval '3 minutes' where request_id = $1", [pendingOp.id]);
+        const fenced = await recover(pendingOp.id);
+        assert.deepEqual([fenced.status, fenced.body.code, fenced.body.outcome], [502, "storage_failed", "failed"], fenced.text);
+        const lateWrite = await realUpload(env.serviceRoleKey, { platform_operation: pendingOp.token });
+        assert.ok(lateWrite.status >= 400, `the operation's late write is refused by the Storage API: ${lateWrite.status}`);
+        assert.equal((await logoOwner())?.owner_id, ownerA.id, "the late write never took effect");
+        assert.deepEqual(await outcomeRows(pendingOp.id), [{ o: "failed" }]);
+        const finalCleanup = await appFetch(app, "/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie: adminCookie });
+        assert.equal(finalCleanup.status, 200, finalCleanup.text);
         const auditCount = (await storageAudit(writeGrant)).length;
 
         // A password (AAL1) session of the same platform admin is not a platform admin.

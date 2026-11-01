@@ -35,19 +35,19 @@ const SUITES = {
       "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts",
     ],
     timeoutMs: 60_000,
-    min: 197,
+    min: 205,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
     timeoutMs: 60_000,
-    min: 182,
+    min: 187,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
     timeoutMs: 240_000,
-    min: 24,
+    min: 28,
   },
   stack: {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",

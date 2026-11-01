@@ -17,12 +17,15 @@ import {
   workspaceLogoPath,
   type CompletionResult,
   type LogoExtension,
+  type PlatformOperation,
 } from "@/lib/supabase/admin";
 import { applyPendingCookies } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+/** Matches the lease in platform_storage_change_finished. */
+const OPERATION_LEASE_SECONDS = 120;
 const CONTENT_TYPES: Record<string, LogoExtension> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -39,7 +42,8 @@ type Authorized = { api: ApiContext; reply: (res: NextResponse) => NextResponse;
  * Audited platform Storage change for the active workspace's logo (R2-3, decision A). Only a platform
  * admin holding a live write grant (and no membership) may change it; members use Storage directly.
  * The database authorizes and audits the request under the caller's JWT; the server claims it (one
- * open change per object), writes, and records the outcome (service role) from the Storage object itself.
+ * open change per object), writes with the claim's operation token, and records (service role) whether
+ * that write committed.
  */
 async function authorize(req: NextRequest, needWriteGrant: boolean): Promise<Authorized> {
   const none = (res: NextResponse) => res;
@@ -62,6 +66,12 @@ function completionResponse(done: CompletionResult, requestId: number, objectPat
     return json(503, "The change could not be confirmed in the audit log yet. Retry with this request id.",
       "audit_pending", { requestId });
   }
+  if (done.outcome === "pending") {
+    const res = json(409, "The Storage operation may still be running; its outcome is not known yet. Retry with this request id.",
+      "operation_in_progress", { requestId });
+    res.headers.set("Retry-After", String(OPERATION_LEASE_SECONDS));
+    return res;
+  }
   if (done.outcome === "failed") return json(502, "Storage change failed", "storage_failed", { requestId, outcome: "failed" });
   return NextResponse.json({ ok: true, requestId, outcome: "succeeded", ...(objectPath ? { objectPath } : {}) });
 }
@@ -70,7 +80,7 @@ async function audited(
   { api, reply }: Authorized,
   operation: "upsert" | "delete",
   ext: LogoExtension,
-  perform: (workspaceId: string) => Promise<unknown>
+  perform: (workspaceId: string, operation: PlatformOperation) => Promise<{ returned: boolean }>
 ): Promise<NextResponse> {
   const workspaceId = api.ctx!.workspace!.id;
   const path = workspaceLogoPath(workspaceId, ext);
@@ -89,14 +99,12 @@ async function audited(
     if (claim.code === "conflict") {
       return reply(json(409, "Another change to this logo is still pending. Recover it first.", "change_pending"));
     }
-    return reply(unavailableResponse());
+    if (claim.code === "not_found") return reply(unavailableResponse());
+    // The claim may have been recorded even though its response was lost: keep it recoverable.
+    return reply(json(503, "The change could not be started. Recover this request id before retrying.", "unavailable", { requestId }));
   }
-  try {
-    await perform(workspaceId);
-  } catch {
-    // The outcome is read from Storage by the database below, whatever happened here.
-  }
-  return reply(completionResponse(await completePlatformStorageChange(requestId, api.ctx!.userId), requestId, path));
+  const { returned } = await perform(workspaceId, claim.operation);
+  return reply(completionResponse(await completePlatformStorageChange(requestId, api.ctx!.userId, returned), requestId, path));
 }
 
 export async function PUT(req: NextRequest) {
@@ -109,7 +117,7 @@ export async function PUT(req: NextRequest) {
   if (bytes.length === 0 || bytes.length > MAX_LOGO_BYTES) {
     return auth.reply(json(422, "Logo must be 1 byte to 2 MB", "validation_failed"));
   }
-  return audited(auth, "upsert", ext, (ws) => platformWriteWorkspaceLogo(ws, ext, bytes, contentType));
+  return audited(auth, "upsert", ext, (ws, op) => platformWriteWorkspaceLogo(ws, ext, bytes, contentType, op));
 }
 
 export async function DELETE(req: NextRequest) {
@@ -117,12 +125,14 @@ export async function DELETE(req: NextRequest) {
   if (auth.error) return auth.error;
   const ext = req.nextUrl.searchParams.get("ext") as LogoExtension | null;
   if (!ext || !LOGO_EXTENSIONS.includes(ext)) return auth.reply(json(422, "ext must be png, jpg, or webp", "validation_failed"));
-  return audited(auth, "delete", ext, (ws) => platformDeleteWorkspaceLogo(ws, ext));
+  return audited(auth, "delete", ext, (ws, op) => platformDeleteWorkspaceLogo(ws, ext, op));
 }
 
 /**
- * Recovers a pending change (`audit_pending`): records its outcome from the current Storage state.
- * Only the platform admin who made the request; the grant need not still be live.
+ * Recovers a pending change (`audit_pending`, `operation_in_progress`). Records its outcome only once
+ * the operation can no longer be running (see platform_storage_change_finished); until then answers
+ * `operation_in_progress` and keeps the claim. Only the platform admin who made the request; the
+ * grant need not still be live.
  */
 export async function POST(req: NextRequest) {
   const auth = await authorize(req, false);
@@ -132,5 +142,5 @@ export async function POST(req: NextRequest) {
   if (typeof requestId !== "number" || !Number.isSafeInteger(requestId) || requestId <= 0) {
     return auth.reply(json(422, "requestId must be a positive integer", "validation_failed", { fields: { requestId: "invalid" } }));
   }
-  return auth.reply(completionResponse(await completePlatformStorageChange(requestId, auth.api.ctx!.userId), requestId));
+  return auth.reply(completionResponse(await completePlatformStorageChange(requestId, auth.api.ctx!.userId, false), requestId));
 }

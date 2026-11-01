@@ -134,7 +134,7 @@ describe("findings 1 and 2: server-controlled audit outcomes and explicit comple
     recoverLogo(req("/api/platform/workspace-logo", { method: "POST", cookie, body }));
   const finishCalls = () => fake.rpcCalls("platform_storage_change_finished");
 
-  test("the outcome is recorded with the service role only, from the Storage state; the client never supplies it", async () => {
+  test("the outcome is recorded with the service role only, from the server's own tagged write; the client never supplies it", async () => {
     const res = await put(fake.cookie(fake.issue(admin)));
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -142,9 +142,13 @@ describe("findings 1 and 2: server-controlled audit outcomes and explicit comple
     assert.equal(finishCalls().length, 1);
     for (const c of finishCalls()) {
       assert.equal(c.bearer, fake.serviceKey, "completion runs as the service role");
-      assert.deepEqual(Object.keys(c.body as object).sort(), ["p_actor_id", "p_request_id"], "no outcome flag is sent");
+      assert.deepEqual(Object.keys(c.body as object).sort(), ["p_actor_id", "p_operation_returned", "p_request_id"], "no outcome flag is sent");
       assert.equal((c.body as { p_actor_id: string }).p_actor_id, admin.id, "actor comes from the verified context");
+      assert.equal((c.body as { p_operation_returned: boolean }).p_operation_returned, true);
     }
+    const token = fake.requests.get(body.requestId)!.token!;
+    assert.equal(fake.objects.get(`${WS}/logo.png`)?.token, token, "the write carries the claim's operation token");
+    assert.equal(JSON.stringify(body).includes(token), false, "the token never reaches the client");
     for (const c of fake.rpcCalls("platform_storage_change_requested")) assert.notEqual(c.bearer, fake.serviceKey, "requests use the user's JWT");
     assert.deepEqual(fake.rpcCalls("platform_storage_change_claimed").map((c) => c.bearer), [fake.serviceKey], "claimed by the server");
   });
@@ -236,14 +240,185 @@ describe("findings 1 and 2: server-controlled audit outcomes and explicit comple
     assert.equal(finishCalls().length, 0);
   });
 
-  test("delete is audited the same way", async () => {
+  test("delete is audited the same way (a move to the operation's tombstone, then cleanup)", async () => {
     const cookie = fake.cookie(fake.issue(admin));
     assert.equal((await put(cookie)).status, 200);
     const del = await deleteLogo(req("/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie }));
     assert.equal(del.status, 200);
     assert.equal((await del.json()).outcome, "succeeded");
+    assert.equal(fake.objects.size, 0, "logo gone and tombstone cleaned up");
     const again = await deleteLogo(req("/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie }));
     assert.deepEqual([again.status, (await again.json()).outcome], [502, "failed"], "deleting an absent logo is not a success");
+  });
+});
+
+describe("audit lifecycle: outcomes belong to the server's own operation, and recovery never races it", () => {
+  const LOGO = `${WS}/logo.png`;
+  const put = (cookie: string) =>
+    putLogo(req("/api/platform/workspace-logo", { method: "PUT", cookie, body: PNG, contentType: "image/png" }));
+  const del = (cookie: string) => deleteLogo(req("/api/platform/workspace-logo?ext=png", { method: "DELETE", cookie }));
+  const recover = (cookie: string, requestId: number) =>
+    recoverLogo(req("/api/platform/workspace-logo", { method: "POST", cookie, body: JSON.stringify({ requestId }) }));
+  const until = async (cond: () => boolean) => {
+    for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(cond(), "condition reached");
+  };
+  const finishCalls = () => fake.rpcCalls("platform_storage_change_finished");
+  const claimedRequest = () => [...fake.requests.values()].find((r) => r.token && !r.outcome)!;
+  const hold = () => {
+    let release!: () => void;
+    fake.faults.holdWrites = new Promise<void>((r) => { release = r; });
+    return () => { fake.faults.holdWrites = null; release(); };
+  };
+
+  test("recovery racing an in-flight write neither finalizes nor releases the claim; the write's own outcome is recorded", async () => {
+    const cookie = fake.cookie(fake.issue(admin));
+    const release = hold();
+    const inFlight = put(cookie);
+    await until(() => fake.storageArrivals.length === 1);
+    const { id } = claimedRequest();
+
+    const early = await recover(cookie, id);
+    assert.equal(early.status, 409);
+    const earlyBody = await early.json();
+    assert.deepEqual([earlyBody.ok, earlyBody.code, earlyBody.requestId], [false, "operation_in_progress", id]);
+    assert.equal(early.headers.get("retry-after"), "120");
+    assert.equal(fake.requests.get(id)?.outcome, undefined, "nothing recorded while the write may still run");
+    const blocked = await put(cookie);
+    assert.deepEqual([blocked.status, (await blocked.json()).code], [409, "change_pending"], "the claim is not released");
+    assert.equal(fake.storageArrivals.length, 1, "the blocked change never reached Storage");
+
+    release();
+    const done = await inFlight;
+    assert.equal(done.status, 200);
+    assert.equal((await done.json()).outcome, "succeeded");
+    assert.equal(fake.objects.get(LOGO)?.token, fake.requests.get(id)?.token);
+    const after = await recover(cookie, id);
+    assert.deepEqual([after.status, (await after.json()).outcome], [200, "succeeded"], "recovery now returns the recorded outcome");
+  });
+
+  test("no response before commit: pending until the lease expires; then recorded failed, and the late write is refused", async () => {
+    const cookie = fake.cookie(fake.issue(admin));
+    const release = hold();
+    const inFlight = put(cookie);
+    await until(() => fake.storageArrivals.length === 1);
+    const { id } = claimedRequest();
+    assert.equal((await recover(cookie, id)).status, 409);
+
+    fake.expireLease(id);
+    const fenced = await recover(cookie, id);
+    assert.equal(fenced.status, 502);
+    assert.deepEqual([(await fenced.json()).outcome, fake.requests.get(id)?.outcome], ["failed", "failed"]);
+
+    release();
+    const late = await inFlight;
+    assert.equal(late.status, 502, "the late write was refused, so the recorded outcome stands");
+    assert.equal((await late.json()).outcome, "failed");
+    assert.equal(fake.objects.has(LOGO), false, "the refused write never took effect");
+    assert.equal((await put(cookie)).status, 200, "the claim is released only after the operation was fenced");
+  });
+
+  test("a lost response (client-side failure) is never treated as proof: before commit it stays pending, after commit it succeeds", async () => {
+    const cookie = fake.cookie(fake.issue(admin));
+    fake.faults.dropWriteResponse = "before_commit";
+    const lost = await put(cookie);
+    assert.equal(lost.status, 409);
+    const { requestId, code } = await lost.json();
+    assert.equal(code, "operation_in_progress");
+    const lastFinish = finishCalls().at(-1)!.body as { p_operation_returned: boolean };
+    assert.equal(lastFinish.p_operation_returned, false, "a dropped response is reported as no response");
+    assert.equal(fake.requests.get(requestId)?.outcome, undefined);
+    assert.equal((await recover(cookie, requestId)).status, 409, "still pending inside the lease");
+    fake.expireLease(requestId);
+    assert.equal((await recover(cookie, requestId)).status, 502);
+
+    fake.faults.dropWriteResponse = "after_commit";
+    const committed = await put(cookie);
+    assert.equal(committed.status, 200, "the database saw this operation commit, so the lost response does not matter");
+    assert.equal((await committed.json()).outcome, "succeeded");
+  });
+
+  test("a lost claim response: nothing is written, and the request id is returned so the claim can be recovered", async () => {
+    const cookie = fake.cookie(fake.issue(admin));
+    fake.faults.dropClaimResponse = true;
+    const res = await put(cookie);
+    fake.faults.dropClaimResponse = false;
+    const body = await res.json();
+    assert.deepEqual([res.status, body.code], [503, "unavailable"]);
+    assert.ok(fake.requests.get(body.requestId)?.token, "the claim was recorded server-side");
+    assert.equal(fake.storageArrivals.length, 0, "no write without a confirmed claim");
+    assert.deepEqual([(await put(cookie)).status], [409], "the unknown claim blocks new changes");
+    assert.equal((await recover(cookie, body.requestId)).status, 409, "inside the lease");
+    fake.expireLease(body.requestId);
+    const fenced = await recover(cookie, body.requestId);
+    assert.deepEqual([fenced.status, (await fenced.json()).outcome], [502, "failed"]);
+    assert.equal((await put(cookie)).status, 200);
+  });
+
+  test("a member writing the same object during a pending platform upsert does not make it a platform success", async () => {
+    const adminCookie = fake.cookie(fake.issue(admin));
+    const memberSession = fake.issue(member);
+    fake.faults.dropWriteResponse = "before_commit";
+    const lost = await put(adminCookie);
+    const { requestId } = await lost.json();
+    fake.faults.dropWriteResponse = null;
+
+    // The member changes the logo; the pending operation's token is known only to the server.
+    assert.equal((await fake.memberUpload(memberSession, LOGO)).status, 200);
+    assert.equal(fake.objects.get(LOGO)?.writtenBy, "user");
+
+    assert.equal((await recover(adminCookie, requestId)).status, 409, "still within the lease");
+    fake.expireLease(requestId);
+    const res = await recover(adminCookie, requestId);
+    assert.equal(res.status, 502);
+    assert.deepEqual([(await res.json()).outcome, fake.requests.get(requestId)?.outcome], ["failed", "failed"]);
+  });
+
+  test("a member deleting the object during a pending platform delete does not make it a platform success", async () => {
+    const adminCookie = fake.cookie(fake.issue(admin));
+    assert.equal((await put(adminCookie)).status, 200);
+    fake.faults.dropWriteResponse = "before_commit";
+    const lost = await del(adminCookie);
+    assert.equal(lost.status, 409);
+    const { requestId } = await lost.json();
+    fake.faults.dropWriteResponse = null;
+
+    assert.equal((await fake.memberRemove(fake.issue(member), LOGO)).status, 200);
+    assert.equal(fake.objects.has(LOGO), false);
+    fake.expireLease(requestId);
+    const res = await recover(adminCookie, requestId);
+    assert.equal(res.status, 502);
+    assert.equal((await res.json()).outcome, "failed");
+  });
+
+  test("a member re-upload carrying a finished operation's token over unchanged is neither attributed nor refused", async () => {
+    const adminCookie = fake.cookie(fake.issue(admin));
+    const memberSession = fake.issue(member);
+    const first = await put(adminCookie);
+    const { requestId: firstId } = await first.json();
+    const oldToken = fake.requests.get(firstId)!.token!;
+
+    fake.faults.dropWriteResponse = "before_commit";
+    const { requestId } = await (await put(adminCookie)).json();
+    fake.faults.dropWriteResponse = null;
+    const reupload = await fake.memberUpload(memberSession, LOGO, { platform_operation: oldToken });
+    assert.equal(reupload.status, 200, "the member's ordinary re-upload is not blocked");
+    fake.expireLease(requestId);
+    const res = await recover(adminCookie, requestId);
+    assert.deepEqual([res.status, (await res.json()).outcome], [502, "failed"]);
+    assert.equal(fake.requests.get(firstId)?.outcome, "succeeded", "the earlier outcome is unchanged");
+  });
+
+  test("a member overwriting after the platform write committed does not undo the platform's recorded success", async () => {
+    const adminCookie = fake.cookie(fake.issue(admin));
+    fake.faults.finishFailures = 99;
+    const pending = await put(adminCookie);
+    const { requestId } = await pending.json();
+    assert.equal(pending.status, 503);
+    assert.equal((await fake.memberUpload(fake.issue(member), LOGO)).status, 200);
+    fake.faults.finishFailures = 0;
+    const res = await recover(adminCookie, requestId);
+    assert.deepEqual([res.status, (await res.json()).outcome], [200, "succeeded"], "this operation's own write did commit");
   });
 });
 

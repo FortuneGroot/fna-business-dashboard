@@ -577,3 +577,140 @@ describe("real PostgreSQL: platform grants expire by the clock", () => {
     }
   });
 });
+
+describe("real PostgreSQL: platform Storage operations and their recovery never race", () => {
+  const FINISHED = "select public.platform_storage_change_finished($1, $2, false) r";
+  const UPSERT = `insert into storage.objects (bucket_id, name, user_metadata, version)
+    values ('workspace-assets', $1, $2, gen_random_uuid()::text)
+    on conflict (bucket_id, name) do update set user_metadata = excluded.user_metadata, version = excluded.version`;
+  const MEMBER_UPSERT = `insert into storage.objects (bucket_id, name, owner_id, user_metadata, version)
+    values ('workspace-assets', $1, auth.uid()::text, $2, gen_random_uuid()::text)
+    on conflict (bucket_id, name) do update set user_metadata = excluded.user_metadata, version = excluded.version`;
+
+  async function beginAsService(client: pg.Client) {
+    await client.query("begin");
+    await client.query("set local role service_role");
+    await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ role: "service_role" })]);
+  }
+
+  /** A claimed platform upsert of the workspace logo whose lease has already expired. */
+  async function claimedUpsert() {
+    const { ws, owner1 } = await twoOwnerWorkspace();
+    const c = await server.connect();
+    try {
+      await requestAs(c, platform, "select public.platform_grant_access($1, 'write', 'storage lifecycle race', 15)", [ws]);
+      const path = `${ws}/logo.png`;
+      const [req] = await requestAs<{ r: string }>(c, platform,
+        "select public.platform_storage_change_requested('upsert', $1) r", [path]);
+      const id = Number(req.r);
+      await beginAsService(c);
+      const token = (await c.query<{ r: string }>("select public.platform_storage_change_claimed($1, $2) r", [id, platform.id])).rows[0].r;
+      await c.query("commit");
+      await admin.query("update private.platform_storage_changes set claimed_at = claimed_at - interval '3 minutes' where request_id = $1", [id]);
+      return { ws, owner1, path, id, token };
+    } finally {
+      await c.end();
+    }
+  }
+
+  const outcomeRows = async (id: number) =>
+    (await admin.query<{ outcome: string }>(
+      "select metadata ->> 'outcome' outcome from public.workspace_audit_log where metadata ->> 'request_id' = $1", [String(id)])).rows;
+  const objectOwner = async (path: string) =>
+    (await admin.query<{ owner_id: string | null }>("select owner_id from storage.objects where name = $1", [path])).rows[0];
+
+  test("recovery after the lease waits for an in-flight write of the same operation, then records its success", async () => {
+    const op = await claimedUpsert();
+    const a = await server.connect();
+    const b = await server.connect();
+    try {
+      await beginAsService(a);
+      await a.query(UPSERT, [op.path, { platform_operation: op.token }]);
+
+      await beginAsService(b);
+      const pending = settle(b.query(FINISHED, [op.id, platform.id]));
+      await sleep(400);
+      assert.ok(await waitingOnLock() >= 1, "recovery must wait for the in-flight operation");
+      assert.equal(await Promise.race([pending.then(() => "settled"), sleep(50).then(() => "pending")]), "pending");
+
+      await a.query("commit");
+      const outcome = await pending;
+      assert.equal(outcome.ok, true, errorOf(outcome));
+      assert.equal(valueOf<string>(outcome), "succeeded");
+      await b.query("commit");
+      assert.deepEqual(await outcomeRows(op.id), [{ outcome: "succeeded" }]);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  test("an in-flight write that aborts leaves recovery to record failure, and nothing is stored", async () => {
+    const op = await claimedUpsert();
+    const a = await server.connect();
+    const b = await server.connect();
+    try {
+      await beginAsService(a);
+      await a.query(UPSERT, [op.path, { platform_operation: op.token }]);
+      await beginAsService(b);
+      const pending = settle(b.query(FINISHED, [op.id, platform.id]));
+      await sleep(400);
+      assert.ok(await waitingOnLock() >= 1);
+      await a.query("rollback");
+      const outcome = await pending;
+      assert.equal(valueOf<string>(outcome), "failed");
+      await b.query("commit");
+      assert.equal(await objectOwner(op.path), undefined);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  test("recovery first: the operation's write arriving while the outcome is being recorded is refused", async () => {
+    const op = await claimedUpsert();
+    const a = await server.connect();
+    const b = await server.connect();
+    try {
+      await beginAsService(b);
+      assert.equal((await b.query<{ r: string }>(FINISHED, [op.id, platform.id])).rows[0].r, "failed");
+
+      await beginAsService(a);
+      const late = settle(a.query(UPSERT, [op.path, { platform_operation: op.token }]));
+      await sleep(400);
+      assert.ok(await waitingOnLock() >= 1, "the late write waits for the recording transaction");
+      await b.query("commit");
+      const result = await late;
+      assert.equal(result.ok, false);
+      assert.match(errorOf(result), /platform_operation_closed/);
+      await a.query("rollback");
+      assert.equal(await objectOwner(op.path), undefined, "the late write never took effect");
+      assert.deepEqual(await outcomeRows(op.id), [{ outcome: "failed" }]);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  test("a member writing the same object concurrently neither blocks recovery nor counts as the platform's success", async () => {
+    const op = await claimedUpsert();
+    const a = await server.connect();
+    const b = await server.connect();
+    try {
+      await beginAs(a, op.owner1);
+      await a.query(MEMBER_UPSERT, [op.path, null]);
+
+      await beginAsService(b);
+      const outcome = await settle(b.query(FINISHED, [op.id, platform.id]));
+      assert.equal(outcome.ok, true, errorOf(outcome));
+      assert.equal(valueOf<string>(outcome), "failed", "a member's write is not the platform operation");
+      await b.query("commit");
+      await a.query("commit");
+      assert.equal((await objectOwner(op.path))?.owner_id, op.owner1.id, "the member's own write stands");
+      assert.deepEqual(await outcomeRows(op.id), [{ outcome: "failed" }]);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+});

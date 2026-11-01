@@ -76,15 +76,16 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Review finding 2: completion errors handled (retries, `503 audit_pending`, `409 change_pending`, `POST` recovery by the requesting admin).
 - [x] Review finding 3: refreshed/cleared session cookies applied on `/api/auth/me` and every other supabase-mode response, including denials.
 - [x] Review finding 4: JSON bodies must be objects with typed fields on all new endpoints (null, arrays, wrong types → 400/422).
+- [x] Review round 3: Storage audit outcomes are attributed to the server's own operation (secret per-operation token, `storage.objects` trigger; the Storage API commits member and server writes identically, so the token is the discriminator); member writes never count; recovery returns `409 operation_in_progress` and keeps the claim while the operation may run; after the 2-minute lease, recording the outcome fences any late write.
 - [ ] Decision (recommended by Codex before real use): make logout immediate for reads (session-row check in `request_context`). Today, per spec §5.1, a copied cookie of a logged-out session reads until its access token expires; sensitive mutations already refuse it.
 
 ## Checks
 
 | Check | Environment | Status |
 | --- | --- | --- |
-| `npm test` | runner (minimums: unit 197, db 182, realpg 24, stack 28) | [x] all four suites PASS: unit 197, db 182, realpg 24, stack 28 |
-| `npm run test:db` | PGlite + Supabase shim | [x] PASS 182/182 |
-| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions | [x] PASS 24/24 |
+| `npm test` | runner (minimums: unit 205, db 187, realpg 28, stack 28) | [x] all four suites PASS: unit 205, db 187, realpg 28, stack 28 |
+| `npm run test:db` | PGlite + Supabase shim | [x] PASS 187/187 |
+| `npm run test:db:concurrency` | real local PostgreSQL 18.6, independent sessions (incl. Storage operation vs recovery races) | [x] PASS 28/28 |
 | `tsc` (app and test files) | — | [x] PASS |
 | `npm run build` | Next.js 15.5.25 | [x] PASS |
 | Lint | — | not available (no script) |
@@ -94,7 +95,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 | Storage bucket + policies, PUT/upsert, overrides, clock expiry, concurrency | real Supabase local stack | [x] PASS |
 | Legacy tables closed to anon/authenticated over PostgREST | real Supabase local stack | [x] PASS |
 | Platform write grants refused for Storage upload, PUT, upsert, delete; GET allowed; nothing audited | real Supabase local stack | [x] PASS (R2-3, decision A) |
-| App (`next build` + `next start`, AUTH_PROVIDER=supabase) against real GoTrue: AUTH-1, session refresh, JSON body validation, logout replay (reads until token expiry; sensitive mutation refused), ISO-F3, ISO-F4, gates, MEM-1, SUSP-1, workspace switch, audited Storage endpoint (server-only outcomes, completion failure and recovery) | real Supabase local stack | [x] PASS (11 tests) |
+| App (`next build` + `next start`, AUTH_PROVIDER=supabase) against real GoTrue: AUTH-1, session refresh, JSON body validation, logout replay (reads until token expiry; sensitive mutation refused), ISO-F3, ISO-F4, gates, MEM-1, SUSP-1, workspace switch, audited Storage endpoint (server-only outcomes, completion failure and recovery, recovery vs in-flight write, member write during a pending request, fenced late write) | real Supabase local stack | [x] PASS (11 tests) |
 | Real Auth rate limiting observed | real Supabase local stack | not observed locally (40 failed sign-ins, none limited); 429 mapping unit-tested |
 
 ## Remaining blockers / before staging
