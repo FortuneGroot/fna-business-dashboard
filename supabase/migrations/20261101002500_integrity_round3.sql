@@ -430,3 +430,95 @@ drop policy profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select to authenticated
   using ((user_id = (select auth.uid()) and (select private.session_is_live()))
          or (private.shares_active_workspace(user_id) and (select private.has_permission('team.read'))));
+
+-- Provisioning: concurrent calls for one provisioning key serialize (they could fail on the slug index).
+create or replace function public.platform_provision_workspace(
+  p_provisioning_key text,
+  p_name text,
+  p_slug text,
+  p_owner_email text
+)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_uid uuid := private.require_platform_admin();
+  v_email text := lower(trim(p_owner_email));
+  v_slug text := lower(trim(p_slug));
+  v_name text := trim(p_name);
+  v_ws public.workspaces;
+  v_id uuid;
+  v_pipeline uuid;
+  v_token text;
+  v_invitation uuid;
+begin
+  if p_provisioning_key is null or v_name is null or v_slug is null or v_email is null then
+    raise exception 'validation_failed' using errcode = '22023';
+  end if;
+
+  -- Simultaneous calls for one key take turns, so the later ones find the committed workspace instead
+  -- of failing on its slug (a unique index the ON CONFLICT clause does not cover).
+  perform pg_advisory_xact_lock(hashtextextended('platform_provision:' || p_provisioning_key, 0));
+
+  begin
+    insert into public.workspaces (slug, name, provisioning_key, bootstrap_owner_email, created_by)
+    values (v_slug, v_name, p_provisioning_key, v_email, v_uid)
+    on conflict (provisioning_key) do nothing
+    returning id into v_id;
+  exception
+    when unique_violation then
+      raise exception 'conflict' using errcode = '23505';
+    when check_violation then
+      raise exception 'validation_failed' using errcode = '22023';
+  end;
+
+  if v_id is null then
+    select * into v_ws from public.workspaces w where w.provisioning_key = p_provisioning_key;
+    if v_ws.name <> v_name or lower(v_ws.slug::text) <> v_slug
+       or lower(v_ws.bootstrap_owner_email::text) <> v_email then
+      raise exception 'conflict' using errcode = '23505';
+    end if;
+    select i.id into v_invitation from public.workspace_invitations i
+    where i.workspace_id = v_ws.id and i.role = 'owner'
+      and i.accepted_at is null and i.revoked_at is null and i.expires_at > now()
+    order by i.created_at desc limit 1;
+    return jsonb_build_object('workspace_id', v_ws.id, 'created', false,
+                              'invitation_id', v_invitation, 'invite_token', null);
+  end if;
+
+  insert into public.workspace_settings (workspace_id, business_name) values (v_id, v_name);
+  insert into public.ai_receptionist_configs (workspace_id) values (v_id);
+
+  insert into public.pipelines (workspace_id, name, is_default)
+  values (v_id, 'Sales Pipeline', true)
+  returning id into v_pipeline;
+
+  insert into public.pipeline_stages (workspace_id, pipeline_id, name, position, kind)
+  select v_id, v_pipeline, s.name, s.position, s.kind
+  from (values
+    (1,  'New Lead',                 'open'),
+    (2,  'Attempting Contact',       'open'),
+    (3,  'Connected',                'open'),
+    (4,  'Qualified',                'open'),
+    (5,  'Appointment Booked',       'open'),
+    (6,  'Appointment Completed',    'open'),
+    (7,  'Estimate / Proposal Sent', 'open'),
+    (8,  'Follow-Up',                'open'),
+    (9,  'Decision Pending',         'open'),
+    (10, 'Won',                      'won'),
+    (11, 'Lost',                     'lost'),
+    (12, 'Long-Term Nurture',        'nurture')
+  ) as s(position, name, kind);
+
+  v_token := private.new_token();
+  insert into public.workspace_invitations (workspace_id, email, role, token_hash, created_by, expires_at)
+  values (v_id, v_email, 'owner', private.hash_token(v_token), v_uid, now() + interval '72 hours')
+  returning id into v_invitation;
+
+  perform private.write_platform_audit('workspace.provisioned', v_id, null,
+    jsonb_build_object('slug', v_slug, 'owner_email', v_email));
+
+  return jsonb_build_object('workspace_id', v_id, 'created', true,
+                            'invitation_id', v_invitation, 'invite_token', v_token);
+end;
+$$;

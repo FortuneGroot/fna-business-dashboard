@@ -447,3 +447,27 @@ describe("real PostgreSQL: appointment rules hold under concurrency", () => {
     assert.equal((await attempt(f.owner, "update public.appointments set status = 'cancelled' where id = $1 returning id r", [id])).ok, true);
   });
 });
+
+describe("real PostgreSQL: simultaneous provisioning of one key", () => {
+  test("many sessions provisioning the same key at once all get the one workspace, never a conflict", async () => {
+    const conflicts: string[] = [];
+    for (let round = 0; round < 25; round++) {
+      seq += 1;
+      const args = [`synthetic-burst-${seq}`, `Burst ${seq} (synthetic)`, `burst-${seq}`, `burst-owner-${seq}@example.test`];
+      const clients = await Promise.all(Array.from({ length: 6 }, () => server.connect()));
+      try {
+        const results = await Promise.allSettled(clients.map((c) =>
+          requestAs<{ r: { workspace_id: string; created: boolean } }>(c, platform, "select public.platform_provision_workspace($1, $2, $3, $4) r", args)));
+        const ok = results.filter((r): r is PromiseFulfilledResult<{ r: { workspace_id: string; created: boolean } }[]> => r.status === "fulfilled");
+        for (const r of results) if (r.status === "rejected") conflicts.push(`round ${round}: ${(r.reason as Error).message}`);
+        assert.ok(new Set(ok.map((r) => r.value[0].r.workspace_id)).size <= 1, "one workspace");
+        assert.ok(ok.filter((r) => r.value[0].r.created).length <= 1, "created at most once");
+      } finally {
+        await Promise.all(clients.map((c) => c.end()));
+      }
+      const n = await admin.query<{ n: number }>("select count(*)::int n from public.workspaces where provisioning_key = $1", [args[0]]);
+      assert.equal(n.rows[0].n, 1);
+    }
+    assert.deepEqual(conflicts, [], `${conflicts.length} of ${25 * 6} calls failed`);
+  });
+});
