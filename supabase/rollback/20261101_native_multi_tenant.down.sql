@@ -101,7 +101,14 @@ begin
     drop policy if exists workspace_assets_insert on storage.objects;
     drop policy if exists workspace_assets_update on storage.objects;
     drop policy if exists workspace_assets_delete on storage.objects;
-    delete from storage.buckets where id = 'workspace-assets';
+    -- Hosted Storage refuses any direct DELETE on its tables (statement trigger protect_buckets_delete),
+    -- so there the bucket must be emptied and deleted through the Storage API before this script runs.
+    if exists (select 1 from storage.buckets where id = 'workspace-assets') then
+      if exists (select 1 from pg_trigger where tgrelid = 'storage.buckets'::regclass and tgname = 'protect_buckets_delete') then
+        raise exception 'rollback: empty and delete the workspace-assets bucket through the Storage API first';
+      end if;
+      delete from storage.buckets where id = 'workspace-assets';
+    end if;
   end if;
 end;
 $$;

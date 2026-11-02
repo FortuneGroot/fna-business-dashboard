@@ -1,9 +1,9 @@
 # Staging rehearsal and production cutover checklist
 
-Prepared from local evidence only. **No staging or production project was accessed, created, or
-changed** to write this. Every box below is open until someone records evidence next to it.
-Staging is the separate Supabase project from decision D4 (not yet created). Production steps
-require George's explicit approval (spec §9.2 P9, §11).
+Prepared from local evidence, then updated with the staging rehearsal of 2026-11-02 (§1). **No
+production project was accessed or changed.** A box is ticked only where evidence is recorded.
+Staging is the separate Supabase project from decision D4. Production steps require George's
+explicit approval (spec §9.2 P9, §11).
 
 ## 0. Decisions that must be made first (open — not complete)
 
@@ -19,21 +19,38 @@ require George's explicit approval (spec §9.2 P9, §11).
 
 ## 1. Staging rehearsal (P8 / T2–T4)
 
-- [ ] Create the separate staging Supabase project (D4). Record its project ref in the runbook, never in the repository.
-- [ ] Back up staging (even if empty) and record where the backup lives.
-- [ ] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
-- [ ] `supabase db push` the required manifest (§5) to staging; `supabase migration list` shows local and remote identical. M15 is not part of it.
-- [ ] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
-- [ ] T2: create George's auth user (with public sign-up disabled: Supabase dashboard → Authentication → Add user, email confirmed), then `SUPABASE_URL=<staging origin> SUPABASE_SERVICE_ROLE_KEY=<staging key> npx tsx scripts/bootstrap-platform-admin.ts grant --email <george> --env staging` from an interactive terminal, type the confirmation phrase, and enrol MFA at `/platform/mfa` (D6). Confirm with `… list --env staging`. The key is read from the environment only; never paste it into a file or command history.
-- [ ] Confirm M21 on staging: `select rolconfig from pg_roles where rolname = 'authenticator'` includes `pgrst.db_pre_request=public.check_request_session`; after logging out, the old cookie gets 401.
-- [ ] T3: provision the F&A workspace (`provisioning_key = 'fa-live'`); open the owner link (shown once, nothing is emailed) and accept it as George.
-- [ ] Auth settings on staging: public sign-up disabled (`enable_signup = false`; invited accounts are created server-side from the invitation token, M26 requires a confirmed email for the signed-in acceptance path), email confirmation on, MFA (TOTP) enabled, Realtime not exposed for business tables. Record the settings screenshot in the runbook.
+Staging evidence, 2026-11-02 (George approved a $0 Free-plan project in the production project's organization and region; no production data, credentials, or settings were read or changed; nothing was deployed):
+
+- Project created on the Free plan ($0/month, confirmed by the Supabase cost check), PostgreSQL 17. The ref is in the runbook only.
+- History reconciliation: read-only inspection found no `supabase_migrations` history and no public tables, so the third finding applied ("tables absent"): `supabase db push` applied all 27 files; `supabase migration list` showed local and remote identical.
+- Verified after push: M14 (all ten legacy tables closed to `anon`/`authenticated`), M21 (`pgrst.db_pre_request=public.check_request_session` on `authenticator`), RLS on every public table, no table in the `supabase_realtime` publication, `/auth/v1/settings` reports `disable_signup=true` and `mailer_autoconfirm=false`.
+- T2: George's user added in the dashboard (email confirmed), `bootstrap-platform-admin.ts grant --env staging` run by George with the typed phrase, TOTP enrolled at `/platform/mfa`, session at AAL2.
+- T4: `tests/staging/rehearsal.test.ts` (15 journeys: MFA, provisioning, invitations with public sign-up off, roles, records, overrides, isolation including the raw Data API with each user's JWT, malformed input, concurrency, pagination, support grants with clock expiry, suspension, removal, logout replay, audit isolation) passed 15/15 through the locally built app against staging, and 15/15 again after the rollback and re-apply. Client bundle scan of that build: no secret key value, no `sb_secret_`, no `SUPABASE_SERVICE_ROLE_KEY`.
+- Rollback rehearsal: see the hosted procedure below. Run twice; legacy rows (synthetic markers) kept identical fingerprints, M14 stayed in force, George's account, password, and MFA factor were unchanged, and synthetic users were deleted afterwards.
+
+Hosted rollback procedure (staging only; the unchanged script failed on hosted Storage with `42501 Direct deletion from storage tables is not allowed`, and its transaction left everything untouched):
+
+1. Empty and delete the `workspace-assets` bucket through the Storage API (`POST /storage/v1/bucket/workspace-assets/empty`, then `DELETE /storage/v1/bucket/workspace-assets`, service key). The script now refuses with a clear message if the bucket still exists on hosted Storage.
+2. `STAGING_PROJECT_REF=… STAGING_DB_URL=… node scripts/staging-sql.mjs supabase/rollback/20261101_native_multi_tenant.down.sql` (refuses any other project and the production ref).
+3. Optionally delete `@example.test` Auth users (possible only now: grant history no longer references them).
+4. `supabase migration repair --status reverted` for the 24 native versions (M1–M13, M16–M26; M14 stays applied), then `supabase db push --include-all`.
+5. Restore platform admins with `platform_admin_grant` (audited) and recreate their `profiles` rows: re-applying M9 does not backfill profiles for Auth users created before it.
+
+- [x] Create the separate staging Supabase project (D4). Record its project ref in the runbook, never in the repository.
+- [ ] Back up staging (even if empty) and record where the backup lives. BLOCKED on the Free plan (no backups); use `pg_dump` from the session connection if needed.
+- [x] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
+- [x] `supabase db push` the required manifest (§5) to staging; `supabase migration list` shows local and remote identical. M15 is not part of it.
+- [x] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
+- [x] T2: create George's auth user (with public sign-up disabled: Supabase dashboard → Authentication → Add user, email confirmed), then `SUPABASE_URL=<staging origin> SUPABASE_SERVICE_ROLE_KEY=<staging key> npx tsx scripts/bootstrap-platform-admin.ts grant --email <george> --env staging` from an interactive terminal, type the confirmation phrase, and enrol MFA at `/platform/mfa` (D6). Confirm with `… list --env staging`. The key is read from the environment only; never paste it into a file or command history.
+- [x] Confirm M21 on staging: `select rolconfig from pg_roles where rolname = 'authenticator'` includes `pgrst.db_pre_request=public.check_request_session`; after logging out, the old cookie gets 401.
+- [ ] T3: provision the F&A workspace (`provisioning_key = 'fa-live'`); open the owner link (shown once, nothing is emailed) and accept it as George. (Not done: staging holds synthetic businesses only.)
+- [x] Auth settings on staging: public sign-up disabled (`enable_signup = false`; invited accounts are created server-side from the invitation token, M26 requires a confirmed email for the signed-in acceptance path), email confirmation on, MFA (TOTP) enabled, Realtime not exposed for business tables. Record the settings screenshot in the runbook. Leaked-password protection is off (Supabase advisor); it is a Pro-plan setting, so decide it with D5.
 - [ ] Account deletion: deleting an auth user who ever held a platform grant is refused by `platform_access_grants_admin_user_id_fkey` (M26 keeps grant history attributed). Remove platform authority with `bootstrap-platform-admin.ts revoke` (ends open grants, audited) and ban the auth user instead of deleting it; a GDPR erasure request needs a separate, reviewed procedure.
 - [ ] Set staging app env by name only: `AUTH_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `APP_ORIGIN`. No `GHL_*` variables.
-- [ ] T4: run the acceptance suite's journeys against staging with synthetic businesses (requires an allowlisted staging harness; the local harness refuses non-local hosts by design).
+- [x] T4: run the acceptance suite's journeys against staging with synthetic businesses (`tests/staging/rehearsal.test.ts`, the allowlisted staging harness; the local harness still refuses non-local hosts).
 - [ ] UI-2 screenshot comparison against `docs/baseline/` on staging.
-- [ ] Bundle scan of the staging build: no service-role key, no `SUPABASE_SERVICE_ROLE_KEY` value, no GHL token.
-- [ ] Rollback rehearsal on staging: run `supabase/rollback/20261101_native_multi_tenant.down.sql`, confirm legacy tables and data untouched, then re-apply.
+- [x] Bundle scan of the staging build: no service-role key, no `SUPABASE_SERVICE_ROLE_KEY` value, no GHL token.
+- [x] Rollback rehearsal on staging: run `supabase/rollback/20261101_native_multi_tenant.down.sql`, confirm legacy tables and data untouched, then re-apply (hosted procedure above).
 - [ ] Restore-from-backup test on staging (required before T6/M15). The local rehearsal (`docs/BACKUP_RESTORE_REHEARSAL.md`) lists what a restore does not bring back: passwords, sessions and MFA factors (users reset their passwords; platform admins re-enrol MFA), and integration secrets (re-entered). Repeat its functional checks on the restored staging project.
 - [ ] Confirm the hosted API gateway still answers a busy calendar month and a full contacts page (local evidence: `tests/acceptance/scale.test.ts`; lookups send at most 100 ids per request because the local gateway refuses roughly 500).
 - [ ] George signs off on staging.
