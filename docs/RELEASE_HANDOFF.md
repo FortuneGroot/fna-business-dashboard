@@ -7,8 +7,8 @@ write, push, deployment, invitation, or outbound message was made. Status vocabu
 | --- | --- |
 | Local implementation | **Complete** for every locally implementable requirement in the spec (see §6 for the narrow items that are decisions, not code). |
 | Local validation | **Done** on the final commit — see §5 for results by environment. |
-| Staging validation | **Done** on `fna-staging` (M1–M14, M16–M26); M27 is not yet on staging — `docs/STAGING_CUTOVER_CHECKLIST.md` §1. |
-| Production release | **Pending** — George's decisions D1–D7, release gates A (data preservation) and B (MFA recovery), then a separate cutover approval: `docs/PRODUCTION_RELEASE_PLAN.md` §6–§10. A paid plan is optional (D4). |
+| Staging validation | **Done** on `fna-staging` (M1–M14, M16–M27), including the hosted MFA-recovery rehearsal (4/4) — `docs/STAGING_CUTOVER_CHECKLIST.md` §1. |
+| Production release | **Pending** — George's decisions D1–D6, then three separate approvals: A1 backup and preflight, A2 database changes, A3 application cutover (the merge to `release` is the production deployment): `docs/PRODUCTION_RELEASE_PLAN.md` §9–§10. A paid plan is optional (D3). |
 
 Local tests passing is not production readiness. The gates in `docs/PRODUCTION_RELEASE_PLAN.md` are.
 
@@ -77,7 +77,7 @@ Final code `bcd2b0b` (branch `feat/native-multi-tenant`; later commits change do
 | Staging | `fna-staging` (Free plan, same organization and region as production) + locally built app | PASS: rehearsal 15/15 (twice), rollback (three runs), UI-2 (hosted equals local), hosted scale 5/5, explicit backup and restore 5/5; details in `docs/STAGING_CUTOVER_CHECKLIST.md` §1 |
 | Production | — | Read-only preflight only (identities, schema, history, grants, aggregate counts, Vercel names); no writes. Findings, gates and decisions in `docs/PRODUCTION_RELEASE_PLAN.md` |
 
-History: before M27 (`e18d829`, re-run after `359562a`) the same suites passed with unit 276/276 and stack 71/71, the browser bundle scan (113 client files) was clean, and UI-2 local was 20/20. Earlier rounds are in spec §24. M27 changed no client code. It is not on staging yet (plan §7, Gate B).
+History: before M27 (`e18d829`, re-run after `359562a`) the same suites passed with unit 276/276 and stack 71/71, the browser bundle scan (113 client files) was clean, and UI-2 local was 20/20. Earlier rounds are in spec §24. M27 changed no client code. Hosted staging (2026-11-02, same code): M27 applied, and the MFA-recovery rehearsal `tests/staging/mfa-recovery.test.ts` passed 4/4 (plan §7).
 
 Journeys covered with real browsers and denial paths: first owner setup and onboarding; login, logout (including replay of the old cookie and token, refresh, and a second tab); workspace selection and switching across two businesses; invitations, roles, permission overrides, ownership safeguards; CRM, pipeline, calendars, availability, appointments, tasks, inbox; settings, logo, integration status; platform MFA, provisioning, suspension, support grants with expiry and revocation; audited platform Storage; cross-business access refused.
 
@@ -93,11 +93,11 @@ Journeys covered with real browsers and denial paths: first owner setup and onbo
 
 ## 6. Remaining actions (George / external / staging / production only)
 
-The consolidated, current list is `docs/PRODUCTION_RELEASE_PLAN.md` §9–§10 (decisions D1–D7, release gates A and B, and the separate cutover approval). That list supersedes the approvals P1–P8 of the previous plan. The read-only production preflight is done (plan §1–§5). Items 1 and 6 below are done on staging; items 2, 4 and 5 are now D5, plan §1 and D3. The original list is kept for reference:
+The consolidated, current list is `docs/PRODUCTION_RELEASE_PLAN.md` §9–§10 (decisions D1–D6, then approvals A1 backup and preflight, A2 database changes, A3 application cutover). That list supersedes the approvals P1–P8 of the previous plan. The read-only production preflight is done (plan §1–§5). Items 1 and 6 below are done on staging, as is the hosted MFA-recovery rehearsal. Items 2, 3, 4 and 5 are now D5, D3, plan §1 and D2. The original list is kept for reference:
 
 1. Create the staging Supabase project (D4) and record its ref outside the repository.
 2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin (proposal in the plan, §7).
-3. Paid Supabase plan before production (D5; now optional, plan D4).
+3. Paid Supabase plan before production (now optional, plan D3).
 4. Confirm whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`.
 5. Disable the GHL webhook before promoting a P7 build (or keep `release` @ `9c189f8`).
 6. On staging: reconcile migration history, push the manifest, confirm M21's pre-request setting, bootstrap George, run the rehearsal, backup/restore and rollback tests, UI-2, bundle scan; sign off.

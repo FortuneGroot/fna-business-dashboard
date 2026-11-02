@@ -1,6 +1,18 @@
 # Production release plan (proposal — not approved, not executed)
 
-Status on 2026-11-02: staging gates are complete (`docs/STAGING_CUTOVER_CHECKLIST.md` §1) and the read-only production preflight below has been run with George's authorization. **Production is not ready.** Two gates (§6 data preservation, §7 MFA recovery) and George's decisions (§10) come first, and the cutover itself is a separate, final approval (§9 step 10). Nothing has been written to production, Vercel or GHL.
+Status on 2026-11-02:
+
+- Staging validation is complete (`docs/STAGING_CUTOVER_CHECKLIST.md` §1).
+- The hosted MFA-recovery rehearsal (Gate B, §7) passed on staging with M27 applied.
+- The read-only production preflight below has been run with George's authorization.
+
+**Production is not ready.** It needs George's decisions (§10), then three separately approved stages (§9):
+
+1. backup and preflight;
+2. database changes;
+3. application cutover, which includes the merge to `release`, because that push deploys production.
+
+Nothing has been written to production, Vercel or GHL.
 
 Preflight method: Supabase metadata and catalog queries (schema, constraints, grants, policies, role settings, migration history, aggregate row counts — never row contents), the Auth settings endpoint, and Vercel project, deployment, domain and environment-variable **name** listings. No secret value was printed or stored.
 
@@ -44,7 +56,7 @@ Alternative, not recommended: keep `20260917122941` by adding a matching local f
 
 The legacy deployment keeps working during and after the push: it uses the service role, which M14 does not affect (stack test "legacy tables are closed to anon and authenticated, open to the service role"). No native object is used in legacy mode.
 
-**Optional early lockdown (decision D2):** M14 alone can be applied before the release, which closes the exposure in §2 now. It only revokes grants and enables RLS, keeps explicit service-role access (the legacy app's only access path), skips missing tables, and is the same file the release pushes later. It is still a production write and needs its own approval.
+**Optional early lockdown (decision D4):** M14 alone can be applied before the release, which closes the exposure in §2 now. It only revokes grants and enables RLS, keeps explicit service-role access (the legacy app's only access path), skips missing tables, and is the same file the release pushes later. It is still a production write and needs its own approval.
 
 Mechanism: after steps 1–3 above, run the M14 file in one transaction (SQL editor or `psql`), then `supabase migration repair --status applied 20261101001400`. Step 4 then needs `supabase db push --include-all`, because M1–M13 sort before an applied version. That is the same sequence staging used.
 
@@ -52,7 +64,7 @@ Mechanism: after steps 1–3 above, run the M14 file in one transaction (SQL edi
 
 - The live build (`9c189f8`) accepts `POST /api/webhooks/ghl`. In production it always enforces the shared secret (header `x-ghl-signature` or `x-webhook-secret`), accepts only the configured location, and writes to the `sync_*` tables. `GHL_DRY_RUN` does not stop those writes. Other legacy routes: `/api/ghl/health`, `/api/sync/health`, `/api/leads`, `/api/events`, `/api/dashboard/events`.
 - Evidence of use: the last successful ingestion was 2026-09-17 (one contact, one event). Nothing has been stored since, so either no GHL workflow posts to the endpoint or every post fails. Vercel's 1-hour log retention cannot show which.
-- GHL's own configuration is not visible from here. George checks in GHL for workflow "Webhook" actions pointing at `https://fna-client-app.vercel.app/api/webhooks/ghl` (decision D3).
+- GHL's own configuration is not visible from here. George checks in GHL for workflow "Webhook" actions pointing at `https://fna-client-app.vercel.app/api/webhooks/ghl` (decision D2).
 - A P7 build has no webhook route: posts would get 404 and the legacy snapshot stops updating. If workflows exist, disable those actions at cutover. Native mode never contacts GHL.
 - Keep until T6, so that `AUTH_PROVIDER=legacy` remains a rollback: `AUTH_SECRET`, `AUTH_OWNER_*`, `GHL_LOCATION_ID`. Inert from P7 on: `GHL_PIPELINE_ID`, `GHL_WEBHOOK_*`, `GHL_DRY_RUN`, `FAKE_CONTACT_ONLY`, `ALLOW_PRODUCTION_CONTACT_WRITES`, `FORBIDDEN_MASTER_LOCATION_ID`. Remove them after T6, not at cutover.
 - Add for native mode: `AUTH_PROVIDER=supabase`, `SUPABASE_PUBLISHABLE_KEY`, `APP_ORIGIN` (the production origin). `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` exist already.
@@ -77,7 +89,7 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
 - **Preservation without import:** the release never changes legacy rows. M14 changes grants only, M15 (which drops the tables) is excluded, and the legacy view stays available while `AUTH_PROVIDER=legacy` is a rollback (until T6).
 - **If the contact is real and wanted in native mode:** for one contact and one tag, re-entering it in the native CRM after provisioning is cheaper and more reliable than building an importer. An importer becomes worthwhile only if GHL holds real data that was never synced. That is out of scope here, because native mode does not read GHL at all.
 - **No importer will be built for this release.** Native `public.contacts` has no field that keeps a GHL contact id, so an importer would have to invent that contract. Building one needs George's later authorization of a scoped import project, based on real volumes and an agreed external-id mapping. Until then, D1 is either an empty start or manual re-entry.
-- **Legacy login users:** only the owner account. It is not migrated; George signs in to native mode with his new Supabase account and MFA (§9 step 6).
+- **Legacy login users:** only the owner account. It is not migrated; George signs in to native mode with his new Supabase account and MFA (§9, stage 2).
 
 ## 6. Gate A — preservation of existing data (must pass before promotion)
 
@@ -91,7 +103,7 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
 
 ## 7. Gate B — MFA recovery (implemented functionality vs policy)
 
-**Implemented and tested (local stack, commit in `docs/RELEASE_HANDOFF.md`):**
+**Implemented and tested, locally and on hosted staging (code `bcd2b0b`):**
 
 - M27 `platform_end_user_sessions` (service role only) deletes every Auth session of the account. Refresh tokens and MFA claims go with them by cascade. One audit row with the session count is written in the same transaction.
 - `bootstrap-platform-admin.ts remove-mfa` runs in this order:
@@ -112,15 +124,25 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
   - the start, sessions-ended and outcome audit rows share one operation id;
   - `anon` and `authenticated` cannot call the function.
 
-**Not implemented — these are policy and operations, so they need people and a rehearsal:**
+**Hosted rehearsal on `fna-staging` (2026-11-02, `tests/staging/mfa-recovery.test.ts`, PASS 4/4).** M27 was applied to staging alone, after confirming the project identity and its 27-row history (now 28, latest `20261101002600`; only `service_role` may execute the function). The real `remove-mfa` code ran against staging for a synthetic `@example.test` admin, through the locally built app in supabase mode. Results:
 
-| Requirement | State |
+- **Before recovery:** the lost device's AAL2 token reached platform functions, its refresh token rotated, its app cookie showed a platform admin, and a second device was signed in.
+- **Partial failure:** the sessions-ended audit insert was forced to fail for this one synthetic user only, using a temporary trigger that was removed afterwards. The command exited 5 and deleted no factor. The session deletion rolled back with the audit row. The audit shows `started` followed by `incomplete: sessions_not_ended` under one operation id.
+- **Recovery:** 2 sessions ended and 1 factor was removed, exit 0. Both old access tokens got 401 from the Data API and were refused by Auth. The old refresh token was refused, the old token could not enrol a replacement authenticator, and the old app cookie read as signed out. The audit shows `started`, `sessions_ended` (2) and `factors_removed` (complete, 2), sharing one operation id and the ticket reason.
+- **Other users unaffected:** a synthetic bystander's token and app session kept working. George's account was fingerprinted before, during and after (user, password hash, MFA factor, session, platform-admin row) and was identical each time.
+- **Re-enrolment:** password sign-in gave AAL1 without platform access, and a new TOTP factor restored AAL2 platform access.
+- **Cleanup:** the synthetic admin was revoked and both synthetic users were deleted. Staging is back to George as the only user and admin, with 0 workspaces. The audit rows are kept as evidence.
+- Not rehearsed on hosted staging (covered by local unit tests only): a factor deletion that fails partway, and a factor list that cannot be re-read.
+
+**Operational policy, not code, and not a spec requirement:**
+
+| Item | Status |
 | --- | --- |
-| A second named platform admin enrolled with MFA, so recovery never depends on the person who lost the device | **Open (D5)** |
-| Identity verification before recovery: call back to a number recorded in advance, plus a one-time code to the account email, plus a live video check. A ticket reference is the `--reason`. Requests by email or chat alone are never enough. | Policy proposal; no tooling enforces it |
-| Password reset when the password may also be known: Auth dashboard "Send password recovery", or reset through the admin API. Ending sessions does not change the password. | Manual step; not automated |
-| Hosted rehearsal on staging with a synthetic admin (enrol → `remove-mfa` → old tokens refused → re-enrol), then quarterly | **Not run** (this round was local only); required before promotion |
-| Notify all platform admins and the affected user after each recovery | Policy; manual |
+| Who may run `remove-mfa` | The spec says recovery is done by "another platform admin or the operator" (spec §20.4, item 4), and leaves the policy as an open decision (spec §24.2). The tool needs the service-role key, not a second admin account. Proposal: George, or the technical operator who holds the production service-role key, runs it. |
+| A second platform admin | **Not a spec requirement and not a release blocker.** It is an optional availability measure, so that platform functions do not depend on one person's device. Never a shared account. |
+| Identity check before recovering someone else's account | Proposal: call back to a number recorded in advance, plus a one-time code to the account email; the ticket reference is the `--reason`. Not enforced by tooling. When George recovers his own account with the service key, no extra check applies. |
+| Password reset when the password may also be known | Manual: Auth "Send password recovery" or the admin API. Ending sessions does not change the password. |
+| Repeat the hosted rehearsal | After any change to Auth, M21, M27 or the CLI: `tests/staging/mfa-recovery.test.ts`. |
 
 Excluded: recovery codes, email-only MFA reset, any AAL1 fallback to platform functions (M26 removed it), and shared admin accounts.
 
@@ -129,11 +151,22 @@ Excluded: recovery codes, email-only MFA reset, any AAL1 fallback to platform fu
 - **Free plan reality:** the production organization is on the Free plan. Supabase keeps daily backups and point-in-time recovery for Pro and above only, and recommends that Free projects export with `db dump` and keep copies off-site. Today there is **no managed restore point for production**.
 - **Option A, $0:** the explicit export (`docs/BACKUP_RESTORE_REHEARSAL.md`, hosted section, rehearsed 5/5 on staging), taken during a short write freeze before the push.
   - Covers Auth (including password hashes and MFA factors), app and legacy data, ownership, policies, grants, triggers, role settings, migration history, and Storage metadata and files.
-  - Limitations: there is no point-in-time recovery, so recovery returns to the export moment. The export contains credentials and must be stored encrypted with restricted access. A restore goes into a *new* project, which needs a free project slot (the Free organization has two active projects, the maximum).
+  - Limitations: there is no point-in-time recovery, so recovery returns to the export moment. The export contains credentials and must be stored encrypted with restricted access. A hosted restore goes either in place or into a new project, and a new project needs a free slot (see the recovery-capacity table below).
 - **Option B, paid (Pro, about $25 per month per organization plus compute):** 7 days of daily backups, restored in place from the dashboard (the project is down during the restore).
   - Storage files are not included, so the explicit file export is still needed.
   - Point-in-time recovery is a further add-on (about $100 per month for 7 days, and it needs at least the Small compute size).
-- Both options: the backup must exist and be verified before step 4 of §9. Restoring into the live project replaces everything written after the backup.
+- Both options: the backup must exist and be verified before stage 2 of §9. Restoring into the live project replaces everything written after the backup.
+
+**Recovery capacity of Option A (both Free project slots are taken by production and staging; staging is not deleted to make room):**
+
+| Purpose | Destination | Approval needed | Capacity |
+| --- | --- | --- | --- |
+| Prove the production export is restorable (stage 1) | A disposable **local** Supabase stack on the operator's machine, the same path rehearsed on staging | Covered by the stage 1 approval: it handles real data, including password hashes, on that machine, and the copy is deleted afterwards | Staging rehearsal: export about 44 s, restore and verification about 57 s for about 10,000 rows. Production is far smaller today. |
+| Recover after a bad release | No restore needed. The schema change is additive and legacy rows are untouched, so application rollback (below) is enough | Rollback is part of the stage 3 approval | Minutes (a Vercel promote) |
+| Recover damaged production data | **In place**, into `rbghfpwbwmrjbpjswbbn`, replaying the export with the same procedure | A production write, approved at the time | Returns to the export moment; the write freeze makes that lossless for the cutover window. Not rehearsed against a hosted target. |
+| Recover a lost production project | A **new hosted project**. Pausing `fna-staging` frees a slot: a paused project keeps its data and is resumed from the dashboard. Alternatively, Option B. | George approves pausing staging at that moment, plus a Vercel production change (new `SUPABASE_URL` and keys, then redeploy) | Project creation, restore and redeploy; not rehearsed. Restore duration is the same order as above. |
+
+The `Fortune&Finance Academy` project is already paused, so it frees no slot, and it is not used.
 
 Rollback, from least to most invasive:
 
@@ -141,21 +174,57 @@ Rollback, from least to most invasive:
 2. **Native data:** export it (explicit procedure) before rolling back, if real records were created.
 3. **Database:** leave the native schema in place; it does not affect legacy mode. `supabase/rollback/…down.sql` is for staging only and is not planned for production. Restoring the pre-push backup is the last resort.
 
-## 9. Ordered release checklist
+## 9. Release sequence: three separate approvals
 
-1. George answers D1–D7 (§10).
-2. (If D2 approves) take the Option A export, reconcile history (§3 steps 1–3), apply M14 alone (§3 mechanism), verify the advisor errors are gone and the legacy app still logs in and reads its snapshot.
-3. Turn off public sign-up on production Auth (`rbghfpwbwmrjbpjswbbn`: `disable_signup=true`) and confirm email confirmation and TOTP are on, as on staging.
-4. Write freeze; backup of `rbghfpwbwmrjbpjswbbn` (§8); record Gate A row counts and digests.
-5. Reconcile history and push `bcd2b0b`'s manifest (§3); verify M14, M21, M27, RLS, Realtime, advisors; re-check the Gate A digests.
-6. Bootstrap George as platform admin, enrol MFA; bootstrap the second admin (D5).
-7. Gate B: push M27 to `fna-staging` (staging write, needs authorization), then run the hosted MFA-recovery rehearsal there with a synthetic admin; record the evidence.
-8. Provision F&A (`fa-live`) on production (data in §11) and accept the owner invitation; re-enter the legacy contact if D1 says so.
-9. Merge `bcd2b0b` (or a docs-only descendant) into `release`, the production branch of Vercel project `fna-client-app`, so a production build exists; set native env vars, keeping the legacy ones.
-10. **Separate final approval (cutover):** disable GHL webhook actions (if D3 finds any), set `AUTH_PROVIDER=supabase`, promote, smoke-test (MFA login, every page, `/api/health` reports `authProvider: "supabase"`), re-check Gate A digests.
-11. Keep rollback ready (§8) for 14 days; then T6, then M15 only with a verified backup and a separate approval.
+Done, no production effect:
 
-Rollback triggers, any one of which means application rollback (§8 step 1: `AUTH_PROVIDER=legacy`, promote `dpl_Gw82ZbYSBmbVv8Sc7Smp24NoA3Kr`):
+- Staging validation.
+- M27 on `fna-staging` and the hosted MFA-recovery rehearsal (Gate B evidence, §7).
+
+These come before every production step.
+
+Pushing to `release` deploys production, because Vercel builds and promotes it automatically. So the merge to `release` is part of the application cutover (stage 3), never an earlier step. Production environment-variable changes also belong to stage 3: they take effect on the next deployment, and any redeploy would pick them up.
+
+**Stage 1 — backup and preflight (approval A1; no production schema or app change)**
+
+1. George provides the production database connection string into the operator's ignored local env file.
+2. Write freeze: nobody uses the legacy app during the window.
+3. Take the explicit export of `rbghfpwbwmrjbpjswbbn` (§8 Option A, or the managed backup under Option B, plus the file export).
+4. Restore it into a disposable local stack and verify its digests. Store the export encrypted.
+5. Record the Gate A per-table row counts and server-side digests.
+
+**Stage 2 — database changes (approval A2; the live legacy app keeps working throughout)**
+
+1. Turn off public sign-up on `rbghfpwbwmrjbpjswbbn` (`disable_signup=true`), and confirm email confirmation and TOTP are on.
+2. Reconcile history (§3 steps 1–3).
+   - If D4 chose early M14, it was already applied under its own approval with the same mechanism, and the push uses `--include-all`.
+3. `db push --dry-run`: it must list exactly M1–M14 and M16–M27 of `bcd2b0b`. Then `db push`.
+4. Verify M14, M21, M27, RLS on every public table, no Realtime tables, and the advisors. Re-check the Gate A digests: they must be unchanged.
+5. Create George's Auth user from the dashboard (sign-up is off), then run `bootstrap-platform-admin.ts grant --env production`.
+   - He enrols MFA at `/platform/mfa` once stage 3 has deployed the native app. Until then, the native tables are unused.
+
+**Stage 3 — application cutover (approval A3; the final release approval)**
+
+1. Disable GHL webhook actions, if D2 found any.
+2. In Vercel `fna-client-app`, production environment: add `AUTH_PROVIDER=supabase`, `SUPABASE_PUBLISHABLE_KEY` and `APP_ORIGIN=https://fna-client-app.vercel.app`. Keep the legacy variables.
+3. Merge `bcd2b0b` (or its docs-only descendant) into `release` and push. This is the production deployment.
+4. Smoke tests:
+   - `/api/health` reports `authProvider: "supabase"` and `db: "ok"`;
+   - George signs in, enrols TOTP, and reaches the platform console at AAL2;
+   - every page loads;
+   - an anonymous request to `/api/contacts` is refused;
+   - the Gate A digests are unchanged.
+5. Provision F&A (`fa-live`, §11) from the platform console and accept the owner invitation. Re-enter the legacy contact if D1 says it is real.
+6. Keep rollback ready for 14 days. Then T6, then M15 only with a verified backup and a separate approval.
+
+**Optional, before A3 (decision D6): a protected preview that is genuinely isolated.** Today, preview deployments have no `SUPABASE_*` or `AUTH_*` variables, so a preview of the candidate would fail closed and prove nothing. Making it useful needs two authorizations, neither of them a production change:
+
+1. preview environment variables scoped to the git branch `feat/native-multi-tenant`, pointing at `fna-staging` (`AUTH_PROVIDER=supabase`, staging URL and keys, the preview origin);
+2. pushing that branch, not `release`.
+
+The preview URL is behind Vercel Authentication. It would add a check of the Vercel runtime that the locally built app cannot give. The staging validation already passed with the same build run locally.
+
+Rollback triggers in stage 3, any one of which means application rollback (§8 step 1: `AUTH_PROVIDER=legacy`, promote `dpl_Gw82ZbYSBmbVv8Sc7Smp24NoA3Kr`):
 
 - a smoke-test failure;
 - George cannot reach AAL2 platform access;
@@ -164,20 +233,21 @@ Rollback triggers, any one of which means application rollback (§8 step 1: `AUT
 - `/api/health` not reporting supabase mode;
 - sustained 5xx on login or dashboard pages.
 
-## 10. Decisions George needs to make
+## 10. Decisions and approvals George needs to give
 
-| # | Decision | Why it matters |
+Decisions:
+
+| # | Decision | Needed before |
 | --- | --- | --- |
-| D1 | The single legacy contact: test data (start native empty, keep legacy rows read-only until T6), or real (re-enter it in native mode). | Gate A |
-| D2 | Apply M14 alone now to close the open legacy tables (production write), or wait for the release push. | Existing exposure (§2) |
-| D3 | In GHL, do any workflows post to `/api/webhooks/ghl`? If yes, approve disabling those actions at cutover. | Cutover breaks them otherwise |
-| D4 | Backup: Option A ($0 export, no point-in-time recovery) or Option B (Pro plan). | Gate A; spending |
-| D5 | Name the second platform admin, and approve the identity-verification policy in §7. | Gate B |
-| D6 | Leaked-password protection (Pro setting): accept it off, or enable it with D4 Option B. | Auth hardening |
-| D7 | Approve the production writes in steps 2–9 (sign-up off, backup, history repair, push, bootstrap, provisioning, merge to `release`). | Everything before cutover |
+| D1 | The single legacy contact: test data (native starts empty; legacy rows stay read-only until T6), or real (re-enter it after cutover). | Stage 3 |
+| D2 | Fact check in GHL: does any workflow post to `/api/webhooks/ghl`? If yes, those actions are disabled in stage 3. | Stage 3 |
+| D3 | Backup: Option A ($0 export; recovery capacity in §8), or Option B (Pro; then also turn on leaked-password protection). | Stage 1 |
+| D4 | M14 now, alone, to close the open legacy tables (its own small production-write approval), or with the stage 2 push. | Stage 2 |
+| D5 | Who may run `remove-mfa` on production: George, or George plus a named operator holding the service key. A second platform admin is optional (§7). | Stage 3 |
+| D6 | Optional: authorize the staging-backed protected preview (branch-scoped preview variables plus a push of the candidate branch, not `release`). | Before A3, if wanted |
 
-Cutover (step 10) remains a separate, final approval after Gates A and B pass.
+Approvals, each given separately and only after the previous stage passes: **A1** backup and preflight, **A2** database changes, **A3** application cutover (merge to `release` = production deployment).
 
-## 11. Real F&A provisioning data (needed at step 8)
+## 11. Real F&A provisioning data (needed in stage 3)
 
 Provision on production only, never on staging (staging has weaker controls and its harnesses refuse non-synthetic workspaces). Needed from George: display name; slug (provisioning key `fa-live`); owner email; time zone and business hours; support email and phone; website, booking link and review link; logo file.
