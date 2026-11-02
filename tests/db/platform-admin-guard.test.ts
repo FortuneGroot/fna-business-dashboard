@@ -108,7 +108,7 @@ describe("M22 platform-admin guard (PGlite)", () => {
     assert.equal(await admins(), 1);
   });
 
-  test("known limitation: an admin whose support grant is referenced by a workspace audit row cannot be revoked; the attempt changes nothing", async () => {
+  test("an admin whose support grant is referenced by a workspace audit row is revoked; the grant ends and the history stays", async () => {
     const p = await user("aal2");
     await grant(p);
     const owner = await user();
@@ -120,9 +120,15 @@ describe("M22 platform-admin guard (PGlite)", () => {
       "insert into public.workspace_audit_log (workspace_id, actor_id, actor_kind, grant_id, action) values ($1, $2, 'platform_admin', $3, 'contact.viewed')",
       [ws, p.id, grantId]);
     assert.ok(await admins() >= 2);
-    await assert.rejects(revoke(p), /foreign key/);
-    assert.equal(await isAdmin(p), 1);
-    assert.equal(await audits("platform.admin_revoked", p), 0);
+    await revoke(p);
+    assert.equal(await isAdmin(p), 0);
+    assert.equal(await audits("platform.admin_revoked", p), 1);
+    const g = (await db.query<{ admin_user_id: string; ended: boolean }>(
+      "select admin_user_id, revoked_at is not null ended from public.platform_access_grants where id = $1", [grantId])).rows[0];
+    assert.deepEqual(g, { admin_user_id: p.id, ended: true });
+    assert.equal(await adminCount(db, "select count(*) n from public.workspace_audit_log where grant_id = $1 and action = 'contact.viewed'", [grantId]), 1);
+    assert.equal(await adminCount(db,
+      "select count(*) n from public.workspace_audit_log where grant_id = $1 and action = 'platform.access_revoked' and actor_kind = 'system'", [grantId]), 1);
   });
 
   test("only the service role may call the operator functions (not anon, not a platform admin's own session)", async () => {

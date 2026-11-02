@@ -494,13 +494,13 @@ describe("real PostgreSQL: concurrent invitation acceptance, revocation, and rot
     }
   }
 
-  test("the same invitation accepted from two sessions: one membership, the other gets invitation_used", async () => {
+  test("the same invitation accepted from two sessions of the invitee: one membership, one audit row, both answered", async () => {
     const { ws, owner1 } = await twoOwnerWorkspace();
     const inv = await invitee(owner1);
     const r = await race({ user: inv.user, sql: ACCEPT, params: [inv.token] }, { user: inv.user, sql: ACCEPT, params: [inv.token] });
     assert.equal(r.raced, "pending");
-    assert.equal(r.outcome.ok, false);
-    assert.match(errorOf(r.outcome), /invitation_used/);
+    // The waiting session sees the acceptance by the same user and answers it (a retry after a lost response).
+    assert.equal(r.outcome.ok, true, errorOf(r.outcome));
     assert.equal(await roleOf(ws, inv.user.id), "employee");
     const audits = await admin.query<{ n: number }>(
       "select count(*)::int n from public.workspace_audit_log where workspace_id = $1 and action = 'invitation.accepted' and target = $2",

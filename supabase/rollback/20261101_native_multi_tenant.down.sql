@@ -1,10 +1,16 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002400 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002500 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M26 (integrity round 3); its TRUNCATE triggers, logo constraint, grant key and profiles policy go
+-- with their tables, and the functions it replaced are dropped under their original migrations.
+drop function if exists public.set_workspace_logo(text, text);
+drop function if exists private.invitation_issuer_authorized(public.workspace_invitations, boolean);
+drop policy if exists profiles_select on public.profiles;
 
 -- M25 (appointment rules)
 drop trigger if exists appointments_rules on public.appointments;

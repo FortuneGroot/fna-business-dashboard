@@ -114,11 +114,16 @@ describe("role escalation and unauthorized membership changes are denied", () =>
 });
 
 describe("invitations are single-use, expiring, email-bound, and revocable", () => {
-  test("an accepted invitation cannot be used again", async () => {
+  test("an accepted invitation cannot be used again (its own acceptor's repeat is answered, not re-applied)", async () => {
     const u = await createUser(w.db, "reuse@example.test");
     const token = await invite(w.ownerA, u.email, "employee");
     await asUser(w.db, u, (q) => rpc(q, "accept_invitation", [token]));
-    await assert.rejects(asUser(w.db, u, (q) => rpc(q, "accept_invitation", [token])), /invitation_used/);
+    const accepted = () => adminCount(w.db,
+      "select count(*) n from public.workspace_audit_log where action = 'invitation.accepted' and metadata ->> 'role' = 'employee' and actor_id = $1", [u.id]);
+    const before = await accepted();
+    const again = await asUser(w.db, u, (q) => rpc<{ workspace: { id: string } }>(q, "accept_invitation", [token]));
+    assert.equal(again.workspace.id, w.wsA);
+    assert.equal(await accepted(), before, "a repeat writes no second acceptance");
     const other = await createUser(w.db, "reuse-other@example.test");
     await assert.rejects(asUser(w.db, other, (q) => rpc(q, "accept_invitation", [token])), /invitation_used/);
   });
