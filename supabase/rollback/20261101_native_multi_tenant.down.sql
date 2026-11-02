@@ -1,10 +1,21 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002000 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002100 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M22 (platform-admin guard)
+drop trigger if exists platform_admins_no_truncate on public.platform_admins;
+drop trigger if exists platform_admins_keep_one on public.platform_admins;
+drop trigger if exists platform_admins_serialize on public.platform_admins;
+drop function if exists public.platform_admin_revoke(uuid, text, jsonb);
+drop function if exists public.platform_admin_grant(uuid, jsonb);
+drop function if exists private.platform_admins_no_truncate();
+drop function if exists private.platform_admins_keep_one();
+drop function if exists private.platform_admins_serialize();
+drop function if exists private.lock_platform_admins();
 
 -- M21 (session revocation); M20 only replaced replace_availability, dropped under M18.
 do $$

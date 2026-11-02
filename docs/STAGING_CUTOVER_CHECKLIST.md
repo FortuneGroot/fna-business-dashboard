@@ -108,5 +108,6 @@ Exactly these files, in this order. `tests/db/migrations.test.ts` fails if this 
 | M19 | `20261101001800_platform_console.sql` |
 | M20 | `20261101001900_availability_lock.sql` |
 | M21 | `20261101002000_session_revocation.sql` |
+| M22 | `20261101002100_platform_admin_guard.sql` |
 
 **Excluded: M15** (drop `sync_*` and `auth_sessions`). It is destructive, deferred until after T6 and a verified backup (§3), and not written. The legacy files are reconciled per `docs/MIGRATION_VERSION_MAPPING.md` rather than re-applied blindly.

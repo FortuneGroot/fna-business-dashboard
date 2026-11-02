@@ -10,9 +10,15 @@
  * files, never printed). `--env local` only accepts a loopback URL. `--env staging|production`
  * only accepts an https, non-loopback URL, needs an interactive terminal, and the operator must
  * type the confirmation phrase shown. Every change is written to platform_audit_log.
+ * `grant` and `revoke` call database functions (M22) that change platform_admins and write the
+ * audit row in one transaction, serialized by one lock; the database refuses to remove the last
+ * platform admin, whichever path tries.
  * MFA recovery: `remove-mfa` deletes the user's factors, so the admin's next sign-in is AAL1 and
  * must enrol a new authenticator before the console opens; there are no recovery codes. It does
  * not end sessions; if the device may be compromised, also revoke the admin (or reset the password).
+ * Auth API deletions cannot share a transaction with the audit log, so `remove-mfa` writes a
+ * start record first (nothing is deleted if that fails), re-reads the factors afterwards, and
+ * records the observed outcome: complete, partial, none, or unknown. Only complete exits 0.
  */
 
 export type TargetEnv = "local" | "staging" | "production";
@@ -102,6 +108,13 @@ export type Deps = {
 
 type Json = Record<string, any>;
 
+/** A failed API call. Carries the HTTP status and PostgreSQL/PostgREST code, never response text. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string | null, readonly lastAdmin: boolean) {
+    super(message);
+  }
+}
+
 class Api {
   constructor(private readonly target: Target, private readonly key: string, private readonly f: typeof fetch) {}
 
@@ -117,8 +130,22 @@ class Api {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`${method} ${path.split("?")[0]} failed: HTTP ${res.status}`);
+    if (!res.ok) {
+      let body: Json = {};
+      try {
+        body = JSON.parse(text) ?? {};
+      } catch {
+        // non-JSON error body
+      }
+      const code = typeof body.code === "string" ? body.code : null;
+      const lastAdmin = code === "23514" && String(body.message ?? "").startsWith("last_platform_admin");
+      throw new ApiError(`${method} ${path.split("?")[0]} failed: HTTP ${res.status}${code ? ` (${code})` : ""}`, res.status, code, lastAdmin);
+    }
     return text ? JSON.parse(text) : null;
+  }
+
+  rpc(fn: string, args: Json): Promise<any> {
+    return this.call("POST", `/rest/v1/rpc/${fn}`, args);
   }
 
   async userByEmail(email: string): Promise<Json | null> {
@@ -183,45 +210,50 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
     deps.log(`refused: no Auth user with email ${args.email} (the user must sign up first)`);
     return 3;
   }
-  const admins = await api.admins();
-  const isAdmin = admins.some((a) => a.user_id === user.id);
-
-  if (args.command === "grant") {
-    if (isAdmin) {
-      deps.log(`no change: ${args.email} (${user.id}) is already a platform admin`);
-      return 0;
-    }
+  if (args.command === "grant" || args.command === "revoke") {
     if (args.dryRun) {
-      deps.log(`dry run: would make ${args.email} (${user.id}) a platform admin`);
+      const admins = await api.admins();
+      const isAdmin = admins.some((a) => a.user_id === user.id);
+      if (args.command === "grant") {
+        deps.log(isAdmin ? `dry run: no change, ${args.email} is already a platform admin` : `dry run: would make ${args.email} (${user.id}) a platform admin`);
+      } else if (!isAdmin) {
+        deps.log(`dry run: no change, ${args.email} is not a platform admin`);
+      } else {
+        deps.log(admins.length <= 1
+          ? "dry run: would be refused, this is the only platform admin"
+          : `dry run: would remove platform admin ${args.email} (${user.id})`);
+      }
       return 0;
     }
-    await api.call("POST", "/rest/v1/platform_admins", { user_id: user.id }, "resolution=ignore-duplicates,return=minimal");
-    await api.audit("platform.admin_granted", null, { ...via, user_id: user.id, email: args.email });
-    deps.log(`granted: ${args.email} (${user.id}) is a platform admin; console access needs an enrolled authenticator (AAL2)`);
-    return 0;
+    const metadata = { ...via, email: args.email };
+    if (args.command === "grant") {
+      const r = await api.rpc("platform_admin_grant", { p_user_id: user.id, p_metadata: metadata });
+      deps.log(r?.changed
+        ? `granted: ${args.email} (${user.id}) is a platform admin; console access needs an enrolled authenticator (AAL2)`
+        : `no change: ${args.email} (${user.id}) is already a platform admin`);
+      return 0;
+    }
+    try {
+      const r = await api.rpc("platform_admin_revoke", { p_user_id: user.id, p_reason: args.reason, p_metadata: metadata });
+      deps.log(r?.changed ? `revoked: ${args.email} (${user.id}) is no longer a platform admin` : `no change: ${args.email} is not a platform admin`);
+      return 0;
+    } catch (err) {
+      if (err instanceof ApiError && err.lastAdmin) {
+        deps.log("refused: this is the only platform admin; grant another first (nothing was changed)");
+        return 4;
+      }
+      throw err;
+    }
   }
 
-  if (args.command === "revoke") {
-    if (!isAdmin) {
-      deps.log(`no change: ${args.email} is not a platform admin`);
-      return 0;
-    }
-    if (admins.length === 1) {
-      deps.log("refused: this is the only platform admin; grant another first");
-      return 4;
-    }
-    if (args.dryRun) {
-      deps.log(`dry run: would remove platform admin ${args.email} (${user.id})`);
-      return 0;
-    }
-    await api.call("DELETE", `/rest/v1/platform_admins?user_id=eq.${encodeURIComponent(user.id)}`, undefined, "return=minimal");
-    await api.audit("platform.admin_revoked", args.reason, { ...via, user_id: user.id, email: args.email });
-    deps.log(`revoked: ${args.email} (${user.id}) is no longer a platform admin`);
-    return 0;
-  }
+  return removeMfa(api, args, user.id, via, deps);
+}
 
-  // remove-mfa
-  const factors: Json[] = (await api.call("GET", `/auth/v1/admin/users/${user.id}/factors`)) ?? [];
+/** Exit codes: 0 complete; 5 some or all factors remain, or the outcome could not be confirmed;
+ *  6 the factors were removed but the completion record could not be written. */
+async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: Deps): Promise<number> {
+  const factorsUrl = `/auth/v1/admin/users/${userId}/factors`;
+  const factors: Json[] = (await api.call("GET", factorsUrl)) ?? [];
   if (factors.length === 0) {
     deps.log(`no change: ${args.email} has no MFA factors`);
     return 0;
@@ -230,12 +262,55 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
     deps.log(`dry run: would remove ${factors.length} factor(s) from ${args.email}`);
     return 0;
   }
-  for (const f of factors) await api.call("DELETE", `/auth/v1/admin/users/${user.id}/factors/${f.id}`);
-  await api.audit("platform.mfa_factors_removed", args.reason, {
-    ...via, user_id: user.id, email: args.email, factor_ids: factors.map((f) => f.id),
-  });
-  deps.log(`removed ${factors.length} factor(s) from ${args.email}; they must sign in and enrol a new authenticator`);
-  return 0;
+  const ids: string[] = factors.map((f) => String(f.id));
+  const base = { ...via, operation_id: globalThis.crypto.randomUUID(), user_id: userId, email: args.email, factor_ids: ids };
+  try {
+    await api.audit("platform.mfa_removal_started", args.reason, base);
+  } catch (err) {
+    deps.log(`refused: the start record could not be written (${err instanceof Error ? err.message : "unknown error"}); no factor was removed`);
+    return 1;
+  }
+
+  let failedCalls = 0;
+  for (const id of ids) {
+    try {
+      await api.call("DELETE", `${factorsUrl}/${encodeURIComponent(id)}`);
+    } catch {
+      failedCalls += 1;
+    }
+  }
+  let remaining: string[] | null = null;
+  try {
+    const now: Json[] = (await api.call("GET", factorsUrl)) ?? [];
+    const present = new Set(now.map((f) => String(f.id)));
+    remaining = ids.filter((id) => present.has(id));
+  } catch {
+    remaining = null;
+  }
+  const removed = remaining ? ids.filter((id) => !remaining!.includes(id)) : [];
+  const outcome = remaining === null ? "unknown" : remaining.length === 0 ? "complete" : removed.length === 0 ? "none" : "partial";
+  const action = outcome === "complete" ? "platform.mfa_factors_removed" : "platform.mfa_removal_incomplete";
+
+  let recorded = true;
+  try {
+    await api.audit(action, args.reason, { ...base, outcome, removed_factor_ids: removed, remaining_factor_ids: remaining, failed_calls: failedCalls });
+  } catch {
+    recorded = false;
+  }
+
+  if (outcome === "complete") {
+    if (!recorded) {
+      deps.log(`removed ${ids.length} factor(s) from ${args.email}, but the completion record could not be written; only the start record (operation ${base.operation_id}) is in the audit log`);
+      return 6;
+    }
+    deps.log(`removed ${ids.length} factor(s) from ${args.email}; they must sign in and enrol a new authenticator`);
+    return 0;
+  }
+  const detail = outcome === "unknown"
+    ? `the factors could not be re-read after ${failedCalls} failed deletion(s); the outcome is unknown, check before retrying`
+    : `removed ${removed.length} of ${ids.length} factor(s); still present: ${remaining!.join(", ")}`;
+  deps.log(`incomplete: ${detail}${recorded ? "" : "; the outcome record could not be written either"} (operation ${base.operation_id})`);
+  return 5;
 }
 
 async function main(): Promise<void> {

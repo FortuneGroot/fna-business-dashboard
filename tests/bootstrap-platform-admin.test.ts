@@ -10,7 +10,11 @@ const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const SERVICE_KEY = `${b64({ alg: "HS256" })}.${b64({ role: "service_role" })}.sig-not-checked-here`;
 const ANON_KEY = `${b64({ alg: "HS256" })}.${b64({ role: "anon" })}.sig`;
 
-type Fake = { users: { id: string; email: string; factors: string[] }[]; admins: string[]; audit: any[]; requests: string[] };
+type Fake = {
+  users: { id: string; email: string; factors: string[] }[]; admins: string[]; audit: any[]; requests: string[];
+  /** Failure injection: factor ids whose DELETE answers 500, audit actions whose insert answers 500, failing factor re-reads. */
+  failFactorDeletes?: string[]; failAudit?: string[]; failFactorListAfter?: number;
+};
 
 function fakeFetch(state: Fake): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
@@ -25,26 +29,42 @@ function fakeFetch(state: Fake): typeof fetch {
       return json({ users: page === 1 ? state.users.map(({ id, email }) => ({ id, email })) : [] });
     }
     let m = /^\/auth\/v1\/admin\/users\/([^/]+)\/factors$/.exec(p);
-    if (m) return json(state.users.find((u) => u.id === m![1])!.factors.map((id) => ({ id })));
+    if (m) {
+      const lists = state.requests.filter((r) => r === `GET ${p}`).length;
+      if (state.failFactorListAfter !== undefined && lists > state.failFactorListAfter) return json({ msg: "unavailable" }, 503);
+      return json(state.users.find((u) => u.id === m![1])!.factors.map((id) => ({ id })));
+    }
     m = /^\/auth\/v1\/admin\/users\/([^/]+)\/factors\/([^/]+)$/.exec(p);
     if (m && method === "DELETE") {
+      if (state.failFactorDeletes?.includes(m[2])) return json({ msg: "boom" }, 500);
       const u = state.users.find((x) => x.id === m![1])!;
       u.factors = u.factors.filter((f) => f !== m![2]);
       return json({});
     }
     if (p === "/rest/v1/platform_admins" && method === "GET") return json(state.admins.map((user_id) => ({ user_id, created_at: "t" })));
-    if (p === "/rest/v1/platform_admins" && method === "POST") {
-      state.admins.push(JSON.parse(String(init!.body)).user_id);
-      return json(null, 201);
-    }
-    if (p === "/rest/v1/platform_admins" && method === "DELETE") {
-      const id = url.searchParams.get("user_id")!.replace(/^eq\./, "");
-      state.admins = state.admins.filter((a) => a !== id);
-      return json(null, 204);
-    }
     if (p === "/rest/v1/platform_audit_log" && method === "POST") {
-      state.audit.push(JSON.parse(String(init!.body)));
+      const row = JSON.parse(String(init!.body));
+      if (state.failAudit?.includes(row.action)) return json({ code: "XX000", message: "audit unavailable" }, 500);
+      state.audit.push(row);
       return json(null, 201);
+    }
+    // Mirrors M22: the privilege change and its audit row succeed or fail together.
+    if (p === "/rest/v1/rpc/platform_admin_grant" && method === "POST") {
+      const { p_user_id, p_metadata } = JSON.parse(String(init!.body));
+      if (state.admins.includes(p_user_id)) return json({ changed: false, admins: state.admins.length });
+      if (state.failAudit?.includes("platform.admin_granted")) return json({ code: "XX000", message: "audit unavailable" }, 500);
+      state.admins.push(p_user_id);
+      state.audit.push({ actor_id: null, action: "platform.admin_granted", reason: null, metadata: { ...p_metadata, user_id: p_user_id } });
+      return json({ changed: true, admins: state.admins.length });
+    }
+    if (p === "/rest/v1/rpc/platform_admin_revoke" && method === "POST") {
+      const { p_user_id, p_reason, p_metadata } = JSON.parse(String(init!.body));
+      if (!state.admins.includes(p_user_id)) return json({ changed: false, admins: state.admins.length });
+      if (state.admins.length <= 1) return json({ code: "23514", message: "last_platform_admin: at least one platform admin must remain" }, 400);
+      if (state.failAudit?.includes("platform.admin_revoked")) return json({ code: "XX000", message: "audit unavailable" }, 500);
+      state.admins = state.admins.filter((a) => a !== p_user_id);
+      state.audit.push({ actor_id: null, action: "platform.admin_revoked", reason: p_reason, metadata: { ...p_metadata, user_id: p_user_id } });
+      return json({ changed: true, admins: state.admins.length });
     }
     return json({ message: "not found" }, 404);
   }) as typeof fetch;
@@ -136,14 +156,68 @@ describe("A2 bootstrap-platform-admin: commands", () => {
     assert.deepEqual([h.state.audit[0].action, h.state.audit[0].reason], ["platform.admin_revoked", "Leaving the team"]);
   });
 
-  test("remove-mfa deletes every factor and audits the factor ids with the reason", async () => {
+  test("grant and revoke change platform_admins only through the transactional database functions", async () => {
+    const h = harness({ state: { admins: ["u-ops"] } });
+    assert.equal(await run(["grant", "--email", "george@example.test", "--env", "local"], h.deps), 0);
+    assert.equal(await run(["revoke", "--email", "george@example.test", "--env", "local", "--reason", "Rotation complete"], h.deps), 0);
+    assert.deepEqual(h.state.requests.filter((r) => !r.startsWith("GET ")),
+      ["POST /rest/v1/rpc/platform_admin_grant", "POST /rest/v1/rpc/platform_admin_revoke"]);
+  });
+
+  test("a failed grant or revoke (e.g. the audit insert fails) reports failure and changes nothing", async () => {
+    const g = harness({ state: { admins: ["u-ops"], failAudit: ["platform.admin_granted"] } });
+    await assert.rejects(run(["grant", "--email", "george@example.test", "--env", "local"], g.deps), /HTTP 500/);
+    assert.deepEqual([g.state.admins, g.state.audit], [["u-ops"], []]);
+    const r = harness({ state: { admins: ["u-george", "u-ops"], failAudit: ["platform.admin_revoked"] } });
+    await assert.rejects(run(["revoke", "--email", "george@example.test", "--env", "local", "--reason", "Rotation complete"], r.deps), /HTTP 500/);
+    assert.deepEqual([r.state.admins, r.state.audit], [["u-george", "u-ops"], []]);
+  });
+
+  test("remove-mfa records a start, deletes every factor, re-reads, and records the complete outcome", async () => {
     const h = harness({ state: { admins: ["u-george"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], h.deps), 0);
     assert.deepEqual(h.state.users[0].factors, []);
-    assert.deepEqual(h.state.audit[0].metadata.factor_ids, ["f1", "f2"]);
-    assert.equal(h.state.audit[0].action, "platform.mfa_factors_removed");
+    assert.deepEqual(h.state.audit.map((a) => a.action), ["platform.mfa_removal_started", "platform.mfa_factors_removed"]);
+    const [start, done] = h.state.audit;
+    assert.deepEqual(start.metadata.factor_ids, ["f1", "f2"]);
+    assert.equal(done.metadata.operation_id, start.metadata.operation_id);
+    assert.deepEqual([done.metadata.outcome, done.metadata.removed_factor_ids, done.metadata.remaining_factor_ids], ["complete", ["f1", "f2"], []]);
+    assert.equal(done.reason, "Lost phone, verified by call");
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone again"], h.deps), 0);
-    assert.equal(h.state.audit.length, 1, "nothing to remove is not audited");
+    assert.equal(h.state.audit.length, 2, "nothing to remove is not audited");
+  });
+
+  test("remove-mfa never reports success when a factor survives: partial and none are recorded and exit 5", async () => {
+    const partial = harness({ state: { failFactorDeletes: ["f2"] } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], partial.deps), 5);
+    assert.deepEqual(partial.state.users[0].factors, ["f2"]);
+    const rec = partial.state.audit[1];
+    assert.deepEqual([rec.action, rec.metadata.outcome, rec.metadata.removed_factor_ids, rec.metadata.remaining_factor_ids, rec.metadata.failed_calls],
+      ["platform.mfa_removal_incomplete", "partial", ["f1"], ["f2"], 1]);
+    assert.match(partial.lines.at(-1)!, /^incomplete: removed 1 of 2 factor\(s\); still present: f2/);
+    assert.ok(partial.lines.every((l) => !/^removed /.test(l)));
+
+    const none = harness({ state: { failFactorDeletes: ["f1", "f2"] } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], none.deps), 5);
+    assert.equal(none.state.audit[1].metadata.outcome, "none");
+  });
+
+  test("remove-mfa: no start record means no deletion; an unconfirmed or unrecorded outcome is not success", async () => {
+    const noStart = harness({ state: { failAudit: ["platform.mfa_removal_started"] } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], noStart.deps), 1);
+    assert.deepEqual(noStart.state.users[0].factors, ["f1", "f2"]);
+    assert.ok(noStart.state.requests.every((r) => !r.startsWith("DELETE ")));
+
+    const unknown = harness({ state: { failFactorListAfter: 1 } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], unknown.deps), 5);
+    assert.deepEqual([unknown.state.audit[1].action, unknown.state.audit[1].metadata.outcome], ["platform.mfa_removal_incomplete", "unknown"]);
+    assert.match(unknown.lines.at(-1)!, /outcome is unknown/);
+
+    const unrecorded = harness({ state: { failAudit: ["platform.mfa_factors_removed"] } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], unrecorded.deps), 6);
+    assert.deepEqual(unrecorded.state.users[0].factors, []);
+    assert.deepEqual(unrecorded.state.audit.map((a) => a.action), ["platform.mfa_removal_started"]);
+    assert.match(unrecorded.lines.at(-1)!, /completion record could not be written/);
   });
 
   test("non-local targets: refused without a terminal, refused on a wrong phrase, proceed only on the exact phrase", async () => {

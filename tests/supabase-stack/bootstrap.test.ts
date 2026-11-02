@@ -2,7 +2,7 @@
 // the real script as a child process, with real GoTrue users and MFA factors. Never pointed at a
 // hosted project. The superuser connection only verifies outcomes.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import type pg from "pg";
@@ -27,6 +27,42 @@ function cli(...args: string[]): { code: number | null; out: string } {
   const out = `${r.stdout}${r.stderr}`;
   assert.equal(out.includes(env.serviceRoleKey), false, "the CLI never prints the service-role key");
   return { code: r.status, out };
+}
+
+/** The same CLI as a concurrent child process. */
+function cliAsync(...args: string[]): Promise<{ code: number | null; out: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "scripts/bootstrap-platform-admin.ts", ...args], {
+      cwd: ROOT,
+      env: { ...process.env, SUPABASE_URL: env.apiUrl, SUPABASE_SERVICE_ROLE_KEY: env.serviceRoleKey },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      assert.equal(out.includes(env.serviceRoleKey), false, "the CLI never prints the service-role key");
+      resolve({ code, out });
+    });
+  });
+}
+
+/** Makes every platform_audit_log insert with `action` fail (superuser setup), for the duration of `fn`. */
+async function withFailingAudit(action: string, fn: () => Promise<void> | void) {
+  await db.query(`
+    create function public.test_fail_audit() returns trigger language plpgsql as $$
+    begin
+      if new.action = '${action}' then raise exception 'audit insert failed (test)'; end if;
+      return new;
+    end $$;
+    create trigger test_fail_audit before insert on public.platform_audit_log
+      for each row execute function public.test_fail_audit();`);
+  try {
+    await fn();
+  } finally {
+    await db.query("drop trigger test_fail_audit on public.platform_audit_log; drop function public.test_fail_audit();");
+  }
 }
 
 async function passwordSession(user: Identity): Promise<string> {
@@ -94,11 +130,13 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     const r = cli("remove-mfa", "--email", george.email, "--env", "local", "--reason", "Lost phone; identity confirmed by call");
     assert.equal(r.code, 0, r.out);
     assert.equal(await factors(), 0);
-    const audit = await db.query<{ reason: string; metadata: { factor_ids: string[] } }>(
-      "select reason, metadata from public.platform_audit_log where action = 'platform.mfa_factors_removed' and metadata->>'user_id' = $1", [george.id]);
-    assert.equal(audit.rows.length, 1);
-    assert.equal(audit.rows[0].reason, "Lost phone; identity confirmed by call");
-    assert.equal(audit.rows[0].metadata.factor_ids.length, 1);
+    const audit = await db.query<{ action: string; reason: string; metadata: { factor_ids: string[]; operation_id: string; outcome?: string } }>(
+      "select action, reason, metadata from public.platform_audit_log where action like 'platform.mfa_%' and metadata->>'user_id' = $1 order by id", [george.id]);
+    assert.deepEqual(audit.rows.map((a) => a.action), ["platform.mfa_removal_started", "platform.mfa_factors_removed"]);
+    assert.equal(audit.rows[1].reason, "Lost phone; identity confirmed by call");
+    assert.equal(audit.rows[1].metadata.factor_ids.length, 1);
+    assert.equal(audit.rows[1].metadata.outcome, "complete");
+    assert.equal(audit.rows[1].metadata.operation_id, audit.rows[0].metadata.operation_id);
 
     const fresh = await passwordSession(george);
     assert.deepEqual(status((await rpc(env, fresh, "platform_status")).body), { listed: true, active: false }, "AAL1 until re-enrolled");
@@ -111,10 +149,44 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     const r = cli("revoke", "--email", george.email, "--env", "local", "--reason", "Handover to ops complete");
     assert.equal(r.code, 0, r.out);
     assert.deepEqual((await db.query("select user_id from public.platform_admins")).rows.map((x) => x.user_id), [ops.id]);
-    assert.deepEqual(await auditActions(george.id), ["platform.admin_granted", "platform.mfa_factors_removed", "platform.admin_revoked"]);
+    assert.deepEqual(await auditActions(george.id),
+      ["platform.admin_granted", "platform.mfa_removal_started", "platform.mfa_factors_removed", "platform.admin_revoked"]);
     const list = cli("list", "--env", "local");
     assert.equal(list.code, 0, list.out);
     assert.match(list.out, new RegExp(ops.id));
     assert.equal(list.out.includes(george.id), false);
+  });
+
+  test("an audit failure rolls back the grant or revocation: the CLI fails and platform_admins is unchanged", async () => {
+    const before = await auditActions(george.id);
+    await withFailingAudit("platform.admin_granted", () => {
+      const r = cli("grant", "--email", george.email, "--env", "local");
+      assert.equal(r.code, 1, r.out);
+      assert.match(r.out, /^failed: /m);
+      assert.doesNotMatch(r.out, /granted:/);
+    });
+    assert.deepEqual((await db.query("select user_id from public.platform_admins")).rows.map((x) => x.user_id), [ops.id]);
+    assert.deepEqual(await auditActions(george.id), before);
+
+    assert.equal(cli("grant", "--email", george.email, "--env", "local").code, 0);
+    await withFailingAudit("platform.admin_revoked", () => {
+      const r = cli("revoke", "--email", george.email, "--env", "local", "--reason", "Audit outage rehearsal");
+      assert.equal(r.code, 1, r.out);
+    });
+    assert.equal(await adminCount(), 2, "the revocation rolled back with its audit row");
+    assert.deepEqual((await auditActions(george.id)).slice(before.length), ["platform.admin_granted"]);
+  });
+
+  test("two operators revoking both remaining admins at the same moment: one succeeds, one is refused, one admin remains", async () => {
+    assert.equal(await adminCount(), 2);
+    const results = await Promise.all([
+      cliAsync("revoke", "--email", george.email, "--env", "local", "--reason", "Concurrent revocation rehearsal"),
+      cliAsync("revoke", "--email", ops.email, "--env", "local", "--reason", "Concurrent revocation rehearsal"),
+    ]);
+    assert.deepEqual(results.map((r) => r.code).sort(), [0, 4], results.map((r) => r.out).join("\n"));
+    assert.equal(await adminCount(), 1);
+    const revoked = await db.query<{ n: number }>(
+      "select count(*)::int n from public.platform_audit_log where action = 'platform.admin_revoked' and reason = 'Concurrent revocation rehearsal'");
+    assert.equal(revoked.rows[0].n, 1, "exactly the successful revocation is audited");
   });
 });
