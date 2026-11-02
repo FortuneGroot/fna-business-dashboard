@@ -35,7 +35,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 
 ## 3. Migrations, history, backup, restore, rollback
 
-- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M21. **Never M15** (destructive legacy drop; not written).
+- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M22. **Never M15** (destructive legacy drop; not written).
 - History reconciliation (renamed legacy versions): `docs/MIGRATION_VERSION_MAPPING.md`.
 - Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md` (local rehearsal and what a restore does not bring back: passwords, sessions, MFA factors, integration secrets).
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.
@@ -47,8 +47,8 @@ Values are never stored in the repository. Set by name in the hosting provider.
 | Task | How |
 | --- | --- |
 | Make someone a platform admin | `bootstrap-platform-admin.ts grant --email <e> --env <local\|staging\|production>`; they enrol MFA at `/platform/mfa`. |
-| Remove a platform admin | `… revoke --email <e> --env … --reason "<why>"`; refused for the last admin. |
-| Lost authenticator (MFA recovery) | Confirm identity out of band, then `… remove-mfa --email <e> --env … --reason "<why>"`; the admin signs in and re-enrols. No recovery codes. Does not end sessions — if the device may be compromised, also revoke or reset the password. |
+| Remove a platform admin | `… revoke --email <e> --env … --reason "<why>"`; the database refuses to remove the last admin (exit 4), even when two operators act at once (M22). Grant and revoke commit with their audit row or not at all. Known limitation: an admin who has used support access that was recorded in a workspace audit log cannot be revoked yet (the audit row references the grant); the attempt fails and changes nothing — decision D-A below. |
+| Lost authenticator (MFA recovery) | Confirm identity out of band, then `… remove-mfa --email <e> --env … --reason "<why>"`; the admin signs in and re-enrols. No recovery codes. Does not end sessions — if the device may be compromised, also revoke or reset the password. Writes a start record first (nothing is deleted if that fails) and then the observed outcome. Exit 0 only when every factor is gone and recorded; 5 means some factors remain or the outcome could not be confirmed (the message lists them); 6 means removed but the completion record failed. Re-run `remove-mfa` after an incomplete result. |
 | List platform admins | `… list --env …` (read-only). |
 | End someone's access now | Remove the member (Settings → Team) or end their session; both apply on the next request. Logout is immediate (M21). |
 | Support access to a business | Platform console → workspace → open read or write access with a reason and duration; every action is audited; it ends at expiry or when ended. |
@@ -78,6 +78,7 @@ Journeys covered with real browsers and denial paths: first owner setup and onbo
 
 1. Create the staging Supabase project (D4) and record its ref outside the repository.
 2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin.
+   - D-A: how a platform admin who has used support access should be removed. Today the workspace audit log's reference to their grant blocks revocation. Options: keep grants (and their audit references) when an admin is removed, or mark the admin inactive instead of deleting the row. Either is a schema change, so it was left for this decision.
 3. Paid Supabase plan before production (D5).
 4. Confirm whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`.
 5. Disable the GHL webhook before promoting a P7 build (or keep `release` @ `9c189f8`).

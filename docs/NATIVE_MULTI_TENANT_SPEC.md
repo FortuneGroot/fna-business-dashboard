@@ -655,7 +655,7 @@ Order, labels, icons, and hrefs in `src/components/Sidebar.tsx` stay unchanged. 
 | T2 | Local/staging: create George's auth user, run `scripts/bootstrap-platform-admin.ts --email … --env local`, enrol MFA. | legacy (prod) / supabase (local) | delete the local row |
 | T3 | Staging: provision the F&A workspace (`provisioning_key = 'fa-live'`), get the owner invitation URL (shown once, no email sent), and accept it with the intended owner identity. | supabase (staging) | run the rollback script on staging (no archive RPC exists yet) |
 | T4 | Staging parity: run the acceptance suite (§10) and screenshot diff against `docs/baseline/`. | supabase (staging) | — |
-| T5 | **Production cutover (requires George's explicit approval, and a paid Supabase plan — D5):** apply the required migration manifest (`docs/STAGING_CUTOVER_CHECKLIST.md` §5: M1–M14 and M16–M21, never M15), bootstrap the platform admin, provision F&A, set `AUTH_PROVIDER=supabase`. | supabase | set `AUTH_PROVIDER=legacy` and redeploy the previous build. The legacy env credentials stay in place until T6. |
+| T5 | **Production cutover (requires George's explicit approval, and a paid Supabase plan — D5):** apply the required migration manifest (`docs/STAGING_CUTOVER_CHECKLIST.md` §5: M1–M14 and M16–M22, never M15), bootstrap the platform admin, provision F&A, set `AUTH_PROVIDER=supabase`. | supabase | set `AUTH_PROVIDER=legacy` and redeploy the previous build. The legacy env credentials stay in place until T6. |
 | T6 | After 14 stable days: remove the legacy auth code, the `AUTH_OWNER_*`/`AUTH_ADMIN_*`/`AUTH_CLIENT_*` env vars, and the `fna_session` cookie handling. Apply M15 (drop `auth_sessions`, `sync_*`) after a backup. | supabase | restore from backup (documented in the runbook) |
 
 Role mapping at cutover (D6): today's `OWNER` (George) becomes a platform admin **and**, by accepting the F&A owner invitation with the same identity, the F&A workspace owner. Legacy `ADMIN` and `CLIENT` users receive **no** automatic membership; if George wants them in F&A, each gets an individual invitation with the role he chooses. No shared credentials carry over.
@@ -1044,8 +1044,9 @@ docs/GHL_SYNC_WEBHOOK_CONTRACT.md  docs/GHL_WORKFLOW_SYNC_MAP.md  docs/WEBHOOK_S
 | M19 | `20261101001800_platform_console.sql` | platform console RPCs (§20) | M18 |
 | M20 | `20261101001900_availability_lock.sql` | `replace_availability` locks the calendar row first, so concurrent replacements serialize | M18 |
 | M21 | `20261101002000_session_revocation.sql` | access requires the token's Auth session to still exist (helpers, `request_context`, PostgREST pre-request check), so logout ends reads and writes at once (§5.1) | M20 |
+| M22 | `20261101002100_platform_admin_guard.sql` | platform-admin grants and revocations run in service-role functions that write the audit row in the same transaction; every change to `platform_admins` takes one advisory lock, and a statement trigger refuses any delete (direct, cascade, or truncate) that would leave zero platform admins | M21 |
 
-The numbers after M14 skip M15, which stays reserved for the destructive legacy drop. The deployable manifest is the two legacy files plus M1–M14 and M16–M21 (`docs/STAGING_CUTOVER_CHECKLIST.md` §5).
+The numbers after M14 skip M15, which stays reserved for the destructive legacy drop. The deployable manifest is the two legacy files plus M1–M14 and M16–M22 (`docs/STAGING_CUTOVER_CHECKLIST.md` §5).
 
 M1–M13 are additive and leave the legacy tables' structure and data untouched. M14 changes only privileges and RLS on the legacy tables; the legacy app reaches them exclusively with the server-side service-role key, which keeps full access. Rollback (`supabase/rollback/20261101_native_multi_tenant.down.sql`) reverts M1–M13 and deliberately does **not** revert M14.
 
@@ -1806,8 +1807,11 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 | A2: platform-admin bootstrap and operator CLI (`grant`, `revoke`, `remove-mfa`, `list`); loopback-only for `--env local`; https, an interactive terminal and a typed phrase for any other target; keys from the environment only; last admin cannot be revoked; every change audited | `aa5c7f1` |
 | Per-employee permission overrides UI, weekly business hours, private business logo (§6.6), full stage lists on the board | `7bf31c6` |
 | Scale guard counts data statements without the per-request M21 check; suite minimums raised | `813367e` |
+| Codex review of `9bed179`: M22 makes platform-admin grant/revoke atomic with the audit row and serialized on one advisory lock; the database refuses any change that leaves zero admins; `remove-mfa` records a start and the observed outcome (complete, partial, none, unknown) and only reports success when complete | `9317313` |
 
 ### 24.2 Narrow decisions left open (not invented)
+
+- Removing a platform admin who has used support access: `workspace_audit_log` references their grant (`platform_access_grants` cascades from `platform_admins`), so the revocation fails with a foreign-key error and changes nothing. Pre-existing; pinned by a PGlite test. Needs a retention decision (keep grants after removal, or deactivate admins instead of deleting).
 
 - MFA recovery policy (who may run `remove-mfa`, how identity is confirmed). The mechanism exists; no self-service bypass or recovery codes were added.
 
@@ -1824,6 +1828,8 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 | UI-2 visual harness | disposable stack + built app + Chromium | 20/20 routes 200; sidebar 0.00% on every page; settings 61.98% (business hours and logo added), onboarding 62.71% |
 | Browser bundle scan (`.next/static`, 113 files) | — | no service-role names or values, `sb_secret_`, JWTs, private keys, GHL terms, or the operator CLI |
 | Secret scan of the 31 files changed after `a07650c` | — | no matches |
+
+Re-run on `9317313` (M22): typecheck and build PASS; unit 257/257; PGlite 232/232; real PostgreSQL 35/35 (two-session revocation races, grant/revoke lock sharing, 20-round burst, no-lock control); Supabase stack 69/69 (CLI audit rollback, two concurrent CLI revocations); acceptance 38/38; bundle scan (113 files) and secret scan of the 12 changed files clean. UI-2 not re-run (no UI change).
 
 ### 24.4 Open items
 
