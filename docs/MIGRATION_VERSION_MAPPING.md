@@ -9,7 +9,7 @@ unchanged; only the filenames changed (`git mv`).
 | `20260917_sync_store.sql` | `20260917121316_sync_store.sql` | `20260917121316` | First commit `c74f36a`, 2026-09-17 08:13:16 -04:00 = 12:13:16 UTC |
 | `20260917_auth_sessions.sql` | `20260917185155_auth_sessions.sql` | `20260917185155` | First commit `7968520`, 2026-09-17 14:51:55 -04:00 = 18:51:55 UTC |
 
-Both sort before the native multi-tenant migrations (`20261101000100` … `20261101002100`). The two
+Both sort before the native multi-tenant migrations (`20261101000100` … `20261101002200`). The two
 legacy files create independent tables (`sync_*` and `auth_sessions`), so their relative order has
 no functional effect; it follows commit order. `tests/db/migrations.test.ts` enforces unique,
 ordered 14-digit versions.
@@ -37,4 +37,4 @@ explicit approval at cutover:
    - No rows, tables present (applied by hand) →
      `supabase migration repair --status applied 20260917121316 20260917185155`.
    - Tables absent → let `supabase db push` apply both files normally.
-4. Re-run `supabase migration list`; local and remote must match before `db push` of the required manifest (`docs/STAGING_CUTOVER_CHECKLIST.md` §5: M1–M14 and M16–M22; never the deferred, destructive M15).
+4. Re-run `supabase migration list`; local and remote must match before `db push` of the required manifest (`docs/STAGING_CUTOVER_CHECKLIST.md` §5: M1–M14 and M16–M23; never the deferred, destructive M15).

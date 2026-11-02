@@ -50,7 +50,8 @@ const SUITES = {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
     timeoutMs: 240_000,
-    min: 35,
+    // M23 booking races added 3.
+    min: 38,
   },
   stack: {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",

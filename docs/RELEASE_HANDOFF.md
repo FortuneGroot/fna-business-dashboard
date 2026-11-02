@@ -35,7 +35,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 
 ## 3. Migrations, history, backup, restore, rollback
 
-- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M22. **Never M15** (destructive legacy drop; not written).
+- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M23. **Never M15** (destructive legacy drop; not written).
 - History reconciliation (renamed legacy versions): `docs/MIGRATION_VERSION_MAPPING.md`.
 - Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md` (local rehearsal and what a restore does not bring back: passwords, sessions, MFA factors, integration secrets).
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.

@@ -1,10 +1,14 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002100 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002200 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M23 (per-calendar booking lock)
+drop trigger if exists appointments_lock_calendar on public.appointments;
+drop function if exists private.lock_appointment_calendars();
 
 -- M22 (platform-admin guard)
 drop trigger if exists platform_admins_no_truncate on public.platform_admins;
