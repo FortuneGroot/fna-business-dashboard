@@ -19,7 +19,7 @@ Preflight method: Supabase metadata and catalog queries (schema, constraints, gr
 | Rollback candidates | `dpl_2rchR1sX3FbM9DjxmjpCeqZwYCCw` (same commit, 08:00), then the original `release` build `dpl_HNLo3Qida5hbwnT51my3iXCaNgdj` (2026-09-20) |
 | Domains | `fna-client-app.vercel.app` only; no custom domain |
 | Deployment Protection | Vercel Authentication on deployment URLs, not on the production domain; `/login` and `/api/health` answer anonymously |
-| Candidate release build | branch `feat/native-multi-tenant`, final commit in `docs/RELEASE_HANDOFF.md` |
+| Candidate release build | branch `feat/native-multi-tenant` @ `bcd2b0b` (later commits are documentation only); results in `docs/RELEASE_HANDOFF.md` §5 |
 
 Production environment variable names: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `AUTH_SECRET`, `AUTH_OWNER_EMAIL`, `AUTH_OWNER_PASSWORD`, `GHL_WEBHOOK_SECRET`, `GHL_WEBHOOK_ENFORCE_SECRET`, `GHL_LOCATION_ID`, `GHL_PIPELINE_ID`, `FORBIDDEN_MASTER_LOCATION_ID`, `FAKE_CONTACT_ONLY`, `ALLOW_PRODUCTION_CONTACT_WRITES`, `GHL_DRY_RUN`. `GHL_API_TOKEN` exists for preview only. Absent: `AUTH_PROVIDER` (so legacy is the default), `SUPABASE_PUBLISHABLE_KEY`, `APP_ORIGIN`, `CLIENT_CONFIG_PATH`, `AUTH_ADMIN_*`, `AUTH_CLIENT_*`.
 
@@ -76,6 +76,7 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
 - **Importer:** none exists. Nothing in the repository copies `sync_*` rows into native tables; `src/lib/legacy/snapshot.ts` is a read-only view for legacy mode.
 - **Preservation without import:** the release never changes legacy rows. M14 changes grants only, M15 (which drops the tables) is excluded, and the legacy view stays available while `AUTH_PROVIDER=legacy` is a rollback (until T6).
 - **If the contact is real and wanted in native mode:** for one contact and one tag, re-entering it in the native CRM after provisioning is cheaper and more reliable than building an importer. An importer becomes worthwhile only if GHL holds real data that was never synced. That is out of scope here, because native mode does not read GHL at all.
+- **No importer will be built for this release.** Native `public.contacts` has no field that keeps a GHL contact id, so an importer would have to invent that contract. Building one needs George's later authorization of a scoped import project, based on real volumes and an agreed external-id mapping. Until then, D1 is either an empty start or manual re-entry.
 - **Legacy login users:** only the owner account. It is not migrated; George signs in to native mode with his new Supabase account and MFA (§9 step 6).
 
 ## 6. Gate A — preservation of existing data (must pass before promotion)
@@ -144,15 +145,24 @@ Rollback, from least to most invasive:
 
 1. George answers D1–D7 (§10).
 2. (If D2 approves) take the Option A export, reconcile history (§3 steps 1–3), apply M14 alone (§3 mechanism), verify the advisor errors are gone and the legacy app still logs in and reads its snapshot.
-3. Turn off public sign-up on production Auth (`disable_signup=true`) and confirm email confirmation and TOTP are on, as on staging.
-4. Write freeze; backup (§8); record Gate A row counts and digests.
-5. Reconcile history and push (§3); verify M14, M21, M27, RLS, Realtime, advisors; re-check the Gate A digests.
+3. Turn off public sign-up on production Auth (`rbghfpwbwmrjbpjswbbn`: `disable_signup=true`) and confirm email confirmation and TOTP are on, as on staging.
+4. Write freeze; backup of `rbghfpwbwmrjbpjswbbn` (§8); record Gate A row counts and digests.
+5. Reconcile history and push `bcd2b0b`'s manifest (§3); verify M14, M21, M27, RLS, Realtime, advisors; re-check the Gate A digests.
 6. Bootstrap George as platform admin, enrol MFA; bootstrap the second admin (D5).
-7. Gate B: run the hosted MFA-recovery rehearsal on staging with a synthetic admin; record the evidence.
-8. Provision F&A (`fa-live`) on production (P5 data in §11) and accept the owner invitation; re-enter the legacy contact if D1 says so.
-9. Merge the release candidate into `release` (the production branch) so a production build exists; set native env vars, keeping the legacy ones.
+7. Gate B: push M27 to `fna-staging` (staging write, needs authorization), then run the hosted MFA-recovery rehearsal there with a synthetic admin; record the evidence.
+8. Provision F&A (`fa-live`) on production (data in §11) and accept the owner invitation; re-enter the legacy contact if D1 says so.
+9. Merge `bcd2b0b` (or a docs-only descendant) into `release`, the production branch of Vercel project `fna-client-app`, so a production build exists; set native env vars, keeping the legacy ones.
 10. **Separate final approval (cutover):** disable GHL webhook actions (if D3 finds any), set `AUTH_PROVIDER=supabase`, promote, smoke-test (MFA login, every page, `/api/health` reports `authProvider: "supabase"`), re-check Gate A digests.
 11. Keep rollback ready (§8) for 14 days; then T6, then M15 only with a verified backup and a separate approval.
+
+Rollback triggers, any one of which means application rollback (§8 step 1: `AUTH_PROVIDER=legacy`, promote `dpl_Gw82ZbYSBmbVv8Sc7Smp24NoA3Kr`):
+
+- a smoke-test failure;
+- George cannot reach AAL2 platform access;
+- any cross-business data visible;
+- a Gate A digest mismatch on the legacy tables;
+- `/api/health` not reporting supabase mode;
+- sustained 5xx on login or dashboard pages.
 
 ## 10. Decisions George needs to make
 

@@ -1,16 +1,16 @@
 # Native multi-tenant release handoff
 
-Prepared from local work only. No staging or production project, deployment, push, invitation, or
-outbound message was used. Status vocabulary:
+Local work plus the authorized staging validation and read-only production discovery. No production
+write, push, deployment, invitation, or outbound message was made. Status vocabulary:
 
 | Stage | Status |
 | --- | --- |
 | Local implementation | **Complete** for every locally implementable requirement in the spec (see §6 for the narrow items that are decisions, not code). |
 | Local validation | **Done** on the final commit — see §5 for results by environment. |
-| Staging validation | **Pending** — no staging project exists yet (decision D4). |
-| Production release | **Pending** — requires George's approval, a paid plan (D5), and a passed staging rehearsal. |
+| Staging validation | **Done** on `fna-staging` (M1–M14, M16–M26); M27 is not yet on staging — `docs/STAGING_CUTOVER_CHECKLIST.md` §1. |
+| Production release | **Pending** — George's decisions D1–D7, release gates A (data preservation) and B (MFA recovery), then a separate cutover approval: `docs/PRODUCTION_RELEASE_PLAN.md` §6–§10. A paid plan is optional (D4). |
 
-Local tests passing is not production readiness. The staging rehearsal (`docs/STAGING_CUTOVER_CHECKLIST.md`) is the gate.
+Local tests passing is not production readiness. The gates in `docs/PRODUCTION_RELEASE_PLAN.md` are.
 
 ## 1. Environment variable names
 
@@ -38,7 +38,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 
 - Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M27. **Never M15** (destructive legacy drop; not written).
 - History reconciliation (renamed legacy versions): `docs/MIGRATION_VERSION_MAPPING.md`.
-- Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md` (local rehearsal and what a restore does not bring back: passwords, sessions, MFA factors, integration secrets).
+- Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md`. The hosted explicit export (rehearsed on staging) restores Auth users with password hashes and MFA factors; sessions do not survive, and integration secrets need the same application key. The earlier local rehearsal used a reduced export without passwords or MFA factors.
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.
 - Rollback, database (local/staging only): `supabase/rollback/20261101_native_multi_tenant.down.sql`. It resets the M21 PostgREST pre-request setting, drops native objects, and leaves legacy tables and data untouched; M14's legacy lockdown is intentionally not reverted. On hosted Supabase, delete the `workspace-assets` bucket through the Storage API first (hosted Storage refuses direct deletes); the full staging procedure is in `docs/STAGING_CUTOVER_CHECKLIST.md` §1.
 - M23 note: a per-calendar lock trigger on `public.appointments`. Simultaneous bookings of one slot previously could deadlock (PostgreSQL 40P01, shown to users as a 503); now exactly one succeeds and the others get the overlap error (409). Rollback drops the trigger and its function.
@@ -51,7 +51,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 | Task | How |
 | --- | --- |
 | Make someone a platform admin | `bootstrap-platform-admin.ts grant --email <e> --env <local\|staging\|production>`; they enrol MFA at `/platform/mfa`. |
-| Remove a platform admin | `… revoke --email <e> --env … --reason "<why>"`; the database refuses to remove the last admin (exit 4), even when two operators act at once (M22). Grant and revoke commit with their audit row or not at all. Known limitation: an admin who has used support access that was recorded in a workspace audit log cannot be revoked yet (the audit row references the grant); the attempt fails and changes nothing — decision D-A below. |
+| Remove a platform admin | `… revoke --email <e> --env … --reason "<why>"`; the database refuses to remove the last admin (exit 4), even when two operators act at once (M22). Grant and revoke commit with their audit row or not at all. Revoking ends the admin's open support grants (audited) and keeps their history attributed (M26). |
 | Lost authenticator (MFA recovery) | Confirm identity out of band (`docs/PRODUCTION_RELEASE_PLAN.md` §7), then `… remove-mfa --email <e> --env … --reason "<ticket>"`; the admin signs in and re-enrols. No recovery codes. It first ends every session of the account (M27; old access and refresh tokens stop working at once, audited), then deletes the factors. The password is unchanged: if it may be known too, also send a password reset. Writes a start record first (nothing is changed if that fails) and then the observed outcome. Exit 0 only when sessions ended and every factor is gone and recorded; 5 means sessions could not be ended (no factor deleted), some factors remain, or the outcome could not be confirmed (the message says which); 6 means removed but the completion record failed. Re-run `remove-mfa` after an incomplete result. |
 | Sign someone out everywhere | `… end-sessions --email <e> --env … --reason "<why>"` (stolen laptop, ex-staff). MFA and password unchanged; audited. |
 | List platform admins | `… list --env …` (read-only). |
@@ -62,24 +62,22 @@ Non-local runs of the CLI need `https`, an interactive terminal, and the typed p
 
 ## 5. Results by environment (final commit)
 
-Final code `e18d829` (branch `feat/native-multi-tenant`); application and database code are identical to `592d171`, and `e18d829` changes one acceptance test. Unit, database, concurrency and stack ran on `592d171`; acceptance ran on `e18d829`; one suite at a time. Earlier rounds are in spec §24.
+Final code `bcd2b0b` (branch `feat/native-multi-tenant`; later commits change documentation only). Every suite below ran on that code, one at a time.
 
 | Check | Environment | Result |
 | --- | --- | --- |
 | Typecheck / build | Next.js 15.5.25 | PASS / PASS |
-| Unit | Node 24.20.0 | PASS 276/276 |
+| Unit | Node 24.20.0 | PASS 278/278 |
 | Database (PGlite) | PGlite + shim | PASS 250/250 (16 files) |
 | Concurrency | Real local PostgreSQL 18.6 | PASS 64/64 (4 files; M23 booking races and no-lock control, M26 invitation/admin/booking/provisioning races) |
-| Supabase stack | Real local Supabase (disposable, M1–M14 and M16–M26) + built app + Chromium | PASS 71/71 (72/72 with M27, below) |
+| Supabase stack | Real local Supabase (disposable, all migrations except M15) + built app + Chromium | PASS 72/72 (includes M27 device-loss recovery: old access and refresh tokens refused; only the service role can end sessions) |
 | Acceptance | Fresh disposable stacks + built app + Chromium | PASS 39/39 |
 | UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; later UI changes are covered by the acceptance suite, not re-measured) |
-| Bundle scan (112 client chunks) / secret scan (diff since `1f792df`) | — | clean |
+| Secret scan (changed files) | — | clean |
 | Staging | `fna-staging` (Free plan, same organization and region as production) + locally built app | PASS: rehearsal 15/15 (twice), rollback (three runs), UI-2 (hosted equals local), hosted scale 5/5, explicit backup and restore 5/5; details in `docs/STAGING_CUTOVER_CHECKLIST.md` §1 |
 | Production | — | Read-only preflight only (identities, schema, history, grants, aggregate counts, Vercel names); no writes. Findings, gates and decisions in `docs/PRODUCTION_RELEASE_PLAN.md` |
 
-Re-run after the hosted rollback fix (`359562a`), with no app or database code changed since, one suite at a time: typecheck PASS, build PASS, unit 276/276, database 250/250, concurrency 64/64, stack 71/71, acceptance 39/39, UI-2 local 20/20 (figures identical to the accepted run), bundle scan of 113 client files clean, secret scan of the changed files clean.
-
-Release-preparation round (M27 MFA-recovery session revocation, `remove-mfa` ends sessions first, new `end-sessions`), one suite at a time on the final working tree: typecheck PASS, build PASS, unit 278/278, database 250/250, concurrency 64/64, stack 72/72 (new: device-loss recovery refuses old access and refresh tokens; only the service role can end sessions), acceptance 39/39; secret scan of the changed files clean. M27 is not on staging yet (plan §7, Gate B).
+History: before M27 (`e18d829`, re-run after `359562a`) the same suites passed with unit 276/276 and stack 71/71, the browser bundle scan (113 client files) was clean, and UI-2 local was 20/20. Earlier rounds are in spec §24. M27 changed no client code. It is not on staging yet (plan §7, Gate B).
 
 Journeys covered with real browsers and denial paths: first owner setup and onboarding; login, logout (including replay of the old cookie and token, refresh, and a second tab); workspace selection and switching across two businesses; invitations, roles, permission overrides, ownership safeguards; CRM, pipeline, calendars, availability, appointments, tasks, inbox; settings, logo, integration status; platform MFA, provisioning, suspension, support grants with expiry and revocation; audited platform Storage; cross-business access refused.
 
@@ -99,7 +97,7 @@ The consolidated, current list is `docs/PRODUCTION_RELEASE_PLAN.md` §9–§10 (
 
 1. Create the staging Supabase project (D4) and record its ref outside the repository.
 2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin (proposal in the plan, §7).
-3. Paid Supabase plan before production (D5).
+3. Paid Supabase plan before production (D5; now optional, plan D4).
 4. Confirm whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`.
 5. Disable the GHL webhook before promoting a P7 build (or keep `release` @ `9c189f8`).
 6. On staging: reconcile migration history, push the manifest, confirm M21's pre-request setting, bootstrap George, run the rehearsal, backup/restore and rollback tests, UI-2, bundle scan; sign off.
