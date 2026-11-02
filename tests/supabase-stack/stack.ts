@@ -190,9 +190,10 @@ export type Stack = { env: StackEnv; project: DisposableProject; stop: () => voi
 
 /**
  * Creates, starts, verifies, and resets a disposable stack so every migration is applied by the CLI.
- * A second concurrent stack needs a different `portOffset`.
+ * A second concurrent stack needs a different `portOffset`. `sourceDir` supplies a different
+ * config.toml and migrations folder (for example an empty one, as a restore target).
  */
-export function startStack(portOffset = PORT_OFFSET): Stack {
+export function startStack(portOffset = PORT_OFFSET, sourceDir?: string): Stack {
   if (process.env.VERCEL_ENV) throw new Error("Stack tests refuse to run when VERCEL_ENV is set.");
   if (!existsSync(CLI)) throw new BlockedError("Supabase CLI is not installed (npm devDependency `supabase`).");
   const docker = run("docker", ["info", "--format", "{{.ServerVersion}}"], 30_000);
@@ -200,7 +201,7 @@ export function startStack(portOffset = PORT_OFFSET): Stack {
     throw new BlockedError("Docker engine is not running (Docker Desktop requires WSL2 and firmware virtualization).");
   }
 
-  const project = createDisposableProject(undefined, portOffset);
+  const project = createDisposableProject(sourceDir, portOffset);
   let startedHere = false;
   // Stopping needs only the project-level guards: the random project id exists solely for this run.
   const stop = () => {

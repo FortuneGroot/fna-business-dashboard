@@ -73,8 +73,10 @@ Final code `e18d829` (branch `feat/native-multi-tenant`); application and databa
 | Acceptance | Fresh disposable stacks + built app + Chromium | PASS 39/39 |
 | UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; later UI changes are covered by the acceptance suite, not re-measured) |
 | Bundle scan (112 client chunks) / secret scan (diff since `1f792df`) | — | clean |
-| Staging | — | NOT RUN (no staging project) |
-| Production | — | NOT RUN (out of scope) |
+| Staging | `fna-staging` (Free plan, same organization and region as production) + locally built app | PASS: rehearsal 15/15 (twice), rollback (three runs), UI-2 (hosted equals local), hosted scale 5/5, explicit backup and restore 5/5; details in `docs/STAGING_CUTOVER_CHECKLIST.md` §1 |
+| Production | — | NOT RUN; plan and approval requests in `docs/PRODUCTION_RELEASE_PLAN.md` |
+
+Re-run after the hosted rollback fix (`359562a`), with no app or database code changed since, one suite at a time: typecheck PASS, build PASS, unit 276/276, database 250/250, concurrency 64/64, stack 71/71, acceptance 39/39, UI-2 local 20/20 (figures identical to the accepted run), bundle scan of 113 client files clean, secret scan of the changed files clean.
 
 Journeys covered with real browsers and denial paths: first owner setup and onboarding; login, logout (including replay of the old cookie and token, refresh, and a second tab); workspace selection and switching across two businesses; invitations, roles, permission overrides, ownership safeguards; CRM, pipeline, calendars, availability, appointments, tasks, inbox; settings, logo, integration status; platform MFA, provisioning, suspension, support grants with expiry and revocation; audited platform Storage; cross-business access refused.
 
@@ -90,8 +92,10 @@ Journeys covered with real browsers and denial paths: first owner setup and onbo
 
 ## 6. Remaining actions (George / external / staging / production only)
 
+The consolidated, current list is `docs/PRODUCTION_RELEASE_PLAN.md` §8–§9 (approvals P1–P8). Items 1 and 6 below are done on staging. The original list is kept for reference:
+
 1. Create the staging Supabase project (D4) and record its ref outside the repository.
-2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin.
+2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin (proposal in the plan, §7).
 3. Paid Supabase plan before production (D5).
 4. Confirm whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`.
 5. Disable the GHL webhook before promoting a P7 build (or keep `release` @ `9c189f8`).

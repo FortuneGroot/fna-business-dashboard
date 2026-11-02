@@ -11,7 +11,7 @@ explicit approval (spec §9.2 P9, §11).
 | --- | --- | --- | --- |
 | **Logout replay.** Previously a copied session cookie kept working until its access token expired. | **Implemented locally (M21, spec §5.1):** access requires the token's Auth session row; logout ends reads, writes, and direct Data API use at once. Acceptance test 14 and the product rehearsal (two browser tabs) now observe **401** for replayed reads, writes, sensitive actions, and the raw token at PostgREST; the refresh token is revoked; other sessions continue. | George (acknowledge) | DONE locally — verify on staging (the PostgREST pre-request setting must be present after `db push`) |
 | **Migration-history reconciliation.** The two legacy migrations were renamed from the shared version `20260917`; the remote history of any existing database is unknown. | `docs/MIGRATION_VERSION_MAPPING.md` lists the three possible findings and the exact `supabase migration repair` command for each. Nothing has been run against any remote database. | Operator, on staging first | OPEN |
-| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes, by design). | Operator path implemented: `scripts/bootstrap-platform-admin.ts remove-mfa --reason …` deletes the factors (audited); the admin signs in and re-enrols (local stack test). The policy choice is not technical. | George | OPEN — decide who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin |
+| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes, by design). | Operator path implemented: `scripts/bootstrap-platform-admin.ts remove-mfa --reason …` deletes the factors (audited); the admin signs in and re-enrols (local stack test). The policy choice is not technical. | George | OPEN — proposal for approval in `docs/PRODUCTION_RELEASE_PLAN.md` §7 (operators, identity checks, session revocation, audit, testing; no bypass) |
 | **Paid Supabase plan** before production (D5). | No purchase made. | George | OPEN |
 | **Per-client configuration owner check.** Whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`. | P7 removed runtime use of both (spec §21.4); the legacy snapshot reads only the bundled default. Not verifiable locally. | Owner of the Vercel project | OPEN |
 | **Platform-admin bootstrap.** | `scripts/bootstrap-platform-admin.ts` (A2) written: `grant`/`revoke`/`remove-mfa`/`list`, audited; `--env local` accepts only loopback URLs; `--env staging|production` needs https, an interactive terminal, and the typed phrase it shows. Unit tests plus a disposable-stack test; never run against a hosted project. | George / operator | DONE locally — first hosted use is T2 on staging |
@@ -28,16 +28,35 @@ Staging evidence, 2026-11-02 (George approved a $0 Free-plan project in the prod
 - T4: `tests/staging/rehearsal.test.ts` (15 journeys: MFA, provisioning, invitations with public sign-up off, roles, records, overrides, isolation including the raw Data API with each user's JWT, malformed input, concurrency, pagination, support grants with clock expiry, suspension, removal, logout replay, audit isolation) passed 15/15 through the locally built app against staging, and 15/15 again after the rollback and re-apply. Client bundle scan of that build: no secret key value, no `sb_secret_`, no `SUPABASE_SERVICE_ROLE_KEY`.
 - Rollback rehearsal: see the hosted procedure below. Run twice; legacy rows (synthetic markers) kept identical fingerprints, M14 stayed in force, George's account, password, and MFA factor were unchanged, and synthetic users were deleted afterwards.
 
+Second staging round, 2026-11-02 (staging only, synthetic data, nothing deployed):
+
+- **UI-2 on staging:** `tests/visual/ui2-visual-parity.ts --target staging --name "Fortune & Automations (synthetic)"`.
+  - All 20 routes returned 200 through the locally built app against staging.
+  - Compared with `docs/baseline/`, the sidebar differs by about 7.6% on every page. That is the longer synthetic name wrapping to three lines; the overall differences otherwise match the accepted local figures.
+  - Hosted against local, same name and same build: 0.00% on 19 of 20 routes. Settings differs by 0.15%, which is test data only: owner name, email and timestamp.
+  - The local run against `docs/baseline/` reproduced the accepted figures exactly: sidebar 0.00%, dashboard 6.71%, help 9.87%, settings 61.98%, onboarding 62.71%.
+- **Hosted large data:** `tests/staging/scale.test.ts` passed 5/5, using the same seed as the local scale test (`tests/acceptance/scale-seed.ts`).
+  - Contacts: 1,458 live contacts paged by 100 and by 37 across 400 tied timestamps, with search and tag filters and exact totals.
+  - Pipeline: 1,250 opportunities, with stage and status filters, an exact board count beyond 1,000, and an older stage offering "Show 17 more".
+  - Busy calendar: 1,100 bookings in a year, returned soonest-first as 500 marked truncated; the March view is complete with 106 bookings.
+  - Statement counts stay flat as data grows (at most +4). Pages took 200–620 ms from this machine to `us-east-1`.
+- **Hosted backup and restore:** `tests/staging/backup-restore.test.ts` passed 5/5. It used an explicit database export and Storage export, restored into a separate, empty, disposable environment (see `docs/BACKUP_RESTORE_REHEARSAL.md`). It found, and its procedure now fixes, two gaps in a plain `db dump` restore:
+  - the six app policies and triggers on Supabase-owned tables are missing;
+  - default privileges widen grants on restored objects.
+- **Third rollback run** (cleanup after this round): the bucket emptied and deleted through the Storage API, the down script applied, 12 synthetic users deleted, the 24 versions repaired and re-pushed. George was restored as the only platform admin, with his password and MFA factor unchanged.
+  - Read-only checks afterwards: M21 present, M14 closed, RLS on every public table, 0 Realtime tables, and history at 27 rows.
+  - The only `security definer` functions `anon` may call are `peek_invitation` and `check_request_session`, both intended.
+
 Hosted rollback procedure (staging only; the unchanged script failed on hosted Storage with `42501 Direct deletion from storage tables is not allowed`, and its transaction left everything untouched):
 
-1. Empty and delete the `workspace-assets` bucket through the Storage API (`POST /storage/v1/bucket/workspace-assets/empty`, then `DELETE /storage/v1/bucket/workspace-assets`, service key). The script now refuses with a clear message if the bucket still exists on hosted Storage.
+1. Empty and delete the `workspace-assets` bucket through the Storage API (`POST /storage/v1/bucket/workspace-assets/empty`, then `DELETE /storage/v1/bucket/workspace-assets`, service key). Emptying finishes in the background, so a delete issued immediately can answer 400; wait until `storage.objects` has no rows for the bucket, then retry. The script now refuses with a clear message if the bucket still exists on hosted Storage.
 2. `STAGING_PROJECT_REF=… STAGING_DB_URL=… node scripts/staging-sql.mjs supabase/rollback/20261101_native_multi_tenant.down.sql` (refuses any other project and the production ref).
 3. Optionally delete `@example.test` Auth users (possible only now: grant history no longer references them).
-4. `supabase migration repair --status reverted` for the 24 native versions (M1–M13, M16–M26; M14 stays applied), then `supabase db push --include-all`.
+4. `supabase migration repair --status reverted` for the 24 native versions (M1–M13, M16–M26; M14 stays applied), then `supabase db push --include-all`. The versions are 14 digits: `20261101000100` … `20261101001300` and `20261101001500` … `20261101002500`, each step 100. Check every version against a file in `supabase/migrations/` before running the repair: a mistyped version is silently accepted and repairs nothing.
 5. Restore platform admins with `platform_admin_grant` (audited) and recreate their `profiles` rows: re-applying M9 does not backfill profiles for Auth users created before it.
 
 - [x] Create the separate staging Supabase project (D4). Record its project ref in the runbook, never in the repository.
-- [ ] Back up staging (even if empty) and record where the backup lives. BLOCKED on the Free plan (no backups); use `pg_dump` from the session connection if needed.
+- [x] Back up staging. The Free plan has no managed backups, so the explicit export was used (database dump plus Storage files; `docs/BACKUP_RESTORE_REHEARSAL.md`, hosted section). The rehearsal export was kept in the OS temp directory and deleted, because it holds password hashes and MFA secrets. No standing staging backup is kept.
 - [x] Reconcile migration history per `docs/MIGRATION_VERSION_MAPPING.md` (read-only inspection first; record which of the three findings applied).
 - [x] `supabase db push` the required manifest (§5) to staging; `supabase migration list` shows local and remote identical. M15 is not part of it.
 - [x] Confirm M14: legacy `sync_*` and `auth_sessions` closed to `anon`/`authenticated` (stack test "legacy tables are closed…" is the local equivalent).
@@ -48,11 +67,11 @@ Hosted rollback procedure (staging only; the unchanged script failed on hosted S
 - [ ] Account deletion: deleting an auth user who ever held a platform grant is refused by `platform_access_grants_admin_user_id_fkey` (M26 keeps grant history attributed). Remove platform authority with `bootstrap-platform-admin.ts revoke` (ends open grants, audited) and ban the auth user instead of deleting it; a GDPR erasure request needs a separate, reviewed procedure.
 - [ ] Set staging app env by name only: `AUTH_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `APP_ORIGIN`. No `GHL_*` variables.
 - [x] T4: run the acceptance suite's journeys against staging with synthetic businesses (`tests/staging/rehearsal.test.ts`, the allowlisted staging harness; the local harness still refuses non-local hosts).
-- [ ] UI-2 screenshot comparison against `docs/baseline/` on staging.
+- [x] UI-2 screenshot comparison against `docs/baseline/` on staging (second round above; hosted equals local).
 - [x] Bundle scan of the staging build: no service-role key, no `SUPABASE_SERVICE_ROLE_KEY` value, no GHL token.
 - [x] Rollback rehearsal on staging: run `supabase/rollback/20261101_native_multi_tenant.down.sql`, confirm legacy tables and data untouched, then re-apply (hosted procedure above).
-- [ ] Restore-from-backup test on staging (required before T6/M15). The local rehearsal (`docs/BACKUP_RESTORE_REHEARSAL.md`) lists what a restore does not bring back: passwords, sessions and MFA factors (users reset their passwords; platform admins re-enrol MFA), and integration secrets (re-entered). Repeat its functional checks on the restored staging project.
-- [ ] Confirm the hosted API gateway still answers a busy calendar month and a full contacts page (local evidence: `tests/acceptance/scale.test.ts`; lookups send at most 100 ids per request because the local gateway refuses roughly 500).
+- [x] Restore-from-backup test (required before T6/M15). Staging's explicit export was restored into a separate, empty, disposable environment and verified; passwords and MFA factors survive this procedure, while sessions do not. Limitation: the target was a local stack, not a second hosted project; the Free plan's two active projects are both in use. A hosted-target restore is an open decision in `docs/PRODUCTION_RELEASE_PLAN.md`.
+- [x] Confirm the hosted API gateway still answers a busy calendar month and a full contacts page (`tests/staging/scale.test.ts`, second round above).
 - [ ] George signs off on staging.
 
 ## 2. Production cutover (P9 / T5) — requires George's explicit approval

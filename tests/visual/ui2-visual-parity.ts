@@ -1,26 +1,34 @@
 // UI-2: visual diff of every page against docs/baseline/screenshots/ for the same empty-workspace
-// state. Runs only against a disposable local Supabase stack and the locally built app. Uses an
-// installed or cached playwright-core plus a downloaded Chromium; when either is missing it reports
-// BLOCKED (exit 2) instead of passing.
+// state. By default it runs against a disposable local Supabase stack and the locally built app;
+// `--target staging` uses the app already running at STAGING_APP_URL against the staging project
+// (tests/staging/env.ts guards: synthetic owner and "(synthetic)" workspace only). Uses an installed
+// or cached playwright-core plus a downloaded Chromium; when either is missing it reports BLOCKED
+// (exit 2) instead of passing.
 //
-//   node --import tsx tests/visual/ui2-visual-parity.ts [--out <dir>]
+//   node --import tsx tests/visual/ui2-visual-parity.ts [--out <dir>] [--name <business>] [--baseline <dir>] [--target local|staging]
 //
 // Output: one PNG screenshot and one diff PNG per page, plus report.json, in the output directory
-// (default: <os tmp>/fna-ui2). Nothing is written inside the repository.
+// (default: <os tmp>/fna-ui2). Nothing is written inside the repository. `--baseline` compares with
+// another run's screenshots instead (for example staging against local with the same name).
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  adminDb, appLogin, rpc, signUp, startApp, startStack, upgradeToAal2, type App, type Stack,
+  adminDb, appLogin, rpc, signUp, startApp, startStack, upgradeToAal2, type App, type Identity, type Stack,
 } from "../supabase-stack/stack";
+import { connectStaging, createAccount, provision, revokeAdmin, syntheticAdmin } from "../staging/env";
 
 const ROOT = join(__dirname, "..", "..");
-const BASELINE_DIR = join(ROOT, "docs", "baseline", "screenshots");
-const outArg = process.argv.indexOf("--out");
-const OUT = outArg > 0 ? process.argv[outArg + 1] : join(tmpdir(), "fna-ui2");
+const arg = (name: string) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 ? process.argv[i + 1] : undefined;
+};
+const BASELINE_DIR = arg("--baseline") ?? join(ROOT, "docs", "baseline", "screenshots");
+const OUT = arg("--out") ?? join(tmpdir(), "fna-ui2");
+const TARGET = arg("--target") ?? "local";
 const VIEWPORT = { width: 1440, height: 900 };
-const BUSINESS_NAME = "Fortune & Automations";
+const BUSINESS_NAME = arg("--name") ?? "Fortune & Automations";
 const CHANNEL_TOLERANCE = 40;
 
 const ROUTES: Record<string, string> = {
@@ -161,24 +169,38 @@ async function main() {
   let stack: Stack | undefined;
   let app: App | undefined;
   let browser: any;
+  let cleanup = async () => undefined as unknown;
   try {
-    stack = startStack();
-    const { env } = stack;
     const run = Date.now().toString(36);
-    const db = await adminDb(env);
-    const platform = await signUp(env, `ui2-platform-${run}@example.test`, "UI2 Platform");
-    await db.query("insert into public.platform_admins (user_id) values ($1)", [platform.id]);
-    await db.end();
-    const platformAal2 = await upgradeToAal2(env, platform);
-    const owner = await signUp(env, `ui2-owner-${run}@example.test`, "UI2 Owner");
-    const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
-      p_provisioning_key: `ui2-${run}`, p_name: BUSINESS_NAME, p_slug: `ui2-${run}`, p_owner_email: owner.email,
-    });
-    if (prov.status !== 200) throw new Error(`provisioning failed: ${prov.status}`);
-    const accepted = await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token });
-    if (accepted.status !== 200) throw new Error(`invitation acceptance failed: ${accepted.status}`);
-
-    app = await startApp(env);
+    let owner: Identity;
+    if (TARGET === "staging") {
+      const s = await connectStaging();
+      const admin = await syntheticAdmin(s, `ui2-platform-${run}@example.test`, `Stg-ui2-admin-${run}-Aa1!`, "tests/visual/ui2-visual-parity.ts");
+      cleanup = async () => {
+        await revokeAdmin(s, admin.id, "UI-2 staging run finished");
+        await s.db.end();
+      };
+      const account = await createAccount(s.env, `ui2-owner-${run}@example.test`, `Stg-ui2-owner-${run}-Aa1!`, "UI2 Owner (synthetic)");
+      await provision(s, admin.aal2, account, `ui2-${run}`, BUSINESS_NAME);
+      owner = { ...account, token: "" };
+      app = s.app;
+    } else {
+      stack = startStack();
+      const { env } = stack;
+      const db = await adminDb(env);
+      const platform = await signUp(env, `ui2-platform-${run}@example.test`, "UI2 Platform");
+      await db.query("insert into public.platform_admins (user_id) values ($1)", [platform.id]);
+      await db.end();
+      const platformAal2 = await upgradeToAal2(env, platform);
+      owner = await signUp(env, `ui2-owner-${run}@example.test`, "UI2 Owner");
+      const prov = await rpc(env, platformAal2, "platform_provision_workspace", {
+        p_provisioning_key: `ui2-${run}`, p_name: BUSINESS_NAME, p_slug: `ui2-${run}`, p_owner_email: owner.email,
+      });
+      if (prov.status !== 200) throw new Error(`provisioning failed: ${prov.status}`);
+      const accepted = await rpc(env, owner.token, "accept_invitation", { p_token: prov.body.invite_token });
+      if (accepted.status !== 200) throw new Error(`invitation acceptance failed: ${accepted.status}`);
+      app = await startApp(env);
+    }
     const cookie = await appLogin(app, owner);
     const cookies = cookie.split("; ").map((pair) => {
       const i = pair.indexOf("=");
@@ -225,6 +247,7 @@ async function main() {
     console.log(`output: ${OUT}`);
   } finally {
     await browser?.close().catch(() => undefined);
+    await cleanup().catch(() => undefined);
     app?.stop();
     stack?.stop();
   }
