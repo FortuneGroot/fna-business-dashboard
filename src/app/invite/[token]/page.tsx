@@ -8,6 +8,7 @@ type Preview = { workspaceName: string; role: string; emailMasked: string; accou
 type Me = { email: string } | null;
 
 const ROLE_LABEL: Record<string, string> = { owner: "Owner", admin: "Admin", employee: "Team member" };
+const LOAD_TIMEOUT_MS = 15_000;
 
 /** Invitation landing page (§7.4). Same card layout as the login page; nothing is sent from here. */
 export default function InvitePage() {
@@ -15,7 +16,7 @@ export default function InvitePage() {
   const { token } = useParams<{ token: string }>();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [me, setMe] = useState<Me>(null);
-  const [state, setState] = useState<"loading" | "ready" | "invalid">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "invalid" | "unreachable">("loading");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,16 +25,17 @@ export default function InvitePage() {
 
   const load = useCallback(async () => {
     setState("loading");
-    const [inviteRes, meRes] = await Promise.all([
-      fetch(`/api/invitations/${encodeURIComponent(token)}`, { cache: "no-store" }).catch(() => null),
-      fetch("/api/auth/me", { cache: "no-store" }).catch(() => null),
-    ]);
+    const get = (url: string) =>
+      fetch(url, { cache: "no-store", signal: AbortSignal.timeout(LOAD_TIMEOUT_MS) }).catch(() => null);
+    const [inviteRes, meRes] = await Promise.all([get(`/api/invitations/${encodeURIComponent(token)}`), get("/api/auth/me")]);
     const meBody = meRes?.ok ? await meRes.json().catch(() => ({})) : {};
     setMe(meBody?.user?.email ? { email: meBody.user.email } : null);
-    const body = inviteRes ? await inviteRes.json().catch(() => ({})) : {};
-    if (inviteRes?.ok && body.ok) {
+    const body = inviteRes ? await inviteRes.json().catch(() => null) : null;
+    if (inviteRes?.ok && body?.ok) {
       setPreview(body as Preview);
       setState("ready");
+    } else if (!inviteRes || !body || inviteRes.status >= 500) {
+      setState("unreachable");
     } else {
       setNotice(body.error || "This invitation link is not valid.");
       setState("invalid");
@@ -90,6 +92,14 @@ export default function InvitePage() {
 
         {state === "loading" ? (
           <p className="muted" style={{ textAlign: "center" }}>Checking your invitation…</p>
+        ) : null}
+
+        {state === "unreachable" ? (
+          <>
+            <h1 className="serif" style={{ textAlign: "center", fontSize: "1.35rem" }}>Could not check this invitation</h1>
+            <div className="banner error" role="alert">The server did not respond. Your link has not been used; try again.</div>
+            <button className="btn" type="button" onClick={() => void load()} style={{ width: "100%", marginTop: "1rem" }}>Try again</button>
+          </>
         ) : null}
 
         {state === "invalid" ? (

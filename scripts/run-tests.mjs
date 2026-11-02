@@ -57,7 +57,8 @@ const SUITES = {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
     timeoutMs: 1_200_000,
-    min: 69,
+    // The invitation-page settle and retry check added 1.
+    min: 70,
     serial: true,
   },
   acceptance: {

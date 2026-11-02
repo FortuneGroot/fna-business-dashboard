@@ -1722,6 +1722,60 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
           await browser.close().catch(() => undefined);
         }
       });
+
+      test("browser: the signed-out invitation page settles on every one of 25 fresh loads, and a failed preview offers a retry", async () => {
+        // Bounded reproduction of the recorded intermittent stall on "Checking your invitation…".
+        // On a stall the failure lists the requests still pending, failed requests and console errors.
+        const pending = await invite(ownerCookie, { email: email("invite-stall"), role: "employee" });
+        assert.equal(pending.status, 200, pending.text);
+        const url = String(pending.body.inviteUrl).replace("//127.0.0.1:", "//localhost:");
+        const browser = await launchBrowser();
+        const timings: number[] = [];
+        try {
+          for (let i = 0; i < 25; i++) {
+            const ctx = await browser.newContext();
+            await ctx.addInitScript("window.__name = (f) => f");
+            const page = await ctx.newPage();
+            const open = new Map<string, number>();
+            const notes: string[] = [];
+            page.on("request", (r) => open.set(`${r.method()} ${new URL(r.url()).pathname}`, Date.now()));
+            page.on("requestfinished", (r) => open.delete(`${r.method()} ${new URL(r.url()).pathname}`));
+            page.on("requestfailed", (r) => notes.push(`failed ${new URL(r.url()).pathname}: ${r.failure()?.errorText}`));
+            page.on("console", (m) => { if (m.type() === "error") notes.push(`console: ${m.text().slice(0, 200)}`); });
+            page.on("pageerror", (e) => notes.push(`pageerror: ${e.message.slice(0, 200)}`));
+            const started = Date.now();
+            try {
+              await page.goto(url);
+              await page.getByRole("heading", { name: /^(Join |Invitation unavailable|Could not check)/ }).waitFor({ timeout: 20_000 });
+              assert.ok(await page.getByRole("heading", { name: "Join Team (synthetic)" }).isVisible(), `load ${i}: the valid invitation is shown`);
+              timings.push(Date.now() - started);
+            } catch (err) {
+              const still = [...open].map(([k, t]) => `${k} (${Date.now() - t} ms)`);
+              throw new Error(`invite page load ${i} did not settle: pending=[${still.join(", ")}] notes=[${notes.join(" | ")}] ` +
+                `text=${JSON.stringify((await page.locator(".login-card").innerText().catch(() => "")).slice(0, 120))}: ${String(err)}`);
+            } finally {
+              await ctx.close().catch(() => undefined);
+            }
+          }
+          timings.sort((a, b) => a - b);
+          console.log(`invite page settle times over 25 loads: median ${timings[12]} ms, max ${timings[24]} ms`);
+
+          const ctx = await browser.newContext();
+          await ctx.addInitScript("window.__name = (f) => f");
+          const page = await ctx.newPage();
+          let fail = true;
+          await page.route("**/api/invitations/*", (route) => (fail ? route.abort("connectionreset") : route.continue()));
+          await page.goto(url);
+          await page.getByRole("heading", { name: "Could not check this invitation" }).waitFor({ timeout: 20_000 });
+          assert.equal(await page.getByText("Invitation unavailable").count(), 0, "a network failure never claims the link is invalid");
+          fail = false;
+          await page.getByRole("button", { name: "Try again" }).click();
+          await page.getByRole("heading", { name: "Join Team (synthetic)" }).waitFor({ timeout: 20_000 });
+          await ctx.close();
+        } finally {
+          await browser.close().catch(() => undefined);
+        }
+      });
     });
 
     describe("native records through the app (P5)", () => {
