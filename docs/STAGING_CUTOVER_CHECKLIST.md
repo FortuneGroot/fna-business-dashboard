@@ -111,5 +111,6 @@ Exactly these files, in this order. `tests/db/migrations.test.ts` fails if this 
 | M22 | `20261101002100_platform_admin_guard.sql` |
 | M23 | `20261101002200_booking_lock.sql` |
 | M24 | `20261101002300_invitation_authority.sql` |
+| M25 | `20261101002400_appointment_rules.sql` |
 
 **Excluded: M15** (drop `sync_*` and `auth_sessions`). It is destructive, deferred until after T6 and a verified backup (§3), and not written. The legacy files are reconciled per `docs/MIGRATION_VERSION_MAPPING.md` rather than re-applied blindly.

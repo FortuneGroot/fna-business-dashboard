@@ -250,7 +250,9 @@ export async function listAppointments(scope: DataScope, query: z.infer<typeof a
   return { items: await appointmentItems(scope, rows.slice(0, query.limit)), truncated: rows.length > query.limit };
 }
 
-function appointmentFailure(res: { error: { code?: string } | null }) {
+function appointmentFailure(res: { error: { code?: string; message?: string } | null }) {
+  if (res.error?.message === "calendar_inactive") throw invalid({ calendarId: "This calendar is not active, so it cannot take new or moved bookings" });
+  if (res.error?.message === "appointment_too_long") throw invalid({ endsAt: "An appointment can last at most 24 hours" });
   if (res.error?.code === "23503") throw invalid({ body: "A referenced record does not exist in this workspace, or the assignee is not an active member" });
   if (res.error?.code === "23514") throw invalid({ endsAt: "End must be after start" });
 }

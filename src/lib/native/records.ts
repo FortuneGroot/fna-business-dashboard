@@ -33,7 +33,7 @@ export function searchWords(q: string | undefined): string[] {
   if (!q) return [];
   return q
     .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}@.+_' -]/gu, " ")
+    .replace(/[^\p{L}\p{N}@.+' -]/gu, " ")
     .split(/\s+/)
     .map((w) => w.trim())
     .filter((w) => w.length > 0)

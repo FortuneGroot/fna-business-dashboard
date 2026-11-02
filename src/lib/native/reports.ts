@@ -8,8 +8,13 @@ const DAY_MS = 86_400_000;
 
 export const reportQuery = z
   .strictObject({ from: isoDateTime.optional(), to: isoDateTime.optional() })
-  .refine((q) => !q.from || !q.to || Date.parse(q.to) > Date.parse(q.from), { message: "`to` must be after `from`", path: ["to"] })
-  .refine((q) => !q.from || !q.to || Date.parse(q.to) - Date.parse(q.from) <= 400 * DAY_MS, { message: "Use a range of at most 400 days", path: ["to"] });
+  .refine((q) => !q.from || endOf(q) > Date.parse(q.from), { message: "`to` must be after `from`", path: ["to"] })
+  .refine((q) => !q.from || endOf(q) - Date.parse(q.from) <= 400 * DAY_MS, { message: "Use a range of at most 400 days", path: ["to"] });
+
+/** The range end the summary will use: `to`, or now when it is omitted. */
+function endOf(q: { to?: string }): number {
+  return q.to ? Date.parse(q.to) : Date.now();
+}
 
 const APPOINTMENT_STATUSES = ["booked", "confirmed", "completed", "cancelled", "no_show"] as const;
 

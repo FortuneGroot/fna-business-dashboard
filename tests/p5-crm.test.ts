@@ -166,6 +166,9 @@ describe("P5 validation (zod, strict)", () => {
     bad(conversationListQuery, { channel: "sms" });
     bad(reportQuery, { from: "2031-01-02T00:00:00Z", to: "2031-01-01T00:00:00Z" });
     bad(reportQuery, { from: "2030-01-01T00:00:00Z", to: "2031-03-01T00:00:00Z" });
+    bad(reportQuery, { from: "2999-01-01T00:00:00Z" });
+    bad(reportQuery, { from: "2000-01-01T00:00:00Z" });
+    assert.ok(reportQuery.safeParse({ from: new Date(Date.now() - 7 * 86_400_000).toISOString() }).success, "a recent `from` alone is fine");
   });
 });
 
@@ -190,6 +193,7 @@ describe("P5 keyset cursors and search", () => {
     assert.deepEqual(searchWords("ada@example.invalid +1 (555) 010"), ["ada@example.invalid", "+1", "555", "010"]);
     assert.deepEqual(searchWords("a,b)or(id.gt.0*"), ["a", "b", "or", "id.gt.0"]);
     assert.deepEqual(searchWords(`x" ; drop % \\ ,`), ["x", "drop"]);
+    assert.deepEqual(searchWords("jo_n"), ["jo", "n"], "an underscore is an ilike wildcard, so it separates words");
     assert.deepEqual(searchWords("one two three four five six"), ["one", "two", "three", "four", "five"]);
     assert.deepEqual(searchWords("   "), []);
     assert.deepEqual(searchWords(undefined), []);
