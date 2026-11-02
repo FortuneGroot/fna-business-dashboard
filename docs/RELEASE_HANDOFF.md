@@ -25,6 +25,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 | `APP_ORIGIN` | app | Pins invite-link origin in deployed environments. |
 | `AUTH_SECRET`, `AUTH_OWNER_*`, `AUTH_ADMIN_*`, `AUTH_CLIENT_*`, `AUTH_FAIL_CLOSED`, `AUTH_DEV_OPEN`, `AUTH_ALLOW_MEMORY_SESSIONS` | legacy mode only | Keep until T6 so `AUTH_PROVIDER=legacy` remains a rollback. |
 | `GHL_LOCATION_ID` | legacy snapshot only | Not used in native mode. |
+| `VERCEL_ENV`, `NODE_ENV` | set by the platform, not by hand | Legacy auth fails closed in deployed environments; secure cookies in production; the stack and acceptance harnesses refuse to run when `VERCEL_ENV` is set. |
 
 ## 2. Local cutover rehearsal (what the suites do, and how to repeat it by hand)
 
@@ -40,6 +41,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 - Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md` (local rehearsal and what a restore does not bring back: passwords, sessions, MFA factors, integration secrets).
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.
 - Rollback, database (local/staging only): `supabase/rollback/20261101_native_multi_tenant.down.sql`. It resets the M21 PostgREST pre-request setting, drops native objects, and leaves legacy tables and data untouched; M14's legacy lockdown is intentionally not reverted.
+- M23 note: a per-calendar lock trigger on `public.appointments`. Simultaneous bookings of one slot previously could deadlock (PostgreSQL 40P01, shown to users as a 503); now exactly one succeeds and the others get the overlap error (409). Rollback drops the trigger and its function.
 - M21 note: after `db push`, confirm `pgrst.db_pre_request=public.check_request_session` on role `authenticator` (checklist §1). The migration sets it with `alter role authenticator` (the pattern Supabase documents for pre-request checks); if a hosted project refused that statement the migration would fail visibly — stop and report it rather than editing the migration.
 
 ## 4. Operators
@@ -57,22 +59,29 @@ Non-local runs of the CLI need `https`, an interactive terminal, and the typed p
 
 ## 5. Results by environment (final commit)
 
-Final code `813367e` (branch `feat/native-multi-tenant`); the same table is in spec §24.3.
+Final code `ab59783` (branch `feat/native-multi-tenant`); later commits change documentation only. Earlier rounds are in spec §24.
 
 | Check | Environment | Result |
 | --- | --- | --- |
 | Typecheck / build | Next.js 15.5.25 | PASS / PASS |
-| Unit | Node 24.20.0 | PASS 253/253 |
-| Database (PGlite) | PGlite + shim | PASS 225/225 |
-| Concurrency | Real local PostgreSQL 18.6 | PASS 31/31 |
-| Supabase stack | Real local Supabase (disposable) + built app + Chromium | PASS 67/67 on rerun (first run: 1 intermittent invite-page stall) |
+| Unit | Node 24.20.0 | PASS 258/258 |
+| Database (PGlite) | PGlite + shim | PASS 232/232 (13 files) |
+| Concurrency | Real local PostgreSQL 18.6 | PASS 38/38 (3 files; includes the M23 booking races and the no-lock control) |
+| Supabase stack | Real local Supabase (disposable) + built app + Chromium | PASS 70/70 (run on `4740681`; later commits touch only the runner and docs) |
 | Acceptance | Fresh disposable stacks + built app + Chromium | PASS 38/38 |
-| UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% |
-| Bundle / secret scans | — | clean |
+| UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; only the invitation page changed since, covered by the stack suite) |
+| Bundle scan (113 client files) / secret scan (27 changed files) | — | clean (one synthetic `sb_secret_abc` test value) |
 | Staging | — | NOT RUN (no staging project) |
 | Production | — | NOT RUN (out of scope) |
 
 Journeys covered with real browsers and denial paths: first owner setup and onboarding; login, logout (including replay of the old cookie and token, refresh, and a second tab); workspace selection and switching across two businesses; invitations, roles, permission overrides, ownership safeguards; CRM, pipeline, calendars, availability, appointments, tasks, inbox; settings, logo, integration status; platform MFA, provisioning, suspension, support grants with expiry and revocation; audited platform Storage; cross-business access refused.
+
+### Open findings
+
+- **Invitation-page stall (intermittent, not reproduced).** Once, in an earlier stack run, the signed-out invitation page sat on "Checking your invitation…" for 20 s. A 25-load reproduction with request and console diagnostics now runs in the stack suite and settled every time (median 378 ms, max 540 ms). The page can no longer wait forever: requests time out after 15 s and show "Could not check this invitation" with Try again, and a network or server failure is no longer reported as an invalid link.
+- **Booking 503 (fixed, M23).** Root cause: deadlocks between simultaneous inserts of the same slot. Reproduced on real PostgreSQL (42 deadlocks in 480 attempts before; 0 after).
+- **Hardening suggestion for the independent review.** `private.is_platform_admin()` accepts AAL1 when the session setting `app.platform_allow_aal1 = 'on'`. Nothing in the repository sets it (a unit test forbids it) and clients reach the database only through PostgREST, which cannot set it, so it is not exploitable today; but any future path that gives a user role raw SQL would bypass MFA. Removing the branch is a schema change and was left for review.
+- **D-A** (below) remains a decision.
 
 ## 6. Remaining actions (George / external / staging / production only)
 

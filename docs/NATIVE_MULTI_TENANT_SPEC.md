@@ -1809,6 +1809,9 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 | Per-employee permission overrides UI, weekly business hours, private business logo (§6.6), full stage lists on the board | `7bf31c6` |
 | Scale guard counts data statements without the per-request M21 check; suite minimums raised | `813367e` |
 | Codex review of `9bed179`: M22 makes platform-admin grant/revoke atomic with the audit row and serialized on one advisory lock; the database refuses any change that leaves zero admins; `remove-mfa` records a start and the observed outcome (complete, partial, none, unknown) and only reports success when complete | `9317313` |
+| Booking 503 root cause: simultaneous inserts of one slot deadlocked in the exclusion check (40P01 → 503). M23 takes a per-calendar lock first; real-PostgreSQL regression (60 × 8 inserts, 20 × 8 reschedules, no-lock control) | `2a232d9` |
+| Invitation page: 15 s request timeout and a "Could not check this invitation / Try again" state (a network or server failure is no longer shown as an invalid link); 25-load stall reproduction with diagnostics in the stack suite | `4740681` |
+| Runner: minimum file counts for directory-listed suites so a deleted test file cannot hide behind tests added elsewhere | `ab59783` |
 
 ### 24.2 Narrow decisions left open (not invented)
 
@@ -1832,7 +1835,9 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 
 Re-run on `9317313` (M22): typecheck and build PASS; unit 257/257; PGlite 232/232; real PostgreSQL 35/35 (two-session revocation races, grant/revoke lock sharing, 20-round burst, no-lock control); Supabase stack 69/69 (CLI audit rollback, two concurrent CLI revocations); acceptance 38/38; bundle scan (113 files) and secret scan of the 12 changed files clean. UI-2 not re-run (no UI change).
 
+Re-run on `ab59783` (M23, invitation page, runner): typecheck and build PASS; unit 258/258; PGlite 232/232; real PostgreSQL 38/38; Supabase stack 70/70 (on `4740681`; invitation page settled on 25/25 loads, median 378 ms, max 540 ms; retry state recovers); acceptance 38/38; bundle scan (113 files) and secret scan of 27 changed files clean.
+
 ### 24.4 Open items
 
-- Intermittent: in one of two stack runs the signed-out invitation page stayed on "Checking your invitation…" for 20 seconds (the other run, and every acceptance run, passed). Not reproduced; nothing on that path changed in this round.
+- Intermittent: once, the signed-out invitation page stayed on "Checking your invitation…" for 20 seconds. Not reproduced in 25 instrumented loads; the page now times out after 15 s and offers Try again instead of waiting forever.
 - Everything in §22.3 and §23.3 that is not listed as done above.
