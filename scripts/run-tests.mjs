@@ -45,9 +45,10 @@ const SUITES = {
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
-    minFiles: 13,
+    minFiles: 14,
     timeoutMs: 60_000,
-    min: 232,
+    // M24 invitation authority added 3.
+    min: 235,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",

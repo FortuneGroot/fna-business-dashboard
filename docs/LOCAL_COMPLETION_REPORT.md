@@ -23,7 +23,7 @@ remain separate gates (§6).
 
 - Every endpoint in the spec's API table exists under `src/app/api`. Every handler is behind `nativeApi` (a named workspace permission), `platformApi` (platform-admin row + AAL2 session, with a fresh session check for sensitive actions), `readApi` (a named permission), or its own explicit check (auth routes, the public invitation preview, platform logo). Team changes add a second check for the specific `team.*` permission, and the database functions enforce authority and the last-owner rule independently.
 - `docs/NATIVE_MULTI_TENANT_CHECKLIST.md`: every local item is ticked with its evidence. The unticked items are staging, cutover and T6/M15 gates.
-- Migration manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — two legacy files, M1–M14, M16–M23, never M15. A PGlite test fails if the table and `supabase/migrations/` disagree. Rollback: `supabase/rollback/20261101_native_multi_tenant.down.sql` (covers through M23).
+- Migration manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — two legacy files, M1–M14, M16–M24, never M15. A PGlite test fails if the table and `supabase/migrations/` disagree. Rollback: `supabase/rollback/20261101_native_multi_tenant.down.sql` (covers through M23).
 
 ## 3. Results by environment (final code)
 
