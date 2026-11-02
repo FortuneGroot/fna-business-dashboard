@@ -6,8 +6,8 @@ write, push, deployment, invitation, or outbound message was made. Status vocabu
 | Stage | Status |
 | --- | --- |
 | Local implementation | **Complete** for every locally implementable requirement in the spec (see §6 for the narrow items that are decisions, not code). |
-| Local validation | **Done** on the final commit — see §5 for results by environment. |
-| Staging validation | **Done** on `fna-staging` (M1–M14, M16–M27), including the hosted MFA-recovery rehearsal (4/4) — `docs/STAGING_CUTOVER_CHECKLIST.md` §1. |
+| Local validation | Recovery follow-up validated: unit 287/287, PGlite 250/250, local recovery stack 10/10, strict types and build pass (§5). |
+| Staging validation | Earlier baseline plus strengthened Gate B rehearsal **6/6 passed** on the corrected recovery code; no production changes. |
 | Production release | **Pending** — George's decisions D1–D6, then three separate approvals: A1 backup and preflight, A2 database changes, A3 application cutover (the merge to `release` is the production deployment): `docs/PRODUCTION_RELEASE_PLAN.md` §9–§10. A paid plan is optional (D3). |
 
 Local tests passing is not production readiness. The gates in `docs/PRODUCTION_RELEASE_PLAN.md` are.
@@ -52,7 +52,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 | --- | --- |
 | Make someone a platform admin | `bootstrap-platform-admin.ts grant --email <e> --env <local\|staging\|production>`; they enrol MFA at `/platform/mfa`. |
 | Remove a platform admin | `… revoke --email <e> --env … --reason "<why>"`; the database refuses to remove the last admin (exit 4), even when two operators act at once (M22). Grant and revoke commit with their audit row or not at all. Revoking ends the admin's open support grants (audited) and keeps their history attributed (M26). |
-| Lost authenticator (MFA recovery) | Confirm identity out of band (`docs/PRODUCTION_RELEASE_PLAN.md` §7), then `… remove-mfa --email <e> --env … --reason "<ticket>"`; the admin signs in and re-enrols. No recovery codes. It first ends every session of the account (M27; old access and refresh tokens stop working at once, audited), then deletes the factors. The password is unchanged: if it may be known too, also send a password reset. Writes a start record first (nothing is changed if that fails) and then the observed outcome. Exit 0 only when sessions ended and every factor is gone and recorded; 5 means sessions could not be ended (no factor deleted), some factors remain, or the outcome could not be confirmed (the message says which); 6 means removed but the completion record failed. Re-run `remove-mfa` after an incomplete result. |
+| Lost authenticator (MFA recovery) | Confirm identity per plan §7, then `… remove-mfa --email <e> --env … --reason "<ticket>"`. Save the printed operation UUID. First write a start record, confirm session termination, delete original factors, reread **all** factors and record the outcome. Exit 0 means confirmed termination and empty final factor list with recorded completion, even when initially no factors exist. Exit 5 means uncertainty or remaining/concurrent factors; no factor is deleted without confirmed termination. Exit 6 means factors were removed but completion auditing could not be confirmed. Resume with the same email/reason and `--operation-id <UUID>`; retries terminate sessions again and complete the same audit operation. Newly enrolled factors are preserved; review before a new operation. Reset the password if compromised; recovery does not block new sign-ins. No recovery codes. |
 | Sign someone out everywhere | `… end-sessions --email <e> --env … --reason "<why>"` (stolen laptop, ex-staff). MFA and password unchanged; audited. |
 | List platform admins | `… list --env …` (read-only). |
 | End someone's access now | Remove the member (Settings → Team) or end their session; both apply on the next request. Logout is immediate (M21). |
@@ -60,9 +60,9 @@ Values are never stored in the repository. Set by name in the hosting provider.
 
 Non-local runs of the CLI need `https`, an interactive terminal, and the typed phrase it prints. Keys come from the environment only.
 
-## 5. Results by environment (final commit)
+## 5. Results by environment (earlier committed baseline)
 
-Final code `bcd2b0b` (branch `feat/native-multi-tenant`; later commits change documentation only). Every suite below ran on that code, one at a time.
+Earlier code `bcd2b0b` (branch `feat/native-multi-tenant`). Every suite below ran on that code, one at a time. The local recovery follow-up after review of `c5762bc` changes code/tests as well as docs; this table is historical and does not validate those changes. Record follow-up results separately, and pin the reviewed candidate before release.
 
 | Check | Environment | Result |
 | --- | --- | --- |
@@ -80,6 +80,31 @@ Final code `bcd2b0b` (branch `feat/native-multi-tenant`; later commits change do
 History: before M27 (`e18d829`, re-run after `359562a`) the same suites passed with unit 276/276 and stack 71/71, the browser bundle scan (113 client files) was clean, and UI-2 local was 20/20. Earlier rounds are in spec §24. M27 changed no client code. Hosted staging (2026-11-02, same code): M27 applied, and the MFA-recovery rehearsal `tests/staging/mfa-recovery.test.ts` passed 4/4 (plan §7).
 
 Journeys covered with real browsers and denial paths: first owner setup and onboarding; login, logout (including replay of the old cookie and token, refresh, and a second tab); workspace selection and switching across two businesses; invitations, roles, permission overrides, ownership safeguards; CRM, pipeline, calendars, availability, appointments, tasks, inbox; settings, logo, integration status; platform MFA, provisioning, suspension, support grants with expiry and revocation; audited platform Storage; cross-business access refused.
+
+### Local follow-up after independent review of `c5762bc` (2026-11-02)
+
+This follow-up is based on `c5762bc`; the implementation commit containing this section is the candidate to review and pin, not an approved production release.
+All seven findings are addressed locally: truthful uncertain session outcomes, operation-ID recovery
+retry even with no factors, concurrent-factor detection, a complete write-freeze procedure,
+stronger rehearsal assertions, explicit normal/early-M14 commands and consistent backup options.
+No migration SQL changed. The initial local-only round made no hosted connections. George then authorized takeover: the strengthened synthetic staging rehearsal passed 6/6. No production changes, push or deployment occurred. The final candidate must be reviewed and pinned before release.
+
+Local validation used an isolated copy without credential files. The tracked `.env.example` template was added for the final full unit run. Staging credentials were loaded privately only for the separately guarded hosted rehearsal:
+
+- Targeted CLI/rejection-assertion unit tests: **24/24 PASS** (includes partial deletion, unknown
+  reread, lost response, missing completion audit, zero factors and concurrent factors).
+- Full unit suite: **287/287 PASS**. The prior isolated run had 286/287 passes because the tracked example template was absent; after takeover authorization the template was copied and the unchanged check passed. No assertion was skipped or weakened. Sandbox loopback failures were resolved by running outside the sandbox.
+- PGlite + shim: **250/250 PASS**.
+- Disposable local Supabase recovery integration: **10/10 PASS**, real Auth/PostgREST and CLI
+  migrations. Initial custom-runner setup timed out at 60 seconds; rerun used the integration
+  timeout. A stricter helper initially rejected raw GoTrue numeric `code` responses; it now checks
+  the string `error_code`, with an added regression. The final integration run passed all ten.
+- Strict application and test TypeScript checks: **PASS**. Production build without environment
+  files: **PASS**. Diff whitespace check: **PASS**.
+- Strengthened hosted staging MFA rehearsal: **6/6 PASS**. Ordinary-role denial, precise rejection codes, exact counts, full-row fingerprints, partial failure, re-enrolment, standalone termination and cleanup passed. Synthetic accounts removed; zero workspaces remained.
+- Full real-PostgreSQL concurrency and complete stack/acceptance/browser suites: **not rerun in this follow-up**; no application or migration SQL changed. Earlier results are historical.
+
+Next gate: review and pin the corrected commit, resolve the business/data/backup decisions, then give the separate A1/A2/A3 production approvals. Gate B technical rehearsal passed; passing tests alone do not establish security or authorize production release.
 
 ### Open findings
 

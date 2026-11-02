@@ -2,6 +2,8 @@
 // the real script as a child process, with real GoTrue users and MFA factors. Never pointed at a
 // hosted project. The superuser connection only verifies outcomes.
 import assert from "node:assert/strict";
+import { run as runOperator } from "../../scripts/bootstrap-platform-admin";
+import { assertAuthRejected } from "../helpers/recovery-assertions";
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -143,7 +145,8 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     const before = await sessions(george.id);
     for (const token of [null, ops.token]) {
       const r = await rpc(env, token, "platform_end_user_sessions", { p_user_id: george.id, p_reason: "Hostile attempt" });
-      assert.ok(r.status === 401 || r.status === 403 || r.status === 404, `${token ? "authenticated" : "anon"}: ${r.status}`);
+      assert.equal(r.status, token ? 403 : 401);
+      assert.equal(r.body.code, "42501");
     }
     assert.equal(await sessions(george.id), before);
   });
@@ -180,14 +183,15 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     for (const token of [device.access, otherDevice]) {
       assert.equal((await rpc(env, token, "platform_status")).status, 401);
       assert.equal((await rpc(env, token, "request_context")).status, 401);
-      assert.notEqual(await authGet(token, "user"), 200);
+      await assertAuthRejected(await fetch(`${env.apiUrl}/auth/v1/user`, { headers: { apikey: env.anonKey, Authorization: `Bearer ${token}` } }), "access");
     }
-    assert.notEqual((await refresh(device.refresh)).status, 200, "the old refresh token cannot mint a new session");
+    const refusedRefresh = await refresh(device.refresh);
+    await assertAuthRejected(new Response(JSON.stringify(refusedRefresh.body), { status: refusedRefresh.status }), "refresh");
     const hijack = await fetch(`${env.apiUrl}/auth/v1/factors`, {
       method: "POST", headers: { apikey: env.anonKey, Authorization: `Bearer ${device.access}`, "Content-Type": "application/json" },
       body: JSON.stringify({ factor_type: "totp", friendly_name: "attacker" }),
     });
-    assert.notEqual(hijack.status, 200, "the old token cannot enrol a replacement authenticator");
+    await assertAuthRejected(hijack, "access");
     assert.equal(await factors(), 0);
 
     const audit = await db.query<{ action: string; reason: string; metadata: { factor_ids: string[]; operation_id: string; outcome?: string; sessions_ended?: number } }>(
@@ -250,5 +254,64 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     const revoked = await db.query<{ n: number }>(
       "select count(*)::int n from public.platform_audit_log where action = 'platform.admin_revoked' and reason = 'Concurrent revocation rehearsal'");
     assert.equal(revoked.rows[0].n, 1, "exactly the successful revocation is audited");
+  });
+
+  test("a real committed session RPC with its response lost is reconciled before factor deletion", async () => {
+    const user = await signUp(env, email("lost-response"), "Lost response (synthetic)");
+    const device = await upgradeToAal2Session(env, user);
+    let dropped = false;
+    const lossyFetch: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      if (!dropped && String(input).endsWith("/rpc/platform_end_user_sessions") && response.ok) {
+        await response.text();
+        dropped = true;
+        throw new Error("response lost after commit (synthetic)");
+      }
+      return response;
+    };
+    const lines: string[] = [];
+    const code = await runOperator(["remove-mfa", "--email", user.email, "--env", "local", "--reason", "Lost response rehearsal"], {
+      env: { SUPABASE_URL: env.apiUrl, SUPABASE_SERVICE_ROLE_KEY: env.serviceRoleKey }, fetch: lossyFetch, log: (line) => lines.push(line), prompt: null,
+    });
+    assert.equal(code, 0, lines.join("\n"));
+    assert.ok(dropped);
+    assert.equal((await rpc(env, device.access_token, "request_context")).status, 401);
+    assert.equal(Number((await db.query("select count(*) n from auth.mfa_factors where user_id = $1", [user.id])).rows[0].n), 0);
+    assert.deepEqual(await auditActions(user.id), ["platform.mfa_removal_started", "platform.sessions_ended", "platform.mfa_factors_removed"]);
+  });
+
+  test("retry after a real completion-audit failure repairs the same operation with no factors left", async () => {
+    const user = await signUp(env, email("resume"), "Resume (synthetic)");
+    await upgradeToAal2Session(env, user);
+    const argv = ["remove-mfa", "--email", user.email, "--env", "local", "--reason", "Completion audit rehearsal"];
+    await withFailingAudit("platform.mfa_factors_removed", () => {
+      const result = cli(...argv);
+      assert.equal(result.code, 6, result.out);
+    });
+    const operation = (await db.query<{ metadata: { operation_id: string } }>(
+      "select metadata from public.platform_audit_log where action = 'platform.mfa_removal_started' and metadata->>'user_id' = $1", [user.id])).rows[0].metadata.operation_id;
+    const fresh = await passwordSession(user);
+    const result = cli(...argv, "--operation-id", operation);
+    assert.equal(result.code, 0, result.out);
+    assert.equal((await rpc(env, fresh, "request_context")).status, 401);
+    const actions = await auditActions(user.id);
+    assert.deepEqual(actions, ["platform.mfa_removal_started", "platform.sessions_ended", "platform.sessions_ended", "platform.mfa_factors_removed"]);
+  });
+
+  test("standalone end-sessions keeps the password and MFA intact", async () => {
+    const user = await signUp(env, email("end-only"), "End sessions (synthetic)");
+    const device = await upgradeToAal2Session(env, user);
+    const fingerprint = async () => (await db.query(`select
+      (select md5(encrypted_password) from auth.users where id = $1) password,
+      (select md5(coalesce(jsonb_agg(to_jsonb(f) order by f.id)::text, '[]')) from auth.mfa_factors f where user_id = $1) factors`, [user.id])).rows[0];
+    const before = await fingerprint();
+    const result = cli("end-sessions", "--email", user.email, "--env", "local", "--reason", "Stolen laptop rehearsal");
+    assert.equal(result.code, 0, result.out);
+    assert.deepEqual(await fingerprint(), before);
+    assert.equal((await rpc(env, device.access_token, "request_context")).status, 401);
+    await assertAuthRejected(await fetch(`${env.apiUrl}/auth/v1/user`, { headers: { apikey: env.anonKey, Authorization: `Bearer ${device.access_token}` } }), "access");
+    const fresh = await passwordSession(user);
+    assert.equal((await rpc(env, fresh, "request_context")).body.authenticated, true);
+    assert.deepEqual(await auditActions(user.id), ["platform.sessions_ended"]);
   });
 });

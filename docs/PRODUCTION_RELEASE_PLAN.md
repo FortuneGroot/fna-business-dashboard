@@ -2,8 +2,8 @@
 
 Status on 2026-11-02:
 
-- Staging validation is complete (`docs/STAGING_CUTOVER_CHECKLIST.md` §1).
-- The hosted MFA-recovery rehearsal (Gate B, §7) passed on staging with M27 applied.
+- Staging baseline and the strengthened recovery follow-up are validated (`docs/STAGING_CUTOVER_CHECKLIST.md` §1).
+- The strengthened hosted MFA-recovery rehearsal passed 6/6 on the corrected working-tree code after review of `c5762bc` (§7). Gate B technical validation is complete; production decisions and approvals remain open.
 - The read-only production preflight below has been run with George's authorization.
 
 **Production is not ready.** It needs George's decisions (§10), then three separately approved stages (§9):
@@ -31,7 +31,7 @@ Preflight method: Supabase metadata and catalog queries (schema, constraints, gr
 | Rollback candidates | `dpl_2rchR1sX3FbM9DjxmjpCeqZwYCCw` (same commit, 08:00), then the original `release` build `dpl_HNLo3Qida5hbwnT51my3iXCaNgdj` (2026-09-20) |
 | Domains | `fna-client-app.vercel.app` only; no custom domain |
 | Deployment Protection | Vercel Authentication on deployment URLs, not on the production domain; `/login` and `/api/health` answer anonymously |
-| Candidate release build | branch `feat/native-multi-tenant` @ `bcd2b0b` (later commits are documentation only); results in `docs/RELEASE_HANDOFF.md` §5 |
+| Candidate release build | Prior tested baseline: `bcd2b0b`. Local recovery fixes after review of `c5762bc` supersede that baseline. The strengthened Gate B rehearsal passed 6/6 on these fixes. Pin and review their final commit before release approval. |
 
 Production environment variable names: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `AUTH_SECRET`, `AUTH_OWNER_EMAIL`, `AUTH_OWNER_PASSWORD`, `GHL_WEBHOOK_SECRET`, `GHL_WEBHOOK_ENFORCE_SECRET`, `GHL_LOCATION_ID`, `GHL_PIPELINE_ID`, `FORBIDDEN_MASTER_LOCATION_ID`, `FAKE_CONTACT_ONLY`, `ALLOW_PRODUCTION_CONTACT_WRITES`, `GHL_DRY_RUN`. `GHL_API_TOKEN` exists for preview only. Absent: `AUTH_PROVIDER` (so legacy is the default), `SUPABASE_PUBLISHABLE_KEY`, `APP_ORIGIN`, `CLIENT_CONFIG_PATH`, `AUTH_ADMIN_*`, `AUTH_CLIENT_*`.
 
@@ -52,13 +52,20 @@ Production environment variable names: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KE
 4. `supabase db push --dry-run` — must list exactly M1–M14 and M16–M27 (`STAGING_CUTOVER_CHECKLIST.md` §5), never M15.
 5. `supabase db push`, then `migration list` (local and remote equal). Verify M21 (`pgrst.db_pre_request` on `authenticator`), M14 (ten legacy tables closed to `anon`/`authenticated`), RLS on every public table, no Realtime tables, and the advisor's `rls_disabled_in_public` errors gone.
 
+**Source pin and pending-set check:** run from an isolated checkout at the explicitly approved final code commit, with a clean working tree and no extra migration files. Compare `supabase/migrations/` byte-for-byte with that commit and checklist §5 before dry-run or push. Stop on missing, additional or changed files or unexpected pending versions. The manifest test proves the tested revision, not a different checkout.
+
 Alternative, not recommended: keep `20260917122941` by adding a matching local file. It would put two copies of the same DDL in the repository and leave the `auth_sessions` row missing.
 
 The legacy deployment keeps working during and after the push: it uses the service role, which M14 does not affect (stack test "legacy tables are closed to anon and authenticated, open to the service role"). No native object is used in legacy mode.
 
 **Optional early lockdown (decision D4):** M14 alone can be applied before the release, which closes the exposure in §2 now. It only revokes grants and enables RLS, keeps explicit service-role access (the legacy app's only access path), skips missing tables, and is the same file the release pushes later. It is still a production write and needs its own approval.
 
-Mechanism: after steps 1–3 above, run the M14 file in one transaction (SQL editor or `psql`), then `supabase migration repair --status applied 20261101001400`. Step 4 then needs `supabase db push --include-all`, because M1–M13 sort before an applied version. That is the same sequence staging used.
+Mechanism: after steps 1–3 above, run the M14 file in one transaction (SQL editor or `psql`), then `supabase migration repair --status applied 20261101001400`. Because M1–M13 now sort before an applied version, replace §3 steps 4–5 with:
+
+1. `supabase db push --include-all --dry-run` — pending must be **M1–M13 and M16–M27**. Already-applied M14 must not appear; neither legacy file nor destructive M15 may appear.
+2. After confirming that exact set, `supabase db push --include-all`, followed by `supabase migration list` and the normal security checks.
+
+Without early M14, use `supabase db push --dry-run` then `supabase db push`, expecting M1–M14 and M16–M27. Do not mix the branches.
 
 ## 4. GHL webhook dependency
 
@@ -103,7 +110,7 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
 
 ## 7. Gate B — MFA recovery (implemented functionality vs policy)
 
-**Implemented and tested, locally and on hosted staging (code `bcd2b0b`):**
+**Earlier baseline `bcd2b0b`, followed by corrected recovery code validated locally and on hosted staging (6/6):**
 
 - M27 `platform_end_user_sessions` (service role only) deletes every Auth session of the account. Refresh tokens and MFA claims go with them by cascade. One audit row with the session count is written in the same transaction.
 - `bootstrap-platform-admin.ts remove-mfa` runs in this order:
@@ -113,7 +120,9 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
   4. re-reads them;
   5. records the outcome.
 
-  If sessions cannot be ended, no factor is deleted (outcome `sessions_not_ended`, exit 5).
+  If session termination cannot be confirmed, no factor is deleted (outcome `sessions_unknown`, exit 5). A lost RPC response is reconciled against the matching committed audit operation on a first attempt; missing/unavailable audit results are not proof of rollback. A resumed attempt never treats an earlier session-ending row as proof of its own success.
+
+  The CLI prints an operation UUID before changes. Resume with the same email, reason and `--operation-id <UUID>`. The start record must exist for that user/reason. A retry ends sessions again, even if no original factors remain, and records completion under that UUID. Factors outside the original operation are preserved and reported as `concurrent_factors` (exit 5); review before authorizing a new operation. Reset the password if compromised: recovery does not prevent new password sign-ins.
 - `end-sessions` signs one account out everywhere without touching MFA (for example, a stolen laptop).
 - Evidence (`tests/supabase-stack/bootstrap.test.ts`, real GoTrue/PostgREST):
   - before recovery, the lost device's AAL2 token, its refresh token and a second device all work;
@@ -125,6 +134,8 @@ The deployment ran with `FAKE_CONTACT_ONLY` set, so the contact is probably the 
   - `anon` and `authenticated` cannot call the function.
 
 **Hosted rehearsal on `fna-staging` (2026-11-02, `tests/staging/mfa-recovery.test.ts`, PASS 4/4).** M27 was applied to staging alone, after confirming the project identity and its 27-row history (now 28, latest `20261101002600`; only `service_role` may execute the function). The real `remove-mfa` code ran against staging for a synthetic `@example.test` admin, through the locally built app in supabase mode. Results:
+
+**Historical evidence only:** this describes the earlier four-test run, not the strengthened test now in the repository. Its Auth checks accepted any non-200 response; fingerprints covered selected user/factor fields and session/admin IDs; session counts were lower bounds. It did not establish exact counts, complete-row preservation or rejection for the intended reason. The revised six-test rehearsal checks specific Auth rejection statuses/codes, exact session counts, complete-row fingerprints, unauthorized M27 calls, standalone `end-sessions`, and zero-workspace cleanup. **Follow-up execution: the strengthened rehearsal passed 6/6 on hosted staging on 2026-11-02.** Partial deletion, unknown reread, response-loss reconciliation and resumable completion are local checks, not hosted evidence.
 
 - **Before recovery:** the lost device's AAL2 token reached platform functions, its refresh token rotated, its app cookie showed a platform admin, and a second device was signed in.
 - **Partial failure:** the sessions-ended audit insert was forced to fail for this one synthetic user only, using a temporary trigger that was removed afterwards. The command exited 5 and deleted no factor. The session deletion rolled back with the audit row. The audit shows `started` followed by `incomplete: sessions_not_ended` under one operation id.
@@ -183,22 +194,24 @@ Done, no production effect:
 
 These come before every production step.
 
+**Updated candidate gate:** the strengthened six-test hosted MFA rehearsal passed on the corrected recovery code on 2026-11-02 under George's takeover authorization. Synthetic accounts were removed, zero workspaces remained, and complete-row fingerprints of non-synthetic users, factors, sessions and admin rows matched. No production access or deployment occurred. The final committed diff still needs review and source pinning before production stages.
+
 Pushing to `release` deploys production, because Vercel builds and promotes it automatically. So the merge to `release` is part of the application cutover (stage 3), never an earlier step. Production environment-variable changes also belong to stage 3: they take effect on the next deployment, and any redeploy would pick them up.
 
 **Stage 1 — backup and preflight (approval A1; no production schema or app change)**
 
 1. George provides the production database connection string into the operator's ignored local env file.
-2. Write freeze: nobody uses the legacy app during the window.
+2. Establish a real write freeze: inventory every writer (legacy app users/API calls, GHL webhook workflows, scheduled jobs, integrations and direct operators). Asking users to stop does not stop webhooks. Pausing upstream actions or enabling maintenance changes live behavior and needs an explicit, separately described operational approval before A1; A1 does not authorize those changes. If any writer cannot be quiesced, stop and agree a consistent-snapshot plus change-reconciliation procedure first. `GHL_DRY_RUN` does not stop ingestion.
 3. Take the explicit export of `rbghfpwbwmrjbpjswbbn` (§8 Option A, or the managed backup under Option B, plus the file export).
 4. Restore it into a disposable local stack and verify its digests. Store the export encrypted.
-5. Record the Gate A per-table row counts and server-side digests.
+5. Capture Gate A counts/digests while all writers remain paused and compare with the restored copy. Record freeze start, writers, export/snapshot identity and checks. Keep the freeze through A2/A3 until post-cutover checks pass or rollback completes; resume under the approved operational procedure. If writes resume while waiting for approval, repeat export/restore verification and baseline capture before A2. A1 itself does not authorize webhook or deployment changes.
 
 **Stage 2 — database changes (approval A2; the live legacy app keeps working throughout)**
 
 1. Turn off public sign-up on `rbghfpwbwmrjbpjswbbn` (`disable_signup=true`), and confirm email confirmation and TOTP are on.
 2. Reconcile history (§3 steps 1–3).
    - If D4 chose early M14, it was already applied under its own approval with the same mechanism, and the push uses `--include-all`.
-3. `db push --dry-run`: it must list exactly M1–M14 and M16–M27 of `bcd2b0b`. Then `db push`.
+3. At the approved final source pin (§3), normal branch: `supabase db push --dry-run` must list M1–M14 and M16–M27, then `supabase db push`. Early-M14 branch: `supabase db push --include-all --dry-run` must list M1–M13 and M16–M27, then `supabase db push --include-all`. Stop on any other set. Never M15.
 4. Verify M14, M21, M27, RLS on every public table, no Realtime tables, and the advisors. Re-check the Gate A digests: they must be unchanged.
 5. Create George's Auth user from the dashboard (sign-up is off), then run `bootstrap-platform-admin.ts grant --env production`.
    - He enrols MFA at `/platform/mfa` once stage 3 has deployed the native app. Until then, the native tables are unused.
@@ -207,7 +220,7 @@ Pushing to `release` deploys production, because Vercel builds and promotes it a
 
 1. Disable GHL webhook actions, if D2 found any.
 2. In Vercel `fna-client-app`, production environment: add `AUTH_PROVIDER=supabase`, `SUPABASE_PUBLISHABLE_KEY` and `APP_ORIGIN=https://fna-client-app.vercel.app`. Keep the legacy variables.
-3. Merge `bcd2b0b` (or its docs-only descendant) into `release` and push. This is the production deployment.
+3. Merge the explicitly approved final code commit containing this recovery follow-up (or its reviewed docs-only descendant) into `release` and push. This is the production deployment; `bcd2b0b` alone lacks these fixes.
 4. Smoke tests:
    - `/api/health` reports `authProvider: "supabase"` and `db: "ok"`;
    - George signs in, enrols TOTP, and reaches the platform console at AAL2;

@@ -12,6 +12,7 @@ import { after, before, describe, test } from "node:test";
 import { checkTarget, confirmationPhrase, parseArgs, run } from "../../scripts/bootstrap-platform-admin";
 import { appFetch, cookieHeader, readSessionCookie, rest, sessionCookie, totp, type GoTrueSession } from "../supabase-stack/stack";
 import { connectStaging, createAccount, passwordToken, revokeAdmin, type Account, type Staging } from "./env";
+import { assertAuthRejected } from "../helpers/recovery-assertions";
 
 const runId = `mfa${Date.now().toString(36)}`;
 const email = (who: string) => `${who}-${runId}@example.test`;
@@ -26,10 +27,10 @@ const notSynthetic = "u.email not like '%@example.test'";
 async function realAccountsFingerprint() {
   const r = await s.db.query(`
     select
-      (select md5(coalesce(string_agg(u.id::text || coalesce(u.encrypted_password, '') || coalesce(u.email, ''), ',' order by u.id), '')) from auth.users u where ${notSynthetic}) users,
-      (select md5(coalesce(string_agg(f.id::text || f.status::text || coalesce(f.secret, ''), ',' order by f.id), '')) from auth.mfa_factors f join auth.users u on u.id = f.user_id where ${notSynthetic}) factors,
-      (select md5(coalesce(string_agg(x.id::text, ',' order by x.id), '')) from auth.sessions x join auth.users u on u.id = x.user_id where ${notSynthetic}) sessions,
-      (select md5(coalesce(string_agg(p.user_id::text, ',' order by p.user_id), '')) from public.platform_admins p join auth.users u on u.id = p.user_id where ${notSynthetic}) admins`);
+      (select md5(coalesce(jsonb_agg(to_jsonb(u) order by u.id)::text, '[]')) from auth.users u where ${notSynthetic}) users,
+      (select md5(coalesce(jsonb_agg(to_jsonb(f) order by f.id)::text, '[]')) from auth.mfa_factors f join auth.users u on u.id = f.user_id where ${notSynthetic}) factors,
+      (select md5(coalesce(jsonb_agg(to_jsonb(x) order by x.id)::text, '[]')) from auth.sessions x join auth.users u on u.id = x.user_id where ${notSynthetic}) sessions,
+      (select md5(coalesce(jsonb_agg(to_jsonb(p) order by p.user_id)::text, '[]')) from public.platform_admins p join auth.users u on u.id = p.user_id where ${notSynthetic}) admins`);
   return r.rows[0];
 }
 
@@ -44,7 +45,7 @@ const anonHeaders = (token?: string) => ({
   apikey: s.env.anonKey, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}),
 });
 const rpc = (token: string, fn: string) => rest(s.env, token, "POST", `rpc/${fn}`, {});
-const authUser = async (token: string) => (await fetch(`${s.env.apiUrl}/auth/v1/user`, { headers: anonHeaders(token) })).status;
+const authUser = (token: string) => fetch(`${s.env.apiUrl}/auth/v1/user`, { headers: anonHeaders(token) });
 const refresh = async (refreshToken: string) => fetch(`${s.env.apiUrl}/auth/v1/token?grant_type=refresh_token`, {
   method: "POST", headers: anonHeaders(), body: JSON.stringify({ refresh_token: refreshToken }),
 });
@@ -66,9 +67,13 @@ async function enrolAal2(token: string): Promise<GoTrueSession> {
 
 /** The real CLI code path against staging; the typed confirmation is answered only for this synthetic account. */
 async function removeMfa(): Promise<{ code: number; lines: string[] }> {
-  const argv = ["remove-mfa", "--email", admin.email, "--env", "staging", "--reason", REASON];
+  return operator("remove-mfa", admin);
+}
+
+async function operator(command: "remove-mfa" | "end-sessions", account: Account): Promise<{ code: number; lines: string[] }> {
+  const argv = [command, "--email", account.email, "--env", "staging", "--reason", REASON];
   const phrase = confirmationPhrase(parseArgs(argv), checkTarget("staging", s.env.apiUrl));
-  assert.ok(phrase.includes(admin.email) && phrase.includes(`${s.ref}.supabase.co`), "confirmation names the synthetic account and staging");
+  assert.ok(account.email.endsWith("@example.test") && phrase.includes(account.email) && phrase.includes(`${s.ref}.supabase.co`), "confirmation names the synthetic account and staging");
   const lines: string[] = [];
   const code = await run(argv, {
     env: { SUPABASE_URL: s.env.apiUrl, SUPABASE_SERVICE_ROLE_KEY: s.env.serviceRoleKey },
@@ -79,9 +84,10 @@ async function removeMfa(): Promise<{ code: number; lines: string[] }> {
 }
 
 async function deleteUser(id: string) {
-  await fetch(`${s.env.apiUrl}/auth/v1/admin/users/${id}`, {
+  const response = await fetch(`${s.env.apiUrl}/auth/v1/admin/users/${id}`, {
     method: "DELETE", headers: { apikey: s.env.serviceRoleKey, Authorization: `Bearer ${s.env.serviceRoleKey}` },
   });
+  assert.equal(response.status, 200, "synthetic user deletion");
 }
 
 describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () => {
@@ -114,6 +120,7 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
       for (const a of [admin, bystander]) if (a) await deleteUser(a.id);
       const left = await s.db.query<{ n: number }>("select count(*)::int n from auth.users where email like $1", [`%-${runId}@example.test`]);
       assert.equal(left.rows[0].n, 0, "synthetic accounts removed");
+      assert.equal(Number((await s.db.query("select count(*) n from public.workspaces")).rows[0].n), 0, "no workspaces remain");
       assert.deepEqual(await realAccountsFingerprint(), georgeBefore, "non-synthetic accounts unchanged after cleanup");
     } finally {
       await s?.db.end();
@@ -129,9 +136,23 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
     adminCookie = sessionCookie(readSessionCookie(bystanderCookie).name, device);
     const view = await me(adminCookie);
     assert.deepEqual([view.user?.id, view.isPlatformAdmin], [admin.id, true], "app session is AAL2 platform admin");
-    assert.equal(await authUser(secondDevice), 200);
-    assert.ok(await sessionsOf(admin.id) >= 2);
+    assert.equal((await authUser(secondDevice)).status, 200);
+    assert.equal(await sessionsOf(admin.id), 2);
     assert.equal(await factorsOf(admin.id), 1);
+  });
+
+  test("anon and authenticated cannot end sessions or write a session-ending audit", async () => {
+    const sessions = await sessionsOf(admin.id);
+    const audit = await auditOf(admin.id);
+    for (const token of [null, bystanderToken]) {
+      const response = await rest(s.env, token, "POST", "rpc/platform_end_user_sessions", {
+        p_user_id: admin.id, p_reason: REASON,
+      });
+      assert.equal(response.status, token ? 403 : 401);
+      assert.equal(response.body.code, "42501", "function permission denied");
+    }
+    assert.equal(await sessionsOf(admin.id), sessions);
+    assert.deepEqual(await auditOf(admin.id), audit);
   });
 
   test("partial failure: if sessions cannot be ended, no factor is removed and the audit says so (exit 5)", async () => {
@@ -153,13 +174,13 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
       await s.db.query("drop trigger test_fail_sessions_audit on public.platform_audit_log; drop function public.test_fail_sessions_audit();");
     }
     assert.equal(result.code, 5, result.lines.join("\n"));
-    assert.match(result.lines.at(-1)!, /^incomplete: sessions could not be ended .*no factor was removed/);
+    assert.match(result.lines.at(-1)!, /^incomplete: session-ending outcome is unknown; no factor was removed/);
     assert.equal(await factorsOf(admin.id), 1, "factor kept");
     assert.equal(await sessionsOf(admin.id), sessionsBefore, "session deletion rolled back with its audit row");
     assert.equal((await rpc(device.access_token, "platform_status")).body.active, true, "nothing changed for the account");
     const audit = await auditOf(admin.id);
     assert.deepEqual(audit.map((a) => [a.action, a.metadata.outcome ?? null]), [
-      ["platform.admin_granted", null], ["platform.mfa_removal_started", null], ["platform.mfa_removal_incomplete", "sessions_not_ended"],
+      ["platform.admin_granted", null], ["platform.mfa_removal_started", null], ["platform.mfa_removal_incomplete", "sessions_unknown"],
     ]);
     assert.equal(audit[2].metadata.operation_id, audit[1].metadata.operation_id);
     assert.deepEqual(audit[2].metadata.removed_factor_ids, []);
@@ -176,13 +197,13 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
     for (const token of [device.access_token, secondDevice]) {
       assert.equal((await rpc(token, "platform_status")).status, 401);
       assert.equal((await rpc(token, "request_context")).status, 401);
-      assert.notEqual(await authUser(token), 200);
+      await assertAuthRejected(await authUser(token), "access");
     }
-    assert.notEqual((await refresh(device.refresh_token)).status, 200, "old refresh token refused");
+    await assertAuthRejected(await refresh(device.refresh_token), "refresh");
     const hijack = await fetch(`${s.env.apiUrl}/auth/v1/factors`, {
       method: "POST", headers: anonHeaders(device.access_token), body: JSON.stringify({ factor_type: "totp", friendly_name: "attacker" }),
     });
-    assert.notEqual(hijack.status, 200, "old token cannot enrol a replacement authenticator");
+    await assertAuthRejected(hijack, "access");
     assert.equal(await factorsOf(admin.id), 0);
     const view = await me(adminCookie);
     assert.deepEqual([view.user, view.isPlatformAdmin], [null, false], "old app cookie is signed out");
@@ -194,7 +215,7 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
     const audit = (await auditOf(admin.id)).slice(3);
     assert.deepEqual(audit.map((a) => a.action), ["platform.mfa_removal_started", "platform.sessions_ended", "platform.mfa_factors_removed"]);
     assert.ok(audit.every((a) => a.reason === REASON && a.metadata.operation_id === audit[0].metadata.operation_id));
-    assert.ok(audit[1].metadata.sessions_ended >= 2);
+    assert.equal(audit[1].metadata.sessions_ended, 2);
     assert.deepEqual([audit[2].metadata.outcome, audit[2].metadata.sessions_ended, audit[2].metadata.remaining_factor_ids],
       ["complete", audit[1].metadata.sessions_ended, []]);
   });
@@ -206,5 +227,25 @@ describe("hosted MFA recovery rehearsal on staging (synthetic admin only)", () =
     const reenrolled = await enrolAal2(fresh);
     assert.equal((await rpc(reenrolled.access_token, "platform_status")).body.active, true);
     assert.equal(await factorsOf(admin.id), 1);
+  });
+
+  test("standalone end-sessions preserves password and MFA while invalidating the prior session", async () => {
+    const device = await enrolAal2(await passwordToken(s.env, bystander));
+    const fingerprint = async () => (await s.db.query(`select
+      (select md5(encrypted_password) from auth.users where id = $1) password,
+      (select md5(coalesce(jsonb_agg(to_jsonb(f) order by f.id)::text, '[]')) from auth.mfa_factors f where user_id = $1) factors`, [bystander.id])).rows[0];
+    const before = await fingerprint();
+    const { code } = await operator("end-sessions", bystander);
+    assert.equal(code, 0);
+    assert.equal(await sessionsOf(bystander.id), 0);
+    assert.deepEqual(await fingerprint(), before);
+    await assertAuthRejected(await authUser(device.access_token), "access");
+    await assertAuthRejected(await refresh(device.refresh_token), "refresh");
+    assert.equal((await rpc(await passwordToken(s.env, bystander), "request_context")).body.authenticated, true, "original password still works");
+    assert.equal(await factorsOf(bystander.id), 1);
+    const rows = await auditOf(bystander.id);
+    assert.equal(rows.at(-1)?.action, "platform.sessions_ended");
+    assert.equal(rows.at(-1)?.reason, REASON);
+    assert.deepEqual(await realAccountsFingerprint(), georgeBefore);
   });
 });

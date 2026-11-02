@@ -37,11 +37,11 @@ const SUITES = {
       "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts", "tests/p3-data.test.ts",
       "tests/p3-display.test.ts", "tests/p4-team-settings.test.ts", "tests/p5-crm.test.ts",
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
-      "tests/p8-integrity.test.ts",
+      "tests/p8-integrity.test.ts", "tests/recovery-assertions.test.ts",
     ],
     timeoutMs: 60_000,
     // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1; the api() upload and stale-pin order checks added 2; round-3 integrity checks added 16.
-    min: 276,
+    min: 287,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
@@ -64,8 +64,8 @@ const SUITES = {
     files: () => list("tests/supabase-stack"),
     minFiles: 2,
     timeoutMs: 1_200_000,
-    // The invitation-page settle and retry check added 1; the concurrent member logo check added 1.
-    min: 71,
+    // Baseline ran 72; recovery reconciliation, resumed completion and standalone termination add 3.
+    min: 75,
     serial: true,
   },
   acceptance: {

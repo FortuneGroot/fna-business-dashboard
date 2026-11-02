@@ -1,7 +1,8 @@
 # Staging rehearsal and production cutover checklist
 
-Prepared from local evidence, then updated with the staging rehearsal of 2026-11-02 (§1). **No
-production project was accessed or changed.** A box is ticked only where evidence is recorded.
+Prepared from local evidence, then updated with the staging rehearsal of 2026-11-02 (§1).
+This checklist records staging activity; the separately authorized read-only production preflight
+is in the production release plan. **No production changes were made.** A box is ticked only where evidence is recorded.
 Staging is the separate Supabase project from decision D4. Production steps require George's
 explicit approval (spec §9.2 P9, §11).
 
@@ -11,8 +12,8 @@ explicit approval (spec §9.2 P9, §11).
 | --- | --- | --- | --- |
 | **Logout replay.** Previously a copied session cookie kept working until its access token expired. | **Implemented locally (M21, spec §5.1):** access requires the token's Auth session row; logout ends reads, writes, and direct Data API use at once. Acceptance test 14 and the product rehearsal (two browser tabs) now observe **401** for replayed reads, writes, sensitive actions, and the raw token at PostgREST; the refresh token is revoked; other sessions continue. | George (acknowledge) | DONE locally — verify on staging (the PostgREST pre-request setting must be present after `db push`) |
 | **Migration-history reconciliation.** The two legacy migrations were renamed from the shared version `20260917`; the remote history of any existing database is unknown. | `docs/MIGRATION_VERSION_MAPPING.md` lists the three possible findings and the exact `supabase migration repair` command for each. Nothing has been run against any remote database. | Operator, on staging first | OPEN |
-| **MFA recovery.** A platform admin who loses the authenticator cannot recover alone (no recovery codes, by design). | Implemented: `remove-mfa --reason …` ends every session of the account (M27, audited), then deletes the factors (audited); old access and refresh tokens are refused, the admin signs in and re-enrols (local stack test). `end-sessions` signs an account out everywhere without touching MFA. M27 is on staging, and the hosted rehearsal passed 4/4 on 2026-11-02 (§1). | George / operator | DONE on staging — only the production `remove-mfa` policy remains (plan §10, D5); a second admin is optional |
-| **Paid Supabase plan** before production (D5). | No purchase made. | George | OPEN |
+| **MFA recovery.** No recovery codes, by design. | M27 and the earlier 4/4 rehearsal are on staging. Local follow-up adds operation reconciliation/resume, zero-factor termination and concurrent-factor detection; the strengthened six-test hosted rehearsal passed 6/6 (§1). | George / operator | Technical rehearsal passed 6/6; production recovery policy remains (plan D5); a second admin is optional |
+| **Backup/recovery option** before production (plan D3). | Choose and verify the explicit $0 export/restore procedure or the paid option; a paid plan is optional, not a prerequisite. | George | OPEN |
 | **Per-client configuration owner check.** Whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`. | P7 removed runtime use of both (spec §21.4); the legacy snapshot reads only the bundled default. Not verifiable locally. | Owner of the Vercel project | OPEN |
 | **Platform-admin bootstrap.** | `scripts/bootstrap-platform-admin.ts` (A2) written: `grant`/`revoke`/`remove-mfa`/`list`, audited; `--env local` accepts only loopback URLs; `--env staging|production` needs https, an interactive terminal, and the typed phrase it shows. Unit tests plus a disposable-stack test; never run against a hosted project. | George / operator | DONE locally — first hosted use is T2 on staging |
 | **P7 deploy ordering.** A P7 build has no `/api/webhooks/ghl`; a deployment that still receives GHL webhooks will get 404s. | Spec §21.4; `docs/VERCEL_RELEASE_POLICY.md`. | George | OPEN — disable the GHL webhook before promoting a P7 build, or keep the pre-P7 build (`release` @ `9c189f8`) |
@@ -52,6 +53,8 @@ Second staging round, 2026-11-02 (staging only, synthetic data, nothing deployed
   - `platform_end_user_sessions` is `security definer`, and only `service_role` may execute it.
   - `tests/staging/mfa-recovery.test.ts` passed 4/4; details in `docs/PRODUCTION_RELEASE_PLAN.md` §7. Its synthetic users were deleted. George's user, password hash, MFA factor, session and admin row were fingerprinted and unchanged.
 
+**Post-review local follow-up:** the original 4/4 run used broad non-200 Auth checks and selected-field fingerprints; it is historical evidence, not proof of the strengthened assertions. Recovery code and the six-test rehearsal have since changed (operation reconciliation/retry, zero-factor recovery and concurrent-factor detection). Gate B technical validation is **complete: strengthened hosted run passed 6/6 on the corrected recovery code**, including exact rejection codes/counts, full-row fingerprints, denied M27 calls, standalone session termination and empty-workspace cleanup. The initial local-only round made no hosted changes. George subsequently authorized takeover; the strengthened staging test then passed all six checks, including cleanup, full-row fingerprints and ordinary-role denial. No production access or deployment occurred.
+
 Hosted rollback procedure (staging only; the unchanged script failed on hosted Storage with `42501 Direct deletion from storage tables is not allowed`, and its transaction left everything untouched):
 
 1. Empty and delete the `workspace-assets` bucket through the Storage API (`POST /storage/v1/bucket/workspace-assets/empty`, then `DELETE /storage/v1/bucket/workspace-assets`, service key). Emptying finishes in the background, so a delete issued immediately can answer 400; wait until `storage.objects` has no rows for the bucket, then retry. The script now refuses with a clear message if the bucket still exists on hosted Storage.
@@ -81,7 +84,7 @@ Hosted rollback procedure (staging only; the unchanged script failed on hosted S
 
 ## 2. Production cutover (P9 / T5) — requires George's explicit approval
 
-- [ ] Paid plan in place (D5). M21 logout revocation confirmed on staging.
+- [ ] Selected backup/recovery option approved and verified (plan D3); paid plan optional. Strengthened Gate B MFA rehearsal passed on the final candidate; M21 logout revocation confirmed on staging.
 - [ ] Verified production backup; restore procedure tested on staging.
 - [ ] Disable the GHL webhook (or confirm nothing posts to it) before promoting a P7 build.
 - [ ] Reconcile production migration history exactly as rehearsed; then push the required manifest (§5), the same files staging received. Never M15.

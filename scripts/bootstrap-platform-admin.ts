@@ -22,13 +22,15 @@
  * `end-sessions` does only the first step (e.g. a stolen laptop, MFA kept).
  * Auth API deletions cannot share a transaction with the audit log, so `remove-mfa` writes a
  * start record first (nothing is changed if that fails), re-reads the factors afterwards, and
- * records the observed outcome: complete, partial, none, unknown, or sessions_not_ended (no factor
- * is deleted while sessions could not be ended). Only complete exits 0.
+ * records the observed outcome: complete, partial, none, unknown, concurrent_factors, or
+ * sessions_unknown (no factor is deleted without confirmed session termination). Only complete exits 0.
+ * Resume with --operation-id <UUID>, the same email and reason. Zero factors still ends sessions
+ * and records completion. Concurrent new factors are preserved and reported, never silently removed.
  */
 
 export type TargetEnv = "local" | "staging" | "production";
 export type Command = "grant" | "revoke" | "remove-mfa" | "end-sessions" | "list";
-export type Args = { command: Command; email: string | null; env: TargetEnv; reason: string | null; dryRun: boolean };
+export type Args = { command: Command; email: string | null; env: TargetEnv; reason: string | null; dryRun: boolean; operationId?: string };
 export type Target = { url: string; host: string; local: boolean };
 
 export class UsageError extends Error {}
@@ -46,7 +48,7 @@ export function parseArgs(argv: string[]): Args {
     const a = rest[i];
     if (!a.startsWith("--")) throw new UsageError(`unexpected argument: ${a}`);
     const name = a.slice(2);
-    if (!["email", "env", "reason", "dry-run"].includes(name)) throw new UsageError(`unknown option: ${a}`);
+    if (!["email", "env", "reason", "dry-run", "operation-id"].includes(name)) throw new UsageError(`unknown option: ${a}`);
     if (flags.has(name)) throw new UsageError(`repeated option: ${a}`);
     if (name === "dry-run") {
       flags.set(name, true);
@@ -65,7 +67,13 @@ export function parseArgs(argv: string[]): Args {
   if ((command === "revoke" || command === "remove-mfa" || command === "end-sessions") && (!reason || reason.length < 5 || reason.length > 500)) {
     throw new UsageError("--reason (5–500 characters) is required; it is written to the audit log");
   }
-  return { command: command as Command, email, env: env as TargetEnv, reason, dryRun: flags.get("dry-run") === true };
+  const operationId = flags.get("operation-id");
+  if (operationId !== undefined && (command !== "remove-mfa" || typeof operationId !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId))) {
+    throw new UsageError("--operation-id must be a UUID and is only valid with remove-mfa");
+  }
+  return { command: command as Command, email, env: env as TargetEnv, reason, dryRun: flags.get("dry-run") === true,
+    ...(typeof operationId === "string" ? { operationId: operationId.toLowerCase() } : {}) };
 }
 
 /** Validates SUPABASE_URL against --env. Throws UsageError; never echoes credentials. */
@@ -171,7 +179,16 @@ class Api {
   /** M27: deletes the user's Auth sessions (and refresh tokens) together with an audit row. */
   async endSessions(userId: string, reason: string, metadata: Json): Promise<{ ended: number }> {
     const r = await this.rpc("platform_end_user_sessions", { p_user_id: userId, p_reason: reason, p_metadata: metadata });
-    return { ended: Number(r?.ended ?? 0) };
+    if (!Number.isSafeInteger(r?.ended) || r.ended < 0) throw new Error("Invalid session-ending response; outcome unknown");
+    return { ended: r.ended };
+  }
+
+  async operationRows(userId: string, operationId: string, action: string): Promise<unknown[]> {
+    const query = new URLSearchParams({ select: "reason,metadata", action: `eq.${action}`,
+      "metadata->>user_id": `eq.${userId}`, "metadata->>operation_id": `eq.${operationId}`, order: "id.desc", limit: "1" });
+    const rows: unknown = await this.call("GET", `/rest/v1/platform_audit_log?${query}`);
+    if (!Array.isArray(rows)) throw new Error("Invalid operation audit response");
+    return rows;
   }
 
   audit(action: string, reason: string | null, metadata: Json): Promise<unknown> {
@@ -270,46 +287,91 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
   return removeMfa(api, args, user.id, via, deps);
 }
 
+function factorIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((v: unknown) => !v || typeof v !== "object"
+      || !("id" in v) || typeof v.id !== "string" || !v.id)) throw new Error("Invalid factor-list response");
+  const ids = value.map((v: { id: string }) => v.id);
+  if (new Set(ids).size !== ids.length) throw new Error("Duplicate factor IDs in response");
+  return ids;
+}
+
+function auditRecord(value: unknown): { reason: string; metadata: Record<string, unknown> } {
+  if (!value || typeof value !== "object" || !("reason" in value) || typeof value.reason !== "string"
+      || !("metadata" in value) || !value.metadata || typeof value.metadata !== "object" || Array.isArray(value.metadata)) {
+    throw new Error("Invalid operation audit record");
+  }
+  return { reason: value.reason, metadata: value.metadata as Record<string, unknown> };
+}
+
 /** Exit codes: 0 complete; 5 some or all factors remain, or the outcome could not be confirmed;
  *  6 the factors were removed but the completion record could not be written. */
 async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: Deps): Promise<number> {
   const factorsUrl = `/auth/v1/admin/users/${userId}/factors`;
-  const factors: Json[] = (await api.call("GET", factorsUrl)) ?? [];
-  if (factors.length === 0) {
-    deps.log(`no change: ${args.email} has no MFA factors (use end-sessions to sign out every device)`);
-    return 0;
+  const currentIds = factorIds(await api.call("GET", factorsUrl));
+  let ids = currentIds;
+  const operationId = args.operationId ?? globalThis.crypto.randomUUID();
+  if (args.operationId) {
+    const rows = await api.operationRows(userId, operationId, "platform.mfa_removal_started");
+    if (rows.length !== 1) throw new Error("Recovery operation not found for this user; nothing was changed");
+    const start = auditRecord(rows[0]);
+    if (start.reason !== args.reason || !Array.isArray(start.metadata.factor_ids)
+        || start.metadata.factor_ids.some((id: unknown) => typeof id !== "string" || !id)) {
+      throw new Error("Recovery operation reason or factor IDs do not match; nothing was changed");
+    }
+    ids = start.metadata.factor_ids as string[];
   }
   if (args.dryRun) {
-    deps.log(`dry run: would end every session of ${args.email} and remove ${factors.length} factor(s)`);
+    deps.log(`dry run: would end every session of ${args.email} and remove the original ${ids.length} factor(s)`);
     return 0;
   }
-  const ids: string[] = factors.map((f) => String(f.id));
-  const base = { ...via, operation_id: globalThis.crypto.randomUUID(), user_id: userId, email: args.email, factor_ids: ids };
-  try {
-    await api.audit("platform.mfa_removal_started", args.reason, base);
-  } catch (err) {
-    deps.log(`refused: the start record could not be written (${err instanceof Error ? err.message : "unknown error"}); nothing was changed`);
-    return 1;
+  const base = { ...via, operation_id: operationId, user_id: userId, email: args.email, factor_ids: ids };
+  deps.log(`recovery operation ${operationId}; retry with the same email/reason and --operation-id ${operationId}`);
+  if (!args.operationId) {
+    try {
+      await api.audit("platform.mfa_removal_started", args.reason, base);
+    } catch {
+      deps.log(`refused: the start record could not be confirmed; no sessions or factors were changed (operation ${operationId}); reconcile before retrying`);
+      return 1;
+    }
   }
 
   let sessionsEnded: number;
   try {
-    sessionsEnded = (await api.endSessions(userId, args.reason!, { ...via, operation_id: base.operation_id, email: args.email })).ended;
-  } catch (err) {
-    let recorded = true;
+    // A retry ends sessions again, including any created since the previous attempt.
+    sessionsEnded = (await api.endSessions(userId, args.reason!, { ...via, operation_id: operationId, email: args.email })).ended;
+  } catch {
+    // Absence of a row does NOT prove rollback: the request might still be committing.
+    // A matching committed audit row, however, proves this atomic RPC ended sessions.
+    let committed: number | null = null;
     try {
-      await api.audit("platform.mfa_removal_incomplete", args.reason, {
-        ...base, outcome: "sessions_not_ended", removed_factor_ids: [], remaining_factor_ids: ids, failed_calls: 1,
-      });
-    } catch {
-      recorded = false;
+      // Resumed operations may have earlier successful attempts. Never use their row to
+      // certify the current request: a new session might have been created since then.
+      if (!args.operationId) {
+        const rows = await api.operationRows(userId, operationId, "platform.sessions_ended");
+        if (rows.length === 1) {
+          const row = auditRecord(rows[0]);
+          const ended = row.metadata.sessions_ended;
+          if (row.reason === args.reason && typeof ended === "number" && Number.isSafeInteger(ended) && ended >= 0) committed = ended;
+        }
+      }
+    } catch { /* Audit lookup unavailable: preserve uncertainty and do not delete factors. */ }
+    if (committed !== null) {
+      sessionsEnded = committed;
+    } else {
+      let recorded = true;
+      try {
+        await api.audit("platform.mfa_removal_incomplete", args.reason, {
+          ...base, outcome: "sessions_unknown", removed_factor_ids: [], remaining_factor_ids: currentIds, failed_calls: 1,
+        });
+      } catch { recorded = false; }
+      deps.log(`incomplete: session-ending outcome is unknown; no factor was removed${recorded ? "" : "; the outcome record could not be written either"} (operation ${operationId})`);
+      return 5;
     }
-    deps.log(`incomplete: sessions could not be ended (${err instanceof Error ? err.message : "unknown error"}); no factor was removed${recorded ? "" : "; the outcome record could not be written either"} (operation ${base.operation_id})`);
-    return 5;
   }
 
   let failedCalls = 0;
   for (const id of ids) {
+    if (!currentIds.includes(id)) continue;
     try {
       await api.call("DELETE", `${factorsUrl}/${encodeURIComponent(id)}`);
     } catch {
@@ -318,20 +380,21 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
   }
   let remaining: string[] | null = null;
   try {
-    const now: Json[] = (await api.call("GET", factorsUrl)) ?? [];
-    const present = new Set(now.map((f) => String(f.id)));
-    remaining = ids.filter((id) => present.has(id));
+    remaining = factorIds(await api.call("GET", factorsUrl));
   } catch {
     remaining = null;
   }
   const removed = remaining ? ids.filter((id) => !remaining!.includes(id)) : [];
-  const outcome = remaining === null ? "unknown" : remaining.length === 0 ? "complete" : removed.length === 0 ? "none" : "partial";
+  const added = remaining?.filter((id) => !ids.includes(id)) ?? [];
+  const outcome = remaining === null ? "unknown" : added.length > 0 ? "concurrent_factors"
+    : remaining.length === 0 ? "complete" : removed.length === 0 ? "none" : "partial";
   const action = outcome === "complete" ? "platform.mfa_factors_removed" : "platform.mfa_removal_incomplete";
 
   let recorded = true;
   try {
     await api.audit(action, args.reason, {
-      ...base, outcome, sessions_ended: sessionsEnded, removed_factor_ids: removed, remaining_factor_ids: remaining, failed_calls: failedCalls,
+      ...base, outcome, sessions_ended: sessionsEnded, removed_factor_ids: removed, remaining_factor_ids: remaining,
+      new_factor_ids: added, failed_calls: failedCalls,
     });
   } catch {
     recorded = false;
@@ -339,7 +402,7 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
 
   if (outcome === "complete") {
     if (!recorded) {
-      deps.log(`removed ${ids.length} factor(s) from ${args.email}, but the completion record could not be written; only the start record (operation ${base.operation_id}) is in the audit log`);
+      deps.log(`removed ${ids.length} factor(s) from ${args.email}, but the completion record could not be confirmed; start and session-ending records exist (operation ${operationId}); retry with --operation-id ${operationId}`);
       return 6;
     }
     deps.log(`ended ${sessionsEnded} session(s) and removed ${ids.length} factor(s) from ${args.email}; they must sign in and enrol a new authenticator`);
@@ -347,6 +410,7 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
   }
   const detail = outcome === "unknown"
     ? `the factors could not be re-read after ${failedCalls} failed deletion(s); the outcome is unknown, check before retrying`
+    : outcome === "concurrent_factors" ? "new factors appeared during recovery; they were preserved; review before starting a new operation"
     : `removed ${removed.length} of ${ids.length} factor(s); still present: ${remaining!.join(", ")}`;
   deps.log(`incomplete: ${detail}${recorded ? "" : "; the outcome record could not be written either"} (operation ${base.operation_id})`);
   return 5;
