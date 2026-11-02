@@ -1,10 +1,13 @@
--- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002500 (native multi-tenant).
+-- Rollback for migrations 20261101000100 … 20261101001300 and 20261101001500 … 20261101002600 (native multi-tenant).
 -- LOCAL / STAGING ONLY. Never run against production; production rolls back by app flag.
 -- Leaves legacy tables (auth_sessions, sync_*) untouched. Destroys all native tenant data.
 -- 20261101001400_legacy_lockdown is intentionally NOT reverted: re-granting anon/authenticated
 -- access to legacy tables would reopen them to the public Data API.
 
 begin;
+
+-- M27 (end user sessions)
+drop function if exists public.platform_end_user_sessions(uuid, text, jsonb);
 
 -- M26 (integrity round 3); its TRUNCATE triggers, logo constraint, grant key and profiles policy go
 -- with their tables, and the functions it replaced are dropped under their original migrations.

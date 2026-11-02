@@ -4,6 +4,7 @@
  *   tsx scripts/bootstrap-platform-admin.ts grant      --email <e> --env <local|staging|production> [--dry-run]
  *   tsx scripts/bootstrap-platform-admin.ts revoke     --email <e> --env <...> --reason "<why>" [--dry-run]
  *   tsx scripts/bootstrap-platform-admin.ts remove-mfa --email <e> --env <...> --reason "<why>" [--dry-run]
+ *   tsx scripts/bootstrap-platform-admin.ts end-sessions --email <e> --env <...> --reason "<why>" [--dry-run]
  *   tsx scripts/bootstrap-platform-admin.ts list       --env <...>
  *
  * Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the environment (never from arguments or
@@ -13,22 +14,26 @@
  * `grant` and `revoke` call database functions (M22) that change platform_admins and write the
  * audit row in one transaction, serialized by one lock; the database refuses to remove the last
  * platform admin, whichever path tries.
- * MFA recovery: `remove-mfa` deletes the user's factors, so the admin's next sign-in is AAL1 and
- * must enrol a new authenticator before the console opens; there are no recovery codes. It does
- * not end sessions; if the device may be compromised, also revoke the admin (or reset the password).
+ * MFA recovery: `remove-mfa` first ends every session of the account (M27: the session rows and
+ * their refresh tokens are deleted with an audit row, and M21 refuses their access tokens at
+ * once), then deletes the user's factors, so whoever holds the lost device is signed out and the
+ * owner's next sign-in is AAL1 and must enrol a new authenticator before the console opens; there
+ * are no recovery codes. The password is unchanged: if it may be known too, reset it as well.
+ * `end-sessions` does only the first step (e.g. a stolen laptop, MFA kept).
  * Auth API deletions cannot share a transaction with the audit log, so `remove-mfa` writes a
- * start record first (nothing is deleted if that fails), re-reads the factors afterwards, and
- * records the observed outcome: complete, partial, none, or unknown. Only complete exits 0.
+ * start record first (nothing is changed if that fails), re-reads the factors afterwards, and
+ * records the observed outcome: complete, partial, none, unknown, or sessions_not_ended (no factor
+ * is deleted while sessions could not be ended). Only complete exits 0.
  */
 
 export type TargetEnv = "local" | "staging" | "production";
-export type Command = "grant" | "revoke" | "remove-mfa" | "list";
+export type Command = "grant" | "revoke" | "remove-mfa" | "end-sessions" | "list";
 export type Args = { command: Command; email: string | null; env: TargetEnv; reason: string | null; dryRun: boolean };
 export type Target = { url: string; host: string; local: boolean };
 
 export class UsageError extends Error {}
 
-const COMMANDS: readonly Command[] = ["grant", "revoke", "remove-mfa", "list"];
+const COMMANDS: readonly Command[] = ["grant", "revoke", "remove-mfa", "end-sessions", "list"];
 const ENVS: readonly TargetEnv[] = ["local", "staging", "production"];
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -57,7 +62,7 @@ export function parseArgs(argv: string[]): Args {
   if (command !== "list" && (!email || !EMAIL.test(email))) throw new UsageError("--email must be a valid address");
   if (command === "list" && email) throw new UsageError("list takes no --email");
   const reason = typeof flags.get("reason") === "string" ? (flags.get("reason") as string).trim() : null;
-  if ((command === "revoke" || command === "remove-mfa") && (!reason || reason.length < 5 || reason.length > 500)) {
+  if ((command === "revoke" || command === "remove-mfa" || command === "end-sessions") && (!reason || reason.length < 5 || reason.length > 500)) {
     throw new UsageError("--reason (5–500 characters) is required; it is written to the audit log");
   }
   return { command: command as Command, email, env: env as TargetEnv, reason, dryRun: flags.get("dry-run") === true };
@@ -163,6 +168,12 @@ class Api {
     return this.call("GET", "/rest/v1/platform_admins?select=user_id,created_at&order=created_at");
   }
 
+  /** M27: deletes the user's Auth sessions (and refresh tokens) together with an audit row. */
+  async endSessions(userId: string, reason: string, metadata: Json): Promise<{ ended: number }> {
+    const r = await this.rpc("platform_end_user_sessions", { p_user_id: userId, p_reason: reason, p_metadata: metadata });
+    return { ended: Number(r?.ended ?? 0) };
+  }
+
   audit(action: string, reason: string | null, metadata: Json): Promise<unknown> {
     return this.call("POST", "/rest/v1/platform_audit_log", { actor_id: null, action, reason, metadata }, "return=minimal");
   }
@@ -246,6 +257,16 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
     }
   }
 
+  if (args.command === "end-sessions") {
+    if (args.dryRun) {
+      deps.log(`dry run: would end every session of ${args.email} (${user.id})`);
+      return 0;
+    }
+    const r = await api.endSessions(user.id, args.reason!, { ...via, email: args.email });
+    deps.log(`ended ${r.ended} session(s) of ${args.email}; every device must sign in again`);
+    return 0;
+  }
+
   return removeMfa(api, args, user.id, via, deps);
 }
 
@@ -255,11 +276,11 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
   const factorsUrl = `/auth/v1/admin/users/${userId}/factors`;
   const factors: Json[] = (await api.call("GET", factorsUrl)) ?? [];
   if (factors.length === 0) {
-    deps.log(`no change: ${args.email} has no MFA factors`);
+    deps.log(`no change: ${args.email} has no MFA factors (use end-sessions to sign out every device)`);
     return 0;
   }
   if (args.dryRun) {
-    deps.log(`dry run: would remove ${factors.length} factor(s) from ${args.email}`);
+    deps.log(`dry run: would end every session of ${args.email} and remove ${factors.length} factor(s)`);
     return 0;
   }
   const ids: string[] = factors.map((f) => String(f.id));
@@ -267,8 +288,24 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
   try {
     await api.audit("platform.mfa_removal_started", args.reason, base);
   } catch (err) {
-    deps.log(`refused: the start record could not be written (${err instanceof Error ? err.message : "unknown error"}); no factor was removed`);
+    deps.log(`refused: the start record could not be written (${err instanceof Error ? err.message : "unknown error"}); nothing was changed`);
     return 1;
+  }
+
+  let sessionsEnded: number;
+  try {
+    sessionsEnded = (await api.endSessions(userId, args.reason!, { ...via, operation_id: base.operation_id, email: args.email })).ended;
+  } catch (err) {
+    let recorded = true;
+    try {
+      await api.audit("platform.mfa_removal_incomplete", args.reason, {
+        ...base, outcome: "sessions_not_ended", removed_factor_ids: [], remaining_factor_ids: ids, failed_calls: 1,
+      });
+    } catch {
+      recorded = false;
+    }
+    deps.log(`incomplete: sessions could not be ended (${err instanceof Error ? err.message : "unknown error"}); no factor was removed${recorded ? "" : "; the outcome record could not be written either"} (operation ${base.operation_id})`);
+    return 5;
   }
 
   let failedCalls = 0;
@@ -293,7 +330,9 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
 
   let recorded = true;
   try {
-    await api.audit(action, args.reason, { ...base, outcome, removed_factor_ids: removed, remaining_factor_ids: remaining, failed_calls: failedCalls });
+    await api.audit(action, args.reason, {
+      ...base, outcome, sessions_ended: sessionsEnded, removed_factor_ids: removed, remaining_factor_ids: remaining, failed_calls: failedCalls,
+    });
   } catch {
     recorded = false;
   }
@@ -303,7 +342,7 @@ async function removeMfa(api: Api, args: Args, userId: string, via: Json, deps: 
       deps.log(`removed ${ids.length} factor(s) from ${args.email}, but the completion record could not be written; only the start record (operation ${base.operation_id}) is in the audit log`);
       return 6;
     }
-    deps.log(`removed ${ids.length} factor(s) from ${args.email}; they must sign in and enrol a new authenticator`);
+    deps.log(`ended ${sessionsEnded} session(s) and removed ${ids.length} factor(s) from ${args.email}; they must sign in and enrol a new authenticator`);
     return 0;
   }
   const detail = outcome === "unknown"

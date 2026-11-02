@@ -11,7 +11,7 @@ const SERVICE_KEY = `${b64({ alg: "HS256" })}.${b64({ role: "service_role" })}.s
 const ANON_KEY = `${b64({ alg: "HS256" })}.${b64({ role: "anon" })}.sig`;
 
 type Fake = {
-  users: { id: string; email: string; factors: string[] }[]; admins: string[]; audit: any[]; requests: string[];
+  users: { id: string; email: string; factors: string[]; sessions: number }[]; admins: string[]; audit: any[]; requests: string[];
   /** Failure injection: factor ids whose DELETE answers 500, audit actions whose insert answers 500, failing factor re-reads. */
   failFactorDeletes?: string[]; failAudit?: string[]; failFactorListAfter?: number;
 };
@@ -66,13 +66,26 @@ function fakeFetch(state: Fake): typeof fetch {
       state.audit.push({ actor_id: null, action: "platform.admin_revoked", reason: p_reason, metadata: { ...p_metadata, user_id: p_user_id } });
       return json({ changed: true, admins: state.admins.length });
     }
+    // Mirrors M27: the sessions end together with their audit row, or not at all.
+    if (p === "/rest/v1/rpc/platform_end_user_sessions" && method === "POST") {
+      const { p_user_id, p_reason, p_metadata } = JSON.parse(String(init!.body));
+      if (state.failAudit?.includes("platform.sessions_ended")) return json({ code: "XX000", message: "audit unavailable" }, 500);
+      const u = state.users.find((x) => x.id === p_user_id)!;
+      const ended = u.sessions;
+      u.sessions = 0;
+      state.audit.push({ actor_id: null, action: "platform.sessions_ended", reason: p_reason, metadata: { ...p_metadata, user_id: p_user_id, sessions_ended: ended } });
+      return json({ ended });
+    }
     return json({ message: "not found" }, 404);
   }) as typeof fetch;
 }
 
 function harness(opts: { url?: string; key?: string; prompt?: Deps["prompt"]; state?: Partial<Fake> } = {}) {
   const state: Fake = {
-    users: [{ id: "u-george", email: "george@example.test", factors: ["f1", "f2"] }, { id: "u-ops", email: "ops@example.test", factors: [] }],
+    users: [
+      { id: "u-george", email: "george@example.test", factors: ["f1", "f2"], sessions: 3 },
+      { id: "u-ops", email: "ops@example.test", factors: [], sessions: 1 },
+    ],
     admins: [], audit: [], requests: [], ...opts.state,
   };
   const lines: string[] = [];
@@ -173,25 +186,55 @@ describe("A2 bootstrap-platform-admin: commands", () => {
     assert.deepEqual([r.state.admins, r.state.audit], [["u-george", "u-ops"], []]);
   });
 
-  test("remove-mfa records a start, deletes every factor, re-reads, and records the complete outcome", async () => {
+  test("remove-mfa records a start, ends every session, deletes every factor, re-reads, and records the complete outcome", async () => {
     const h = harness({ state: { admins: ["u-george"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], h.deps), 0);
-    assert.deepEqual(h.state.users[0].factors, []);
-    assert.deepEqual(h.state.audit.map((a) => a.action), ["platform.mfa_removal_started", "platform.mfa_factors_removed"]);
-    const [start, done] = h.state.audit;
+    assert.deepEqual([h.state.users[0].factors, h.state.users[0].sessions], [[], 0]);
+    assert.equal(h.state.users[1].sessions, 1, "other users keep their sessions");
+    assert.deepEqual(h.state.audit.map((a) => a.action),
+      ["platform.mfa_removal_started", "platform.sessions_ended", "platform.mfa_factors_removed"]);
+    const [start, ended, done] = h.state.audit;
     assert.deepEqual(start.metadata.factor_ids, ["f1", "f2"]);
+    assert.deepEqual([ended.metadata.operation_id, ended.metadata.sessions_ended, ended.reason], [start.metadata.operation_id, 3, "Lost phone, verified by call"]);
     assert.equal(done.metadata.operation_id, start.metadata.operation_id);
-    assert.deepEqual([done.metadata.outcome, done.metadata.removed_factor_ids, done.metadata.remaining_factor_ids], ["complete", ["f1", "f2"], []]);
+    assert.deepEqual([done.metadata.outcome, done.metadata.sessions_ended, done.metadata.removed_factor_ids, done.metadata.remaining_factor_ids],
+      ["complete", 3, ["f1", "f2"], []]);
     assert.equal(done.reason, "Lost phone, verified by call");
+    assert.match(h.lines.at(-1)!, /^ended 3 session\(s\) and removed 2 factor\(s\)/);
+    const writes = h.state.requests.filter((r) => !r.startsWith("GET "));
+    assert.deepEqual(writes, ["POST /rest/v1/platform_audit_log", "POST /rest/v1/rpc/platform_end_user_sessions",
+      "DELETE /auth/v1/admin/users/u-george/factors/f1", "DELETE /auth/v1/admin/users/u-george/factors/f2", "POST /rest/v1/platform_audit_log"],
+      "sessions end before any factor is deleted");
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone again"], h.deps), 0);
-    assert.equal(h.state.audit.length, 2, "nothing to remove is not audited");
+    assert.equal(h.state.audit.length, 3, "nothing to remove is not audited");
+  });
+
+  test("remove-mfa deletes no factor when the sessions cannot be ended: recorded as sessions_not_ended, exit 5", async () => {
+    const h = harness({ state: { failAudit: ["platform.sessions_ended"] } });
+    assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], h.deps), 5);
+    assert.deepEqual([h.state.users[0].factors, h.state.users[0].sessions], [["f1", "f2"], 3]);
+    assert.ok(h.state.requests.every((r) => !r.startsWith("DELETE ")));
+    assert.deepEqual(h.state.audit.map((a) => [a.action, a.metadata.outcome]),
+      [["platform.mfa_removal_started", undefined], ["platform.mfa_removal_incomplete", "sessions_not_ended"]]);
+    assert.match(h.lines.at(-1)!, /^incomplete: sessions could not be ended .*no factor was removed/);
+  });
+
+  test("end-sessions signs one user out everywhere, audited with the reason; dry run changes nothing", async () => {
+    const h = harness();
+    assert.throws(() => parseArgs(["end-sessions", "--email", "george@example.test", "--env", "local"]), UsageError);
+    assert.equal(await run(["end-sessions", "--email", "george@example.test", "--env", "local", "--reason", "Laptop stolen", "--dry-run"], h.deps), 0);
+    assert.deepEqual([h.state.users[0].sessions, h.state.audit], [3, []]);
+    assert.equal(await run(["end-sessions", "--email", "george@example.test", "--env", "local", "--reason", "Laptop stolen"], h.deps), 0);
+    assert.deepEqual([h.state.users[0].sessions, h.state.users[0].factors, h.state.users[1].sessions], [0, ["f1", "f2"], 1]);
+    assert.deepEqual([h.state.audit[0].action, h.state.audit[0].reason, h.state.audit[0].metadata.sessions_ended], ["platform.sessions_ended", "Laptop stolen", 3]);
+    assert.match(h.lines.at(-1)!, /^ended 3 session\(s\) of george@example\.test/);
   });
 
   test("remove-mfa never reports success when a factor survives: partial and none are recorded and exit 5", async () => {
     const partial = harness({ state: { failFactorDeletes: ["f2"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], partial.deps), 5);
     assert.deepEqual(partial.state.users[0].factors, ["f2"]);
-    const rec = partial.state.audit[1];
+    const rec = partial.state.audit[2];
     assert.deepEqual([rec.action, rec.metadata.outcome, rec.metadata.removed_factor_ids, rec.metadata.remaining_factor_ids, rec.metadata.failed_calls],
       ["platform.mfa_removal_incomplete", "partial", ["f1"], ["f2"], 1]);
     assert.match(partial.lines.at(-1)!, /^incomplete: removed 1 of 2 factor\(s\); still present: f2/);
@@ -199,24 +242,24 @@ describe("A2 bootstrap-platform-admin: commands", () => {
 
     const none = harness({ state: { failFactorDeletes: ["f1", "f2"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], none.deps), 5);
-    assert.equal(none.state.audit[1].metadata.outcome, "none");
+    assert.equal(none.state.audit[2].metadata.outcome, "none");
   });
 
   test("remove-mfa: no start record means no deletion; an unconfirmed or unrecorded outcome is not success", async () => {
     const noStart = harness({ state: { failAudit: ["platform.mfa_removal_started"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], noStart.deps), 1);
-    assert.deepEqual(noStart.state.users[0].factors, ["f1", "f2"]);
-    assert.ok(noStart.state.requests.every((r) => !r.startsWith("DELETE ")));
+    assert.deepEqual([noStart.state.users[0].factors, noStart.state.users[0].sessions], [["f1", "f2"], 3]);
+    assert.ok(noStart.state.requests.every((r) => !r.startsWith("DELETE ") && !r.includes("/rpc/")));
 
     const unknown = harness({ state: { failFactorListAfter: 1 } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], unknown.deps), 5);
-    assert.deepEqual([unknown.state.audit[1].action, unknown.state.audit[1].metadata.outcome], ["platform.mfa_removal_incomplete", "unknown"]);
+    assert.deepEqual([unknown.state.audit[2].action, unknown.state.audit[2].metadata.outcome], ["platform.mfa_removal_incomplete", "unknown"]);
     assert.match(unknown.lines.at(-1)!, /outcome is unknown/);
 
     const unrecorded = harness({ state: { failAudit: ["platform.mfa_factors_removed"] } });
     assert.equal(await run(["remove-mfa", "--email", "george@example.test", "--env", "local", "--reason", "Lost phone, verified by call"], unrecorded.deps), 6);
     assert.deepEqual(unrecorded.state.users[0].factors, []);
-    assert.deepEqual(unrecorded.state.audit.map((a) => a.action), ["platform.mfa_removal_started"]);
+    assert.deepEqual(unrecorded.state.audit.map((a) => a.action), ["platform.mfa_removal_started", "platform.sessions_ended"]);
     assert.match(unrecorded.lines.at(-1)!, /completion record could not be written/);
   });
 

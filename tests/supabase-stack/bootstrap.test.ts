@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import type pg from "pg";
-import { adminDb, rpc, signUp, startStack, upgradeToAal2Session, type Identity, type Stack, type StackEnv } from "./stack";
+import { adminDb, rpc, signUp, startStack, upgradeToAal2Session, type GoTrueSession, type Identity, type Stack, type StackEnv } from "./stack";
 
 const ROOT = join(__dirname, "..", "..");
 const run = Date.now().toString(36);
@@ -75,6 +75,18 @@ async function passwordSession(user: Identity): Promise<string> {
   return body.access_token;
 }
 
+async function refresh(refreshToken: string): Promise<{ status: number; body: any }> {
+  const r = await fetch(`${env.apiUrl}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST", headers: { apikey: env.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  return { status: r.status, body: await r.json().catch(() => null) };
+}
+
+async function authGet(token: string, path: string): Promise<number> {
+  return (await fetch(`${env.apiUrl}/auth/v1/${path}`, { headers: { apikey: env.anonKey, Authorization: `Bearer ${token}` } })).status;
+}
+
 const status = (b: { listed: boolean; active: boolean }) => ({ listed: b.listed, active: b.active });
 const adminCount = async () => Number((await db.query("select count(*) n from public.platform_admins")).rows[0].n);
 const auditActions = async (userId: string) =>
@@ -84,6 +96,8 @@ const auditActions = async (userId: string) =>
 describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
   let george: Identity;
   let ops: Identity;
+  /** George's AAL2 session on the device that is later lost. */
+  let lostDevice: GoTrueSession;
 
   before(async () => {
     stack = startStack();
@@ -107,8 +121,8 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     assert.equal(await adminCount(), 1);
     assert.deepEqual(await auditActions(george.id), ["platform.admin_granted"]);
     assert.deepEqual(status((await rpc(env, george.token, "platform_status")).body), { listed: true, active: false });
-    const aal2 = await upgradeToAal2Session(env, george);
-    assert.equal((await rpc(env, aal2.access_token, "platform_status")).body.active, true);
+    lostDevice = await upgradeToAal2Session(env, george);
+    assert.equal((await rpc(env, lostDevice.access_token, "platform_status")).body.active, true);
   });
 
   test("refusals: unknown user, non-local env against this stack, and the last admin", async () => {
@@ -124,19 +138,67 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     assert.equal(await adminCount(), 1);
   });
 
-  test("remove-mfa is the device-loss recovery path: factors removed, audited, re-enrolment restores access", async () => {
+  test("only the service role can end another user's sessions", async () => {
+    const sessions = async (id: string) => Number((await db.query("select count(*) n from auth.sessions where user_id = $1", [id])).rows[0].n);
+    const before = await sessions(george.id);
+    for (const token of [null, ops.token]) {
+      const r = await rpc(env, token, "platform_end_user_sessions", { p_user_id: george.id, p_reason: "Hostile attempt" });
+      assert.ok(r.status === 401 || r.status === 403 || r.status === 404, `${token ? "authenticated" : "anon"}: ${r.status}`);
+    }
+    assert.equal(await sessions(george.id), before);
+  });
+
+  test("remove-mfa is the device-loss recovery path: every session ends, factors removed, audited, re-enrolment restores access", async () => {
     const factors = async () => Number((await db.query("select count(*) n from auth.mfa_factors where user_id = $1", [george.id])).rows[0].n);
+    const liveSessions = async (id: string) => Number((await db.query("select count(*) n from auth.sessions where user_id = $1", [id])).rows[0].n);
+    const liveRefreshTokens = async (id: string) =>
+      Number((await db.query("select count(*) n from auth.refresh_tokens where user_id = $1::text and not revoked", [id])).rows[0].n);
     assert.equal(await factors(), 1);
+
+    // Before: the lost device holds a working AAL2 session, its refresh token works, and a
+    // second (AAL1) device is signed in too.
+    const rotated = await refresh(lostDevice.refresh_token);
+    assert.equal(rotated.status, 200, "the device's refresh token works before recovery");
+    const device = { access: rotated.body.access_token as string, refresh: rotated.body.refresh_token as string };
+    const otherDevice = await passwordSession(george);
+    assert.equal((await rpc(env, device.access, "platform_status")).body.active, true);
+    assert.equal(await authGet(device.access, "user"), 200);
+    assert.equal(await authGet(otherDevice, "user"), 200);
+    assert.ok(await liveSessions(george.id) >= 2);
+    const opsSessions = await liveSessions(ops.id);
+    assert.ok(opsSessions >= 1);
+
     const r = cli("remove-mfa", "--email", george.email, "--env", "local", "--reason", "Lost phone; identity confirmed by call");
     assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /ended \d+ session\(s\) and removed 1 factor\(s\)/);
     assert.equal(await factors(), 0);
-    const audit = await db.query<{ action: string; reason: string; metadata: { factor_ids: string[]; operation_id: string; outcome?: string } }>(
-      "select action, reason, metadata from public.platform_audit_log where action like 'platform.mfa_%' and metadata->>'user_id' = $1 order by id", [george.id]);
-    assert.deepEqual(audit.rows.map((a) => a.action), ["platform.mfa_removal_started", "platform.mfa_factors_removed"]);
-    assert.equal(audit.rows[1].reason, "Lost phone; identity confirmed by call");
-    assert.equal(audit.rows[1].metadata.factor_ids.length, 1);
-    assert.equal(audit.rows[1].metadata.outcome, "complete");
-    assert.equal(audit.rows[1].metadata.operation_id, audit.rows[0].metadata.operation_id);
+    assert.equal(await liveSessions(george.id), 0);
+    assert.equal(await liveRefreshTokens(george.id), 0);
+    assert.equal(await liveSessions(ops.id), opsSessions, "other users keep their sessions");
+
+    // After: every old token is refused, at the Data API (M21 pre-request check) and at Auth.
+    for (const token of [device.access, otherDevice]) {
+      assert.equal((await rpc(env, token, "platform_status")).status, 401);
+      assert.equal((await rpc(env, token, "request_context")).status, 401);
+      assert.notEqual(await authGet(token, "user"), 200);
+    }
+    assert.notEqual((await refresh(device.refresh)).status, 200, "the old refresh token cannot mint a new session");
+    const hijack = await fetch(`${env.apiUrl}/auth/v1/factors`, {
+      method: "POST", headers: { apikey: env.anonKey, Authorization: `Bearer ${device.access}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ factor_type: "totp", friendly_name: "attacker" }),
+    });
+    assert.notEqual(hijack.status, 200, "the old token cannot enrol a replacement authenticator");
+    assert.equal(await factors(), 0);
+
+    const audit = await db.query<{ action: string; reason: string; metadata: { factor_ids: string[]; operation_id: string; outcome?: string; sessions_ended?: number } }>(
+      "select action, reason, metadata from public.platform_audit_log where action in ('platform.mfa_removal_started', 'platform.sessions_ended', 'platform.mfa_factors_removed') and metadata->>'user_id' = $1 order by id", [george.id]);
+    assert.deepEqual(audit.rows.map((a) => a.action), ["platform.mfa_removal_started", "platform.sessions_ended", "platform.mfa_factors_removed"]);
+    assert.equal(audit.rows[2].reason, "Lost phone; identity confirmed by call");
+    assert.equal(audit.rows[2].metadata.factor_ids.length, 1);
+    assert.equal(audit.rows[2].metadata.outcome, "complete");
+    assert.ok(audit.rows[1].metadata.sessions_ended! >= 2);
+    assert.equal(audit.rows[2].metadata.sessions_ended, audit.rows[1].metadata.sessions_ended);
+    assert.ok(audit.rows.every((a) => a.metadata.operation_id === audit.rows[0].metadata.operation_id));
 
     const fresh = await passwordSession(george);
     assert.deepEqual(status((await rpc(env, fresh, "platform_status")).body), { listed: true, active: false }, "AAL1 until re-enrolled");
@@ -150,7 +212,7 @@ describe("A2 platform-admin bootstrap CLI on a disposable local stack", () => {
     assert.equal(r.code, 0, r.out);
     assert.deepEqual((await db.query("select user_id from public.platform_admins")).rows.map((x) => x.user_id), [ops.id]);
     assert.deepEqual(await auditActions(george.id),
-      ["platform.admin_granted", "platform.mfa_removal_started", "platform.mfa_factors_removed", "platform.admin_revoked"]);
+      ["platform.admin_granted", "platform.mfa_removal_started", "platform.sessions_ended", "platform.mfa_factors_removed", "platform.admin_revoked"]);
     const list = cli("list", "--env", "local");
     assert.equal(list.code, 0, list.out);
     assert.match(list.out, new RegExp(ops.id));
