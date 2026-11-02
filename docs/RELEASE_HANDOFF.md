@@ -42,6 +42,8 @@ Values are never stored in the repository. Set by name in the hosting provider.
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.
 - Rollback, database (local/staging only): `supabase/rollback/20261101_native_multi_tenant.down.sql`. It resets the M21 PostgREST pre-request setting, drops native objects, and leaves legacy tables and data untouched; M14's legacy lockdown is intentionally not reverted.
 - M23 note: a per-calendar lock trigger on `public.appointments`. Simultaneous bookings of one slot previously could deadlock (PostgreSQL 40P01, shown to users as a 503); now exactly one succeeds and the others get the overlap error (409). Rollback drops the trigger and its function.
+- M24 note: when a member is removed or their role no longer allows the role they invited, their open invitations are revoked (each audited as `invitation.revoked`). Previously a demoted or removed admin's invitation could still be accepted. Rollback restores the M11 functions.
+- M25 note: a trigger on `public.appointments` refuses new or moved bookings on an inactive calendar and appointments longer than 24 hours (shown as field errors, 400). Existing appointments on a calendar that is later deactivated are untouched. Rollback drops the trigger and its function.
 - M21 note: after `db push`, confirm `pgrst.db_pre_request=public.check_request_session` on role `authenticator` (checklist §1). The migration sets it with `alter role authenticator` (the pattern Supabase documents for pre-request checks); if a hosted project refused that statement the migration would fail visibly — stop and report it rather than editing the migration.
 
 ## 4. Operators
@@ -59,18 +61,18 @@ Non-local runs of the CLI need `https`, an interactive terminal, and the typed p
 
 ## 5. Results by environment (final commit)
 
-Final code `ab59783` (branch `feat/native-multi-tenant`); later commits change documentation only. Earlier rounds are in spec §24.
+Final code `012a024` (branch `feat/native-multi-tenant`); later commits change documentation only. Every row below was run on `012a024`, one suite at a time. Earlier rounds are in spec §24.
 
 | Check | Environment | Result |
 | --- | --- | --- |
 | Typecheck / build | Next.js 15.5.25 | PASS / PASS |
-| Unit | Node 24.20.0 | PASS 258/258 |
-| Database (PGlite) | PGlite + shim | PASS 232/232 (13 files) |
+| Unit | Node 24.20.0 | PASS 260/260 |
+| Database (PGlite) | PGlite + shim | PASS 237/237 (15 files) |
 | Concurrency | Real local PostgreSQL 18.6 | PASS 38/38 (3 files; includes the M23 booking races and the no-lock control) |
-| Supabase stack | Real local Supabase (disposable) + built app + Chromium | PASS 70/70 (run on `4740681`; later commits touch only the runner and docs) |
-| Acceptance | Fresh disposable stacks + built app + Chromium | PASS 38/38 |
-| UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; only the invitation page changed since, covered by the stack suite) |
-| Bundle scan (113 client files) / secret scan (27 changed files) | — | clean (one synthetic `sb_secret_abc` test value) |
+| Supabase stack | Real local Supabase (disposable, M1–M14 and M16–M25) + built app + Chromium | PASS 70/70 |
+| Acceptance | Fresh disposable stacks + built app + Chromium | PASS 39/39 |
+| UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; later UI changes are covered by the acceptance suite, not re-measured) |
+| Bundle scan (client chunks) / secret scan (diff since `2500c80`) | — | clean (the only hit is the login page's setup hint naming `AUTH_SECRET`, no value) |
 | Staging | — | NOT RUN (no staging project) |
 | Production | — | NOT RUN (out of scope) |
 
@@ -82,6 +84,8 @@ Journeys covered with real browsers and denial paths: first owner setup and onbo
 - **Booking 503 (fixed, M23).** Root cause: deadlocks between simultaneous inserts of the same slot. Reproduced on real PostgreSQL (42 deadlocks in 480 attempts before; 0 after).
 - **Hardening suggestion for the independent review.** `private.is_platform_admin()` accepts AAL1 when the session setting `app.platform_allow_aal1 = 'on'`. Nothing in the repository sets it (a unit test forbids it) and clients reach the database only through PostgREST, which cannot set it, so it is not exploitable today; but any future path that gives a user role raw SQL would bypass MFA. Removing the branch is a schema change and was left for review.
 - **D-A** (below) remains a decision.
+- **Final bug-finding pass (reviewed `2500c80`, fixed in `1508fa4`, `fd2c2b3`, `012a024`).** Fixed, each with a regression test that fails without the fix: invitations outliving their inviter's authority (M24, high); a logo upload from a stale tab writing to the newly active business (high); bookings on an inactive calendar and unbounded appointment length (M25, medium); a calendar retry creating a duplicate, and its error vanishing for a first calendar (medium); board edits after "Show more" leaving stale rows, and a stage with only hidden cards shown as empty (medium); logout reporting success when the request failed (medium); search treating `_` as a wildcard, and report dates with only "from" refused as backwards (low); stale tabs refused as "no permission" rather than "switched business" (low); overlapping audit, inbox and platform list requests, and task times without a UTC label (low). Details in `docs/LOCAL_COMPLETION_REPORT.md` §7.
+- **Unconfirmed reviewer notes, not changed** (low or design questions for the independent review): two simultaneous logo uploads with different file types can leave an orphaned object; an upload can still be refused with "no permission" if a switch lands mid-request (nothing is written); `service_role` can truncate the audit table; removed members' profile names stay visible to former colleagues; invitation acceptance does not require a confirmed email; soft-deleting a contact leaves their future appointments booked; PostgREST JWT-expiry (PGRST301) and serialization (40001) errors show as 503 instead of "sign in again" / "try again".
 
 ## 6. Remaining actions (George / external / staging / production only)
 

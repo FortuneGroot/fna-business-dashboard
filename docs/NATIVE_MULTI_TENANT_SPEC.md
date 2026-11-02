@@ -1814,6 +1814,9 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 | Booking 503 root cause: simultaneous inserts of one slot deadlocked in the exclusion check (40P01 → 503). M23 takes a per-calendar lock first; real-PostgreSQL regression (60 × 8 inserts, 20 × 8 reschedules, no-lock control) | `2a232d9` |
 | Invitation page: 15 s request timeout and a "Could not check this invitation / Try again" state (a network or server failure is no longer shown as an invalid link); 25-load stall reproduction with diagnostics in the stack suite | `4740681` |
 | Runner: minimum file counts for directory-listed suites so a deleted test file cannot hide behind tests added elsewhere | `ab59783` |
+| Final bug-finding pass, M24: removing a member or changing their role revokes their open invitations that the new role no longer allows (audited) | `1508fa4` |
+| M25: no new or moved bookings on an inactive calendar, appointments at most 24 hours; `_` no longer a search wildcard; reports accept "from" without "to" | `fd2c2b3` |
+| Client fixes: stale-tab logo upload carries the workspace pin; stale-pin refusal before role denials; board "Show more" lists reload after edits; calendar retry updates the created calendar; logout reports failure; paging guards; UTC labels on tasks | `012a024` |
 
 ### 24.2 Narrow decisions left open (not invented)
 
@@ -1838,6 +1841,8 @@ Local only, synthetic users, disposable stacks. Handoff, operators and remaining
 Re-run on `9317313` (M22): typecheck and build PASS; unit 257/257; PGlite 232/232; real PostgreSQL 35/35 (two-session revocation races, grant/revoke lock sharing, 20-round burst, no-lock control); Supabase stack 69/69 (CLI audit rollback, two concurrent CLI revocations); acceptance 38/38; bundle scan (113 files) and secret scan of the 12 changed files clean. UI-2 not re-run (no UI change).
 
 Re-run on `ab59783` (M23, invitation page, runner): typecheck and build PASS; unit 258/258; PGlite 232/232; real PostgreSQL 38/38; Supabase stack 70/70 (on `4740681`; invitation page settled on 25/25 loads, median 378 ms, max 540 ms; retry state recovers); acceptance 38/38; bundle scan (113 files) and secret scan of 27 changed files clean.
+
+Re-run on `012a024` (final bug-finding pass, M24, M25, client fixes), each suite on its own: typecheck and build PASS; unit 260/260; PGlite 237/237 (15 files); real PostgreSQL 38/38; Supabase stack 70/70; acceptance 39/39; bundle scan and secret scan of the diff since `2500c80` clean. Details: `docs/LOCAL_COMPLETION_REPORT.md` §7.
 
 ### 24.4 Open items
 
