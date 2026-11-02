@@ -326,11 +326,16 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
       const errors: string[] = [];
       tabA.on("pageerror", (e) => errors.push(e.message));
       await tabA.route("**/api/auth/logout", (r) => r.abort("internetdisconnected"));
-      const dialog = tabA.waitForEvent("dialog");
-      await tabA.getByRole("button", { name: "Sign out" }).click();
-      const shown = await dialog;
-      assert.match(shown.message(), /did not reach the server, so you are still signed in/);
-      await shown.dismiss();
+      // The alert blocks the page, so it is dismissed from the dialog handler rather than after the click.
+      let alerted = "";
+      const dismissed = new Promise<void>((resolve) => tabA.once("dialog", async (d) => {
+        alerted = d.message();
+        await d.dismiss();
+        resolve();
+      }));
+      await tabA.getByRole("button", { name: "Sign out" }).click({ noWaitAfter: true });
+      await dismissed;
+      assert.match(alerted, /did not reach the server, so you are still signed in/);
       assert.doesNotMatch(tabA.url(), /\/login/, "still on the page");
       assert.equal((await appFetch(app, "/api/contacts", { cookie: replay })).status, 200, "the session really is still live");
       await tabA.unroute("**/api/auth/logout");
