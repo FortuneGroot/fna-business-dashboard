@@ -25,6 +25,8 @@ const list = (dir) =>
     .map((f) => `${dir}/${f}`);
 
 // Minimum test counts guard against suites silently shrinking. Raise them when tests are added.
+// Suites that list a directory also have a minimum file count, so a deleted test file cannot be
+// hidden by tests added elsewhere in the same suite.
 const SUITES = {
   unit: {
     label: "unit tests",
@@ -37,18 +39,20 @@ const SUITES = {
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
     ],
     timeoutMs: 60_000,
-    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4.
-    min: 257,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1.
+    min: 258,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
+    minFiles: 13,
     timeoutMs: 60_000,
     min: 232,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
+    minFiles: 3,
     timeoutMs: 240_000,
     // M23 booking races added 3.
     min: 38,
@@ -56,6 +60,7 @@ const SUITES = {
   stack: {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
+    minFiles: 2,
     timeoutMs: 1_200_000,
     // The invitation-page settle and retry check added 1.
     min: 70,
@@ -64,6 +69,7 @@ const SUITES = {
   acceptance: {
     label: "local acceptance rehearsals (fresh disposable stacks: P1–P7 journeys, hardening, backup/restore, scale)",
     files: () => list("tests/acceptance"),
+    minFiles: 5,
     timeoutMs: 1_800_000,
     min: 38,
     // Each file starts its own stack on the same ports, so files run one at a time.
@@ -121,8 +127,9 @@ export function rootCauseFailures(tap) {
  * every root cause is an environment blocker (error starting with "BLOCKED:", not an assertion).
  * A real failure anywhere makes the suite FAIL, whatever else the output contains.
  */
-export function judge({ exitCode, summary, min, tap = "" }) {
+export function judge({ exitCode, summary, min, tap = "", files = Infinity, minFiles = 0 }) {
   const problems = [];
+  if (files < minFiles) problems.push(`only ${files} test files found (minimum ${minFiles})`);
   const keys = ["tests", "pass", "fail", "cancelled", "skipped", "todo"];
   const hasSummary = keys.every((k) => summary[k] !== undefined);
   if (!hasSummary) problems.push("no TAP summary (runner crashed?)");
@@ -145,7 +152,7 @@ export function judge({ exitCode, summary, min, tap = "" }) {
   return { status: "FAIL", problems: real.length ? [...problems, ...real.slice(0, 5)] : problems };
 }
 
-function runSuite(name, { label, files, timeoutMs, min, serial }) {
+function runSuite(name, { label, files, timeoutMs, min, minFiles, serial }) {
   const dir = mkdtempSync(join(tmpdir(), "fna-tests-"));
   const tapFile = join(dir, "results.tap");
   try {
@@ -172,7 +179,7 @@ function runSuite(name, { label, files, timeoutMs, min, serial }) {
       tap = "";
     }
     const summary = parseTapSummary(tap);
-    const verdict = judge({ exitCode: res.status ?? 1, summary, min, tap });
+    const verdict = judge({ exitCode: res.status ?? 1, summary, min, tap, files: files.length, minFiles });
     return { name, label, summary, ...verdict };
   } finally {
     rmSync(dir, { recursive: true, force: true });

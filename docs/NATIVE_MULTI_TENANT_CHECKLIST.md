@@ -103,7 +103,7 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Native onboarding checklist from real records (`onboarding.read`).
 - [x] Settings UI in the existing cards; invite landing page in the existing card design.
 - [x] Browser flow against the real local stack (invite → account → role change → removal → settings → revoked link).
-- [ ] Overrides editor in Settings (API exists).
+- [x] Overrides editor in Settings: per-employee allow/deny for overridable permissions (`team.*` and `integrations.manage` never offered), `team.manage_overrides` required (`7bf31c6`, `tests/acceptance/product.test.ts`).
 - [x] Logout replay closed by M21 (above).
 
 ## P5 native records
@@ -117,7 +117,8 @@ Legend: `[x]` done and verified locally · `[ ]` not done · **BLOCKED** cannot 
 - [x] Cross-workspace references and removed assignees refused (422); other workspaces' ids 404; client workspace ids ignored.
 - [x] UI in the existing pages, cards, tables, and modals; legacy mode renders the original pages (original inbox kept verbatim).
 - [x] Browser flow against the real local stack (contacts, opportunity to Won, calendar and booking with overlap error, task done, inbox note).
-- [ ] Board edits limited to the 8 opportunities shown per column; no delete for appointments/tasks (cancel/complete instead).
+- [x] Board: a stage with more than eight deals loads the rest inline, each editable (`7bf31c6`). Appointments and tasks have no delete by design (spec API table): cancel or complete instead.
+- [x] Simultaneous bookings of one slot: exactly one succeeds and the rest get the overlap error (409), never a deadlock 503 (M23, `tests/db-real/booking-race.test.ts`).
 
 ## P6 platform console
 

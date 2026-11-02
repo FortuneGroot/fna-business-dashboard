@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, test } from "node:test";
 
 const ROOT = join(__dirname, "..");
@@ -40,6 +41,20 @@ describe("scripts/run-tests.mjs fails closed", () => {
     const r = run("pass", 5);
     assert.equal(r.code, 1);
     assert.match(r.summaryLine, /only 1 tests ran \(minimum 5\)/);
+  });
+
+  test("a directory suite with fewer test files than its minimum fails, even when the test count is met", async () => {
+    type Judge = (a: { exitCode: number; summary: Record<string, number>; min: number; files?: number; minFiles?: number }) => { status: string; problems: string[] };
+    const { judge } = (await import(pathToFileURL(RUNNER).href)) as { judge: Judge };
+    const summary = { tests: 40, pass: 40, fail: 0, cancelled: 0, skipped: 0, todo: 0 };
+    assert.equal(judge({ exitCode: 0, summary, min: 38, files: 3, minFiles: 3 }).status, "PASS");
+    const short = judge({ exitCode: 0, summary, min: 38, files: 2, minFiles: 3 });
+    assert.equal(short.status, "FAIL");
+    assert.match(short.problems.join("; "), /only 2 test files found \(minimum 3\)/);
+    const runner = readFileSync(RUNNER, "utf8");
+    for (const dir of ["db", "db-real", "supabase-stack", "acceptance"]) {
+      assert.match(runner, new RegExp(`list\\("tests/${dir}"\\),\\s*minFiles: \\d+,`), `${dir} suite has a file minimum`);
+    }
   });
 
   test("an environment blocker is reported as BLOCKED, never PASS", () => {
