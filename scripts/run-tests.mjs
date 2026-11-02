@@ -39,8 +39,8 @@ const SUITES = {
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
     ],
     timeoutMs: 60_000,
-    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1.
-    min: 258,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1; the api() upload and stale-pin order checks added 2.
+    min: 260,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
@@ -72,7 +72,8 @@ const SUITES = {
     files: () => list("tests/acceptance"),
     minFiles: 5,
     timeoutMs: 1_800_000,
-    min: 38,
+    // The calendar retry check added 1.
+    min: 39,
     // Each file starts its own stack on the same ports, so files run one at a time.
     serial: true,
   },

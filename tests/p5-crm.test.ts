@@ -200,6 +200,33 @@ describe("P5 keyset cursors and search", () => {
     for (const w of searchWords("é,ü(ß)*\"'")) assert.equal(/[,()*"\\%]/.test(w), false, w);
   });
 
+  test("api(): a file upload keeps its own content type and the workspace pin; a dropped connection is an unknown outcome", async () => {
+    const { api } = await import("../src/lib/ui/native-api");
+    const { pinWorkspace } = await import("../src/lib/ui/workspace-pin");
+    const g = globalThis as unknown as { window?: unknown; fetch: typeof fetch };
+    const originalFetch = g.fetch;
+    const hadWindow = "window" in g;
+    g.window = { dispatchEvent: () => true };
+    const seen: Record<string, string>[] = [];
+    try {
+      pinWorkspace("11111111-1111-4111-8111-111111111111");
+      g.fetch = (async (_url: string, init?: RequestInit) => {
+        seen.push(init?.headers as Record<string, string>);
+        return new Response(JSON.stringify({ ok: true, logo: null }), { status: 200 });
+      }) as typeof fetch;
+      await api("/api/settings/logo", { method: "PUT", body: new Blob([new Uint8Array([137, 80])], { type: "image/png" }) });
+      await api("/api/tasks", { method: "POST", body: JSON.stringify({ title: "x" }) });
+      assert.deepEqual(seen[0], { "Content-Type": "image/png", "X-FNA-Workspace": "11111111-1111-4111-8111-111111111111" });
+      assert.deepEqual(seen[1], { "Content-Type": "application/json", "X-FNA-Workspace": "11111111-1111-4111-8111-111111111111" });
+      g.fetch = (async () => { throw new TypeError("network down"); }) as typeof fetch;
+      const dropped = await api("/api/settings/logo", { method: "PUT", body: new Blob([new Uint8Array([1])], { type: "image/png" }) });
+      assert.equal(dropped.body.code, "outcome_unknown");
+    } finally {
+      g.fetch = originalFetch;
+      if (!hadWindow) delete g.window;
+    }
+  });
+
   test("money and time helpers: integer cents, never floating point; UTC display identical on server and client", () => {
     assert.equal(toCents("12.3"), 1230);
     assert.equal(toCents("$1,500.05"), 150005);
@@ -331,6 +358,14 @@ describe("P5 routes (AUTH_PROVIDER=supabase, fake Supabase)", () => {
       const r = await json(await call(ROUTES.find((x) => x[0] === "GET" && x[1] === "/api/contacts")!, c, { headers: pin ? { "x-fna-workspace": pin } : {} }));
       assert.equal(r.status, 200, `pin "${pin}" matching the session (or absent) passes`);
     }
+  });
+
+  test("a stale tab hears that the business changed, not a permission refusal from the new business's role", async () => {
+    const route = ROUTES.find((x) => x[0] === "DELETE")!;
+    const r = await json(await call(route, cookie(employee), { headers: { "x-fna-workspace": WS_B } }));
+    assert.deepEqual([r.status, r.body.code], [409, "workspace_changed"]);
+    const unpinned = await json(await call(route, cookie(employee)));
+    assert.deepEqual([unpinned.status, unpinned.body.code], [403, "forbidden"], "without a stale pin the role still decides");
   });
 
   test("a read-only grant cannot write anything (403 on every write)", async () => {

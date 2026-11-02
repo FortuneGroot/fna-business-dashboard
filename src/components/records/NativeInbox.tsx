@@ -47,6 +47,8 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
   const [thread, setThread] = useState<{ convo: NativeConversation; messages: Message[]; nextCursor: string | null } | null>(null);
   const [note, setNote] = useState("");
   const latest = useRef(0);
+  const latestThread = useRef(0);
+  const [threadLoading, setThreadLoading] = useState(false);
 
   async function load(status: string, cursor?: string | null) {
     const params = new URLSearchParams({ limit: "50" });
@@ -69,7 +71,11 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
   async function open(convo: NativeConversation, cursor?: string | null) {
     const params = new URLSearchParams({ limit: "50" });
     if (cursor) params.set("cursor", cursor);
+    const request = ++latestThread.current;
+    setThreadLoading(true);
     const { body } = await api(`/api/conversations/${convo.id}/messages?${params}`);
+    if (request !== latestThread.current) return;
+    setThreadLoading(false);
     if (!body.ok) {
       setError(failure(body, "Could not open this conversation."));
       return;
@@ -180,7 +186,7 @@ export function NativeInbox({ initial, canWrite }: { initial: ConversationPage; 
               </ul>
             )}
             {thread.nextCursor ? (
-              <Button size="sm" variant="secondary" onClick={() => void open(thread.convo, thread.nextCursor)}>
+              <Button size="sm" variant="secondary" disabled={threadLoading} onClick={() => void open(thread.convo, thread.nextCursor)}>
                 Older messages
               </Button>
             ) : null}

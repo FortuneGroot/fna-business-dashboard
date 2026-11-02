@@ -25,7 +25,11 @@ export async function api(path: string, init?: RequestInit): Promise<{ status: n
     res = await fetch(path, {
       ...init,
       cache: "no-store",
-      headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...workspaceHeaders() },
+      headers: {
+        ...(init?.body && !(init.body instanceof Blob) ? { "Content-Type": "application/json" } : {}),
+        ...(init?.body instanceof Blob ? { "Content-Type": init.body.type } : {}),
+        ...workspaceHeaders(),
+      },
     });
   } catch {
     return { status: 0, body: { error: write ? OUTCOME_UNKNOWN : "Network error. Try again.", code: write ? "outcome_unknown" : "network" } };

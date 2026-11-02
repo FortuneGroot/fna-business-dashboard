@@ -114,8 +114,10 @@ export function PlatformWorkspaces({ initial, grants: initialGrants }: { initial
   const [grants, setGrants] = useState(initialGrants);
   const [revoking, setRevoking] = useState<GrantRow | null>(null);
   const first = useRef(true);
+  const latest = useRef(0);
 
   async function load(cursor: string | null) {
+    const request = ++latest.current;
     setBusy(true);
     setError("");
     const params = new URLSearchParams({ limit: "25" });
@@ -123,6 +125,7 @@ export function PlatformWorkspaces({ initial, grants: initialGrants }: { initial
     if (status) params.set("status", status);
     if (cursor) params.set("cursor", cursor);
     const { status: code, body } = await api(`/api/platform/workspaces?${params}`);
+    if (request !== latest.current) return;
     setBusy(false);
     if (code !== 200) {
       setError(failure(body, "Workspaces could not be loaded."));

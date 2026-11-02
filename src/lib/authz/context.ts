@@ -107,10 +107,11 @@ export async function requireApiContext(req: NextRequest, requirement: ContextRe
     const error = applyPendingCookies(denialResponse(denial), pending);
     return { ctx, supabase, pending, error: expireAuthCookies(error, req.cookies.getAll().map((c) => c.name)) };
   }
-  if (denial) return { ctx, supabase, pending, error: applyPendingCookies(denialResponse(denial), pending) };
+  // Before other denials: a stale tab is told it switched, not judged by the newly active business's role.
   if (!requirement.allowNoWorkspace && workspaceChanged(req, ctx)) {
     return { ctx, supabase, pending, error: applyPendingCookies(workspaceChangedResponse(), pending) };
   }
+  if (denial) return { ctx, supabase, pending, error: applyPendingCookies(denialResponse(denial), pending) };
   return { ctx, supabase, pending, error: null };
 }
 

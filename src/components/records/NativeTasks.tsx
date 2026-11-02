@@ -156,7 +156,7 @@ export function NativeTasks({ initial, counts, canWrite }: { initial: TaskPage; 
               {page.items.map((t) => (
                 <li key={t.id} className="muted">
                   {t.title} · {STATUS_LABEL[t.status]}
-                  {t.dueAt ? ` · due ${when(t.dueAt)}` : ` · ${when(t.updatedAt)}`}
+                  {t.dueAt ? ` · due ${when(t.dueAt)} UTC` : ` · ${when(t.updatedAt)} UTC`}
                   {t.assignedName ? ` · ${t.assignedName}` : ""}
                   {t.contactName ? ` · ${t.contactName}` : ""}
                   {canWrite ? (

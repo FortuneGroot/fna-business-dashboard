@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Card, DataTable, EmptyState, Modal } from "@/components/ui";
 import { api, failure } from "@/lib/ui/native-api";
 
@@ -67,11 +67,10 @@ function LogoField({ canEdit }: { canEdit: boolean }) {
     if (!file) return;
     setBusy(true);
     setMessage(null);
-    const res = await fetch("/api/settings/logo", { method: "PUT", headers: { "Content-Type": file.type }, body: file });
-    const body = await res.json().catch(() => ({ ok: false }));
+    const { body } = await api("/api/settings/logo", { method: "PUT", body: file });
     setBusy(false);
     if (body.ok) {
-      setUrl(body.logo?.url ?? null);
+      setUrl((body.logo as { url: string } | null)?.url ?? null);
       setMessage({ tone: "ok", text: "Logo updated." });
     } else setMessage({ tone: "error", text: failure(body, "Could not upload the logo.") });
   }
@@ -757,15 +756,26 @@ export function NativeAudit() {
   const [items, setItems] = useState<AuditItem[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const inFlight = useRef(false);
 
   const load = useCallback(async (after: string | null) => {
-    const { body } = await api(`/api/audit?limit=10${after ? `&cursor=${encodeURIComponent(after)}` : ""}`);
-    if (!body.ok) {
-      setError(failure(body, "Could not load recent changes."));
-      return;
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setLoading(true);
+    try {
+      const { body } = await api(`/api/audit?limit=10${after ? `&cursor=${encodeURIComponent(after)}` : ""}`);
+      if (!body.ok) {
+        setError(failure(body, "Could not load recent changes."));
+        return;
+      }
+      setError("");
+      setItems((prev) => [...(after && prev ? prev : []), ...(body.items as AuditItem[])]);
+      setCursor((body.nextCursor as string | null) ?? null);
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
     }
-    setItems((prev) => [...(after && prev ? prev : []), ...(body.items as AuditItem[])]);
-    setCursor((body.nextCursor as string | null) ?? null);
   }, []);
 
   useEffect(() => {
@@ -787,8 +797,8 @@ export function NativeAudit() {
         />
       ) : null}
       {cursor ? (
-        <button type="button" className="btn secondary sm" style={{ marginTop: "0.75rem" }} onClick={() => void load(cursor)}>
-          Show more
+        <button type="button" className="btn secondary sm" style={{ marginTop: "0.75rem" }} disabled={loading} onClick={() => void load(cursor)}>
+          {loading ? "Loading…" : "Show more"}
         </button>
       ) : null}
     </Card>

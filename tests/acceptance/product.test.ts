@@ -252,6 +252,57 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
       assert.equal(await page.getByRole("button", { name: "Show more" }).count(), 0, "all loaded");
       const edits = await page.getByRole("button", { name: "Edit opportunity" }).count();
       assert.ok(edits >= 20, `every card is editable (${edits})`);
+
+      // Editing a card loaded by "Show more" updates that list at once; it used to keep the old row.
+      // Moving a deal out of the stage leaves the top eight as they are, so the list stays open.
+      const dialog = page.getByRole("dialog");
+      await page.locator("li", { hasText: /^Deal 02 ·/ }).getByRole("button", { name: "Edit opportunity" }).click();
+      const other = pipeline.body.pipeline.stages[1] as { id: string };
+      await dialog.locator("select").first().selectOption(other.id);
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await page.locator("li", { hasText: /^Deal 02 ·/ }).waitFor({ state: "detached" });
+      await page.waitForLoadState("networkidle");
+      const after = (await page.locator("li", { hasText: /^Deal \d\d ·/ }).allTextContents()).map((t) => /Deal \d\d/.exec(t)![0]);
+      assert.equal(after.length, 11, "the other eleven stay listed");
+      assert.equal(new Set(after).size, after.length, "no duplicates after the move");
+      assert.equal(after.includes("Deal 02"), false, "the moved deal left this stage's list");
+      // A rename shows at once (a renamed deal can also join the top eight later, which resets the list).
+      await page.locator("li", { hasText: /^Deal 01 ·/ }).getByRole("button", { name: "Edit opportunity" }).click();
+      await dialog.getByRole("textbox", { name: "Title" }).fill("Deal 01 renamed");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await page.locator("li", { hasText: /^Deal 01 ·/ }).waitFor({ state: "detached" });
+      assert.equal((await db.query("select 1 from public.opportunities where workspace_id = $1 and title = 'Deal 01 renamed'", [ws])).rowCount, 1);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test("calendar: when availability fails after the calendar is created, Try again saves that calendar instead of a second one", async () => {
+    const { browser, page, base } = await browserAs(owner);
+    try {
+      await page.goto(`${base}/calendar`);
+      const saves: string[] = [];
+      await page.route("**/api/calendars/*/availability", (route) => {
+        saves.push(new URL(route.request().url()).pathname);
+        return saves.length === 1
+          ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Availability is temporarily unavailable.", code: "unavailable" }) })
+          : route.continue();
+      });
+      await page.getByRole("button", { name: "Create calendar" }).first().click();
+      const dialog = page.getByRole("dialog");
+      await dialog.locator("#cal-name").fill("Retry chairs");
+      await dialog.getByRole("button", { name: "Create calendar" }).click();
+      // The first calendar changes the page layout; the error must stay on screen (it once vanished).
+      await dialog.getByRole("alert").filter({ hasText: "Availability is temporarily unavailable." }).waitFor();
+      await page.waitForLoadState("networkidle");
+      assert.equal(await dialog.getByRole("alert").count(), 1, "the error is still shown");
+      await dialog.getByRole("button", { name: "Create calendar" }).click();
+      await dialog.waitFor({ state: "detached" });
+      const cals = await db.query<{ id: string }>(
+        "select id from public.calendars where workspace_id = $1 and name = 'Retry chairs'", [ws]);
+      assert.equal(cals.rows.length, 1, "exactly one calendar");
+      assert.deepEqual(saves, [`/api/calendars/${cals.rows[0].id}/availability`, `/api/calendars/${cals.rows[0].id}/availability`],
+        "both availability saves went to the one calendar");
     } finally {
       await browser.close();
     }

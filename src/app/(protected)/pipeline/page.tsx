@@ -90,7 +90,7 @@ export default async function PipelinePage() {
                   <p className="muted" style={{ margin: 0 }}>
                     {syncColumnEmpty()}
                   </p>
-                ) : col.items.length === 0 ? (
+                ) : col.items.length === 0 && !(native && col.count > 0) ? (
                   <EmptyState title="No opportunities yet" />
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
@@ -109,6 +109,7 @@ export default async function PipelinePage() {
                     ))}
                     {native && col.count > Math.min(col.items.length, 8) ? (
                       <StageMore
+                        key={col.items.slice(0, 8).map((o) => o.externalOpportunityId).join()}
                         stageId={col.key}
                         hidden={col.count - Math.min(col.items.length, 8)}
                         shownIds={col.items.slice(0, 8).map((o) => o.externalOpportunityId)}

@@ -17,6 +17,7 @@ const run = Date.now().toString(36);
 const email = (who: string) => `${who}-${run}@example.test`;
 const NORTH = "North Shore Dental (synthetic)";
 const SOUTH = "South Bay Movers (synthetic)";
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 type R = Awaited<ReturnType<typeof appFetch>>;
 
@@ -202,6 +203,7 @@ describe("hardening rehearsal: two synthetic businesses, one owner, many tabs", 
         await tabA.getByRole("link", { name: "Tasks" }).first().click();
         await tabA.waitForURL(/\/tasks$/);
         await tabA.getByRole("alert").filter({ hasText: "switched to a different business in another tab" }).first().waitFor();
+
         await tabA.reload();
         await tabA.waitForLoadState("networkidle");
         assert.equal(await tabA.getByRole("alert").filter({ hasText: "another tab" }).count(), 0, "a reload clears the warning");
@@ -218,6 +220,28 @@ describe("hardening rehearsal: two synthetic businesses, one owner, many tabs", 
         await tabB.goForward();
         await tabB.waitForLoadState("networkidle");
         await tabB.screenshot({ path: join(shots, "tab-b-forward.png"), fullPage: true });
+
+        // A Settings page left open while another tab switches refuses a logo upload like every other
+        // write (the upload once skipped the pin and wrote to the newly active business).
+        const logos = async () => (await db.query<{ n: number }>(
+          "select count(*)::int n from storage.objects where bucket_id = 'workspace-assets' and (name like $1 or name like $2)",
+          [`${wsN}/%`, `${wsS}/%`])).rows[0].n;
+        await tabA.goto(`${base}/settings`);
+        await tabA.locator("#biz-logo").waitFor();
+        const logosBefore = await logos();
+        await tabB.getByLabel("Business").selectOption({ label: NORTH });
+        // Tab B may already be on /dashboard, so wait for the switch itself rather than the URL.
+        const switched = async () => (await db.query(
+          "select 1 from public.user_active_workspace where user_id = $1 and workspace_id = $2", [owner.id, wsN])).rowCount === 1;
+        for (let i = 0; i < 100 && !(await switched()); i++) await new Promise((r) => setTimeout(r, 100));
+        assert.ok(await switched(), "tab B's switch reached the database");
+        await tabB.waitForLoadState("networkidle");
+        await tabA.locator("#biz-logo").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: Buffer.from(ONE_PIXEL_PNG, "base64") });
+        const logoField = tabA.getByRole("group", { name: "Business logo" });
+        await logoField.getByRole("alert").filter({ hasText: "Reload this page to continue" }).waitFor();
+        assert.equal(await logoField.getByText("Logo updated.").count(), 0);
+        assert.equal(await tabA.locator("#biz-logo").isDisabled(), false, "the upload control is usable again after the refusal");
+        assert.equal(await logos(), logosBefore, "no logo was written to either business");
         console.log(`packet 1 screenshots: ${shots}`);
       } catch (err) {
         let n = 0;

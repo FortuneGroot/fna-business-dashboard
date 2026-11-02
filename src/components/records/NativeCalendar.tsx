@@ -68,12 +68,14 @@ export function CalendarEditor({ calendarId, label }: { calendarId?: string; lab
   const [rules, setRules] = useState<Rule[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const members = useMembers(open);
 
   async function show() {
     setOpen(true);
     setError("");
     if (!calendarId) {
+      setCreatedId(null);
       setLoaded(null);
       setName("");
       setSlug("");
@@ -106,8 +108,9 @@ export function CalendarEditor({ calendarId, label }: { calendarId?: string; lab
     e.preventDefault();
     setBusy(true);
     const fields = { name, slug, timezone, durationMinutes: Number(duration), active, memberUserIds: memberIds };
-    const { body } = await api(calendarId ? `/api/calendars/${calendarId}` : "/api/calendars", {
-      method: calendarId ? "PATCH" : "POST",
+    const existing = calendarId ?? createdId;
+    const { body } = await api(existing ? `/api/calendars/${existing}` : "/api/calendars", {
+      method: existing ? "PATCH" : "POST",
       body: JSON.stringify(fields),
     });
     if (!body.ok) {
@@ -116,13 +119,20 @@ export function CalendarEditor({ calendarId, label }: { calendarId?: string; lab
       return;
     }
     const id = (body.calendar as Calendar).id;
+    if (!calendarId) setCreatedId(id);
     const avail = await api(`/api/calendars/${id}/availability`, { method: "PUT", body: JSON.stringify({ rules }) });
     setBusy(false);
     if (!avail.body.ok) {
+      // No refresh while the dialog is open: a first calendar swaps the page layout, which would
+      // unmount this editor and hide the error.
       setError(failure(avail.body, "The calendar was saved, but its availability was not."));
-      router.refresh();
       return;
     }
+    setOpen(false);
+    router.refresh();
+  }
+
+  function close() {
     setOpen(false);
     router.refresh();
   }
@@ -134,7 +144,7 @@ export function CalendarEditor({ calendarId, label }: { calendarId?: string; lab
       <Button size="sm" variant="secondary" onClick={() => void show()}>
         {label}
       </Button>
-      <Modal open={open} onClose={() => setOpen(false)} title={calendarId ? `Edit ${loaded?.name ?? "calendar"}` : "Create calendar"}>
+      <Modal open={open} onClose={close} title={calendarId ? `Edit ${loaded?.name ?? "calendar"}` : "Create calendar"}>
         {error ? <div className="banner error" role="alert">{error}</div> : null}
         {calendarId && !loaded ? null : (
           <form onSubmit={save} aria-label="Calendar">

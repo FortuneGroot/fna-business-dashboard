@@ -37,7 +37,11 @@ export function TopBar({
   const title = TITLES[path] ?? "Business Dashboard";
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    const res = await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+    if (!res || res.status >= 500) {
+      window.alert("Sign-out did not reach the server, so you are still signed in. Check your connection and try again.");
+      return;
+    }
     router.replace("/login");
     router.refresh();
   }

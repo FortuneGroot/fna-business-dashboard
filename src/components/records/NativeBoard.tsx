@@ -96,7 +96,12 @@ export function AddOpportunity({ stages }: { stages: BoardStage[] }) {
   );
 }
 
-export function EditOpportunity({ id, stages, canDelete }: { id: string; stages: BoardStage[]; canDelete: boolean }) {
+export function EditOpportunity({ id, stages, canDelete, onChanged }: {
+  id: string;
+  stages: BoardStage[];
+  canDelete: boolean;
+  onChanged?: () => void;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [opp, setOpp] = useState<Opportunity | null>(null);
@@ -155,6 +160,7 @@ export function EditOpportunity({ id, stages, canDelete }: { id: string; stages:
     }
     setBusy(false);
     setOpen(false);
+    onChanged?.();
     router.refresh();
   }
 
@@ -166,6 +172,7 @@ export function EditOpportunity({ id, stages, canDelete }: { id: string; stages:
       return;
     }
     setOpen(false);
+    onChanged?.();
     router.refresh();
   }
 
@@ -253,7 +260,7 @@ export function StageMore({
         <li key={o.id} className="muted">
           {o.title} · {dollars(o.valueCents)}
           {o.contactName ? ` · ${o.contactName}` : ""}
-          {canEdit ? <EditOpportunity id={o.id} stages={stages} canDelete={canDelete} /> : null}
+          {canEdit ? <EditOpportunity id={o.id} stages={stages} canDelete={canDelete} onChanged={() => void load(null)} /> : null}
         </li>
       ))}
       {error ? <li className="muted" role="alert">{error}</li> : null}
