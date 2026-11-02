@@ -1,7 +1,7 @@
 # Local completion report — native multi-tenant
 
-Branch `feat/native-multi-tenant`. Final code `012a024` after the final bug-finding pass (§7), which
-reviewed `2500c80`; the commit that updates this report changes documentation only. Local work only: nothing was pushed or deployed, no staging or production
+Branch `feat/native-multi-tenant`. Final code `e18d829` after review round 3 (§8), which reviewed
+`1f792df`; the commit that updates this report changes documentation only. Local work only: nothing was pushed or deployed, no staging or production
 project was touched, no invitation or message was sent, and no secret was printed.
 
 Local completion is not independent review, staging validation or production approval. Those
@@ -23,30 +23,30 @@ remain separate gates (§6).
 
 - Every endpoint in the spec's API table exists under `src/app/api`. Every handler is behind `nativeApi` (a named workspace permission), `platformApi` (platform-admin row + AAL2 session, with a fresh session check for sensitive actions), `readApi` (a named permission), or its own explicit check (auth routes, the public invitation preview, platform logo). Team changes add a second check for the specific `team.*` permission, and the database functions enforce authority and the last-owner rule independently.
 - `docs/NATIVE_MULTI_TENANT_CHECKLIST.md`: every local item is ticked with its evidence. The unticked items are staging, cutover and T6/M15 gates.
-- Migration manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — two legacy files, M1–M14, M16–M25, never M15. A PGlite test fails if the table and `supabase/migrations/` disagree. Rollback: `supabase/rollback/20261101_native_multi_tenant.down.sql` (covers through M25).
+- Migration manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — two legacy files, M1–M14, M16–M26, never M15. A PGlite test fails if the table and `supabase/migrations/` disagree. Rollback: `supabase/rollback/20261101_native_multi_tenant.down.sql` (covers through M26).
 
-## 3. Results by environment (final code `012a024`, each suite run on its own)
+## 3. Results by environment (code `592d171`; acceptance on `e18d829`, which changes one test; each suite run on its own)
 
 | Check | Environment | Result |
 | --- | --- | --- |
 | Typecheck / build | Next.js 15.5.25 | PASS / PASS |
-| Unit | Node 24.20.0 | PASS 260/260 |
-| Database | PGlite + Supabase shim | PASS 237/237 (15 files) |
-| Concurrency | Real local PostgreSQL 18.6, independent sessions | PASS 38/38 (3 files) |
-| Supabase stack | Disposable real local Supabase (M1–M14, M16–M25) + built app + Chromium | PASS 70/70 |
+| Unit | Node 24.20.0 | PASS 276/276 |
+| Database | PGlite + Supabase shim | PASS 250/250 (16 files) |
+| Concurrency | Real local PostgreSQL 18.6, independent sessions | PASS 64/64 (4 files) |
+| Supabase stack | Disposable real local Supabase (M1–M14, M16–M26) + built app + Chromium | PASS 71/71 |
 | Acceptance | Fresh disposable stacks + built app + Chromium, two synthetic businesses, owner/admin/employee/platform roles | PASS 39/39 |
 | UI-2 visual | Disposable stack + Chromium | 20/20 routes, sidebar 0.00% (on `813367e`; later UI changes covered by acceptance, not re-measured) |
-| Bundle scan / secret scan | Client chunks / diff since `2500c80` | Clean (only hit: the login page's setup hint naming `AUTH_SECRET`, no value) |
+| Bundle scan / secret scan | 112 client chunks / diff since `1f792df` | Clean |
 | Staging, production | — | NOT RUN (no staging project; out of scope) |
 
-Suites that share Docker ports or the build directory were run one at a time. No failures, cancellations or timeouts in the final runs. All disposable containers, volumes and test servers were removed.
+Suites that share Docker ports or the build directory were run one at a time. The first final acceptance run on `592d171` failed one test (38/39): the new sign-out-failure check deadlocked on its own alert (test bug, fixed in `e18d829`); the rerun passed 39/39. An earlier stack run found the provisioning race fixed in `75a531c`. All disposable containers, volumes and test servers were removed.
 
 ## 4. Unresolved items
 
 - **Invitation-page stall**: seen once, never reproduced since; now bounded by a timeout and retry. Reported as unresolved, not fixed.
-- **D-A (decision)**: a platform admin who has used support access recorded in a workspace audit log cannot be revoked (the audit row references their grant). The attempt fails and changes nothing. Options: keep grants after removal, or deactivate admins instead of deleting them. Either is a schema change.
+- **D-A resolved in M26**: revoking a platform admin with support history ends their grants and keeps grant, note, message and audit attribution; deleting such a person's auth account is refused (ban it instead; checklist §1).
 - **MFA recovery policy (decision)**: who may run `remove-mfa` and how identity is confirmed.
-- **Hardening suggestion for the reviewer**: `private.is_platform_admin()` honours the session setting `app.platform_allow_aal1`. Not exploitable through PostgREST and never set in the repository, but removing it would close the path for good.
+- **Resolved in M26**: `private.is_platform_admin()` no longer honours the session setting `app.platform_allow_aal1`; platform authority needs an AAL2, live session with no override (tested in `tests/db/integrity-round3.test.ts`).
 
 ## 5. Readiness
 
@@ -56,9 +56,9 @@ Suites that share Docker ports or the build directory were run one at a time. No
 
 ## 6. What George needs to do, in order
 
-1. Have the branch reviewed independently (include M22–M25, the invitation page, and the §7 client fixes).
-2. Decide D-A and the MFA-recovery policy (two short decisions; nothing else is waiting on code).
-3. Create the staging Supabase project and run `docs/STAGING_CUTOVER_CHECKLIST.md` §1 (manifest through M25, bootstrap yourself, MFA, backup/restore and rollback rehearsal, UI-2, bundle scan), then sign off.
+1. Have the branch reviewed independently (include M22–M26, the invitation page, the logo redesign, and the §7 and §8 fixes).
+2. Decide the MFA-recovery policy (nothing else is waiting on code).
+3. Create the staging Supabase project and run `docs/STAGING_CUTOVER_CHECKLIST.md` §1 (manifest through M26, bootstrap yourself, MFA, backup/restore and rollback rehearsal, UI-2, bundle scan), then sign off.
 4. Before production: paid plan, verified backup, your explicit approval, then checklist §2.
 
 ## 7. Final bug-finding pass (reviewed `2500c80`, final `012a024`)
@@ -88,3 +88,20 @@ Not reproduced or not changed:
 - **Booking 503:** fixed in Goal 1 (M23) and re-verified on real PostgreSQL in this pass.
 - **Unconfirmed reviewer notes** (listed in `docs/RELEASE_HANDOFF.md` §5) were left for the independent review rather than changed without a reproduction.
 - **Coverage gaps:** browser offline mode is simulated with aborted requests rather than a true offline toggle; back/forward is covered in one journey.
+
+## 8. Review round 3 (reviewed `1f792df`, final `e18d829`)
+
+The reviewers' findings came from static inspection; each was checked against `1f792df` before any change. "Reproduced" means a test failed on the old code.
+
+| Finding | Disposition | Evidence |
+| --- | --- | --- |
+| A. Invitations outliving issuer authority | Member removal and demotion were already protected (M24; the races passed before M26). Grant-issued and bootstrap invitations were confirmed and fixed in M26 (issuer authority checked under lock at acceptance; preview reports revoked) | Real PostgreSQL `tests/db-real/integrity.test.ts`: owner removed, admin demoted, revoked invitation, grant revoked, bootstrap lapse and recovery, acceptance vs removal/demotion/grant revocation in both orders |
+| B. Platform-admin removal blocked by grant FK | Reproduced (23503) and fixed in M26: grants ended and audited, attribution kept, FK on `auth.users`, last-admin lock kept | Real PostgreSQL: read grant; write grant with note and message; already-ended grants untouched; last admin still protected |
+| C. Stale-tab logo | Fixed earlier (`012a024`); remaining raw fetches (support, legacy inbox) now send the pin and explain a switch | Acceptance stale-tab test (browser); support/inbox by inspection |
+| D. Inactive calendars | Race reproduced and fixed (calendar share-locked); create/reschedule/re-book refused, cancel and history allowed | Real PostgreSQL deactivation-first and booking-first races |
+| E. 24-hour limit | Already protected by M25 on the stored row; regression tests added | Two-session edits, exactly 24 h, +1 s, existing longer row |
+| F. Logo PUT/PUT, PUT/DELETE | Redesigned: unique object per upload, `set_workspace_logo` swap under row lock, previous removed after; platform writes recorded | Unit (fake), stack (concurrent HTTP, missing object, unrecorded upload), acceptance |
+| G–P | Fixed earlier (`012a024`, `fd2c2b3`); tests added this round for I (stage older than newest 500), J (zones and day boundaries), K (`_`, `%`, punctuation), L (range defaults and boundaries), P (logout failure in a browser) | `tests/p8-integrity.test.ts`, acceptance scale and product |
+| Provisioning race (found this round) | Reproduced (64 of 150 simultaneous calls) and fixed with a per-key advisory lock | Real PostgreSQL burst test |
+
+Unconfirmed concerns: platform `hasLogo`/`logo_path` fixed; deleted-contact names fixed, live bookings kept by design (product decision); session-expiry and serialization mapping fixed; upload buffering fixed; lost acceptance response fixed (idempotent retry, page guidance); contact-detail race fixed; stale-tab support/config fixed; calendar card order fixed; legacy inbox empty state fixed; audit TRUNCATE fixed; `app.platform_allow_aal1` removed; dead sessions no longer read workspaces or profile (Realtime disabled, untested); removed-member profiles visible by design (REL-5); email ownership: new accounts prove it by token possession, signed-in acceptance now needs a confirmed email.

@@ -36,7 +36,7 @@ Values are never stored in the repository. Set by name in the hosting provider.
 
 ## 3. Migrations, history, backup, restore, rollback
 
-- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M25. **Never M15** (destructive legacy drop; not written).
+- Required manifest: `docs/STAGING_CUTOVER_CHECKLIST.md` §5 — the two legacy files, M1–M14, M16–M26. **Never M15** (destructive legacy drop; not written).
 - History reconciliation (renamed legacy versions): `docs/MIGRATION_VERSION_MAPPING.md`.
 - Backup and restore: `docs/BACKUP_RESTORE_REHEARSAL.md` (local rehearsal and what a restore does not bring back: passwords, sessions, MFA factors, integration secrets).
 - Rollback, application: set `AUTH_PROVIDER=legacy` and redeploy the previous build (spec §11). Legacy credentials stay in place until T6.
@@ -61,18 +61,18 @@ Non-local runs of the CLI need `https`, an interactive terminal, and the typed p
 
 ## 5. Results by environment (final commit)
 
-Final code `012a024` (branch `feat/native-multi-tenant`); later commits change documentation only. Every row below was run on `012a024`, one suite at a time. Earlier rounds are in spec §24.
+Final code `e18d829` (branch `feat/native-multi-tenant`); application and database code are identical to `592d171`, and `e18d829` changes one acceptance test. Unit, database, concurrency and stack ran on `592d171`; acceptance ran on `e18d829`; one suite at a time. Earlier rounds are in spec §24.
 
 | Check | Environment | Result |
 | --- | --- | --- |
 | Typecheck / build | Next.js 15.5.25 | PASS / PASS |
-| Unit | Node 24.20.0 | PASS 260/260 |
-| Database (PGlite) | PGlite + shim | PASS 237/237 (15 files) |
-| Concurrency | Real local PostgreSQL 18.6 | PASS 38/38 (3 files; includes the M23 booking races and the no-lock control) |
-| Supabase stack | Real local Supabase (disposable, M1–M14 and M16–M25) + built app + Chromium | PASS 70/70 |
+| Unit | Node 24.20.0 | PASS 276/276 |
+| Database (PGlite) | PGlite + shim | PASS 250/250 (16 files) |
+| Concurrency | Real local PostgreSQL 18.6 | PASS 64/64 (4 files; M23 booking races and no-lock control, M26 invitation/admin/booking/provisioning races) |
+| Supabase stack | Real local Supabase (disposable, M1–M14 and M16–M26) + built app + Chromium | PASS 71/71 |
 | Acceptance | Fresh disposable stacks + built app + Chromium | PASS 39/39 |
 | UI-2 visual | disposable stack + Chromium | 20/20 routes 200, sidebar 0.00% (on `813367e`; later UI changes are covered by the acceptance suite, not re-measured) |
-| Bundle scan (client chunks) / secret scan (diff since `2500c80`) | — | clean (the only hit is the login page's setup hint naming `AUTH_SECRET`, no value) |
+| Bundle scan (112 client chunks) / secret scan (diff since `1f792df`) | — | clean |
 | Staging | — | NOT RUN (no staging project) |
 | Production | — | NOT RUN (out of scope) |
 
@@ -82,16 +82,16 @@ Journeys covered with real browsers and denial paths: first owner setup and onbo
 
 - **Invitation-page stall (intermittent, not reproduced).** Once, in an earlier stack run, the signed-out invitation page sat on "Checking your invitation…" for 20 s. A 25-load reproduction with request and console diagnostics now runs in the stack suite and settled every time (median 378 ms, max 540 ms). The page can no longer wait forever: requests time out after 15 s and show "Could not check this invitation" with Try again, and a network or server failure is no longer reported as an invalid link.
 - **Booking 503 (fixed, M23).** Root cause: deadlocks between simultaneous inserts of the same slot. Reproduced on real PostgreSQL (42 deadlocks in 480 attempts before; 0 after).
-- **Hardening suggestion for the independent review.** `private.is_platform_admin()` accepts AAL1 when the session setting `app.platform_allow_aal1 = 'on'`. Nothing in the repository sets it (a unit test forbids it) and clients reach the database only through PostgREST, which cannot set it, so it is not exploitable today; but any future path that gives a user role raw SQL would bypass MFA. Removing the branch is a schema change and was left for review.
-- **D-A** (below) remains a decision.
+- **Resolved in M26.** `private.is_platform_admin()` no longer accepts AAL1 under the session setting `app.platform_allow_aal1`; the branch is removed, so no path (including raw SQL as a user role) bypasses MFA for platform authority.
+- **D-A resolved in M26.** Removing a platform admin who used support access no longer fails on the grant foreign key: `platform_admin_revoke` ends their open grants (audited per workspace) and keeps every grant, note, message and audit row attributed; the grant FK now references `auth.users`. Deleting that person's auth account is refused instead (ban it; see the checklist).
+- **Review round 3 (reviewed `1f792df`, fixed in `47f8285`, `75a531c`, `592d171`).** Reproduced before fixing where executable (12 real-PostgreSQL and 12 PGlite tests failed without M26): invitations surviving the loss of a platform grant or of bootstrap admin status; acceptance without a confirmed email; a lost acceptance response leaving a retry refused; platform-admin removal blocked by grant history; bookings racing calendar deactivation; logo replace/delete races across separate requests and `logo_path` not following platform writes; unbounded upload buffering; TRUNCATE of audit tables; the AAL1 setting; dead sessions still reading their workspaces and profile; deleted contacts' names; session-expiry and serialization errors shown as 503; stale contact detail; stale-tab support and legacy inbox reads; calendar card order; and simultaneous provisioning of one key failing with 409 (found by the stack suite, 64 of 150 calls on real PostgreSQL). Dispositions of every finding: `docs/LOCAL_COMPLETION_REPORT.md` §8.
 - **Final bug-finding pass (reviewed `2500c80`, fixed in `1508fa4`, `fd2c2b3`, `012a024`).** Fixed, each with a regression test that fails without the fix: invitations outliving their inviter's authority (M24, high); a logo upload from a stale tab writing to the newly active business (high); bookings on an inactive calendar and unbounded appointment length (M25, medium); a calendar retry creating a duplicate, and its error vanishing for a first calendar (medium); board edits after "Show more" leaving stale rows, and a stage with only hidden cards shown as empty (medium); logout reporting success when the request failed (medium); search treating `_` as a wildcard, and report dates with only "from" refused as backwards (low); stale tabs refused as "no permission" rather than "switched business" (low); overlapping audit, inbox and platform list requests, and task times without a UTC label (low). Details in `docs/LOCAL_COMPLETION_REPORT.md` §7.
-- **Unconfirmed reviewer notes, not changed** (low or design questions for the independent review): two simultaneous logo uploads with different file types can leave an orphaned object; an upload can still be refused with "no permission" if a switch lands mid-request (nothing is written); `service_role` can truncate the audit table; removed members' profile names stay visible to former colleagues; invitation acceptance does not require a confirmed email; soft-deleting a contact leaves their future appointments booked; PostgREST JWT-expiry (PGRST301) and serialization (40001) errors show as 503 instead of "sign in again" / "try again".
+- **Still open by design (for the independent review):** removed members' profile names stay visible to former colleagues for historical attribution (spec REL-5); soft-deleting a contact leaves their future appointments booked (staff cancel explicitly; product decision); an upload can still be refused with "no permission" if a switch lands mid-request (nothing is written); Realtime is disabled, so its session revocation is untested.
 
 ## 6. Remaining actions (George / external / staging / production only)
 
 1. Create the staging Supabase project (D4) and record its ref outside the repository.
 2. Decide the MFA-recovery policy: who may run `remove-mfa` and how identity is confirmed; optionally keep a second platform admin.
-   - D-A: how a platform admin who has used support access should be removed. Today the workspace audit log's reference to their grant blocks revocation. Options: keep grants (and their audit references) when an admin is removed, or mark the admin inactive instead of deleting the row. Either is a schema change, so it was left for this decision.
 3. Paid Supabase plan before production (D5).
 4. Confirm whether any live deployment still sets `CLIENT_CONFIG_PATH` or `GHL_PIPELINE_ID`.
 5. Disable the GHL webhook before promoting a P7 build (or keep `release` @ `9c189f8`).
