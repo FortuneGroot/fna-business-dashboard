@@ -62,3 +62,17 @@ export function calendarAppointments(
   );
   return items.length ? items : [...appointments];
 }
+
+/** Upcoming (not yet ended) bookings first, soonest first; then past bookings, most recent first. */
+export function soonestFirst<T extends { start?: string; end?: string }>(items: readonly T[], now: number): T[] {
+  const time = (iso?: string) => (iso ? Date.parse(iso) : Number.NaN);
+  const upcoming = (a: T) => !(time(a.end ?? a.start) < now);
+  return [...items].sort((a, b) => {
+    const ua = upcoming(a);
+    const ub = upcoming(b);
+    if (ua !== ub) return ua ? -1 : 1;
+    const ta = time(a.start) || 0;
+    const tb = time(b.start) || 0;
+    return ua ? ta - tb : tb - ta;
+  });
+}

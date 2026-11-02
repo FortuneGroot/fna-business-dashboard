@@ -8,12 +8,15 @@ import {
   type ApiContext,
 } from "@/lib/authz/context";
 import { readJsonObject } from "@/lib/http/json-body";
+import { readLimitedBody } from "@/lib/http/limited-body";
+import { sniffLogo } from "@/lib/native/logo";
 import {
   claimPlatformStorageChange,
   completePlatformStorageChange,
   LOGO_EXTENSIONS,
   platformDeleteWorkspaceLogo,
   platformWriteWorkspaceLogo,
+  workspaceLogoObject,
   workspaceLogoPath,
   type CompletionResult,
   type LogoExtension,
@@ -76,14 +79,30 @@ function completionResponse(done: CompletionResult, requestId: number, objectPat
   return NextResponse.json({ ok: true, requestId, outcome: "succeeded", ...(objectPath ? { objectPath } : {}) });
 }
 
+/** Records the logo through rpc set_workspace_logo with the caller's JWT; null when it worked. */
+async function recordLogo(api: ApiContext, path: string | null, onlyIf?: string): Promise<NextResponse | null> {
+  const { error } = await api.supabase!.rpc("set_workspace_logo", { p_path: path, ...(onlyIf ? { p_only_if: onlyIf } : {}) });
+  if (!error) return null;
+  if (error.message === "logo_missing") {
+    return json(409, "The logo was changed at the same moment, so this upload was not made the logo. Try again.", "conflict");
+  }
+  if (error.message === "forbidden") return denialResponse("forbidden");
+  return unavailableResponse();
+}
+
+/**
+ * Runs one audited Storage operation on `path`. `beforePerform` runs while the claim is held (so no
+ * other platform change to the same object can start); a response from it stops the operation, which
+ * is then recorded as not performed. `afterSuccess` runs only when the database confirmed the change.
+ */
 async function audited(
   { api, reply }: Authorized,
   operation: "upsert" | "delete",
-  ext: LogoExtension,
-  perform: (workspaceId: string, operation: PlatformOperation) => Promise<{ returned: boolean }>
+  path: string,
+  perform: (workspaceId: string, operation: PlatformOperation) => Promise<{ returned: boolean }>,
+  hooks: { beforePerform?: () => Promise<NextResponse | null>; afterSuccess?: () => Promise<NextResponse | null> } = {}
 ): Promise<NextResponse> {
   const workspaceId = api.ctx!.workspace!.id;
-  const path = workspaceLogoPath(workspaceId, ext);
   const requested = await api.supabase!.rpc("platform_storage_change_requested", {
     p_operation: operation,
     p_object_path: path,
@@ -103,29 +122,66 @@ async function audited(
     // The claim may have been recorded even though its response was lost: keep it recoverable.
     return reply(json(503, "The change could not be started. Recover this request id before retrying.", "unavailable", { requestId }));
   }
+  const stop = hooks.beforePerform ? await hooks.beforePerform() : null;
+  if (stop) {
+    await completePlatformStorageChange(requestId, api.ctx!.userId, true);
+    return reply(stop);
+  }
   const { returned } = await perform(workspaceId, claim.operation);
-  return reply(completionResponse(await completePlatformStorageChange(requestId, api.ctx!.userId, returned), requestId, path));
+  const done = await completePlatformStorageChange(requestId, api.ctx!.userId, returned);
+  if (done.ok && done.outcome === "succeeded" && hooks.afterSuccess) {
+    const failed = await hooks.afterSuccess();
+    if (failed) return reply(failed);
+  }
+  return reply(completionResponse(done, requestId, path));
 }
 
+/**
+ * Uploads `{workspace}/logo.{ext}` and, once the database confirms the write, records it as the logo.
+ * A member logo it replaces stays private in the workspace folder until the next member logo change
+ * removes leftovers.
+ */
 export async function PUT(req: NextRequest) {
   const auth = await authorize(req, true);
   if (auth.error) return auth.error;
   const contentType = (req.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
   const ext = CONTENT_TYPES[contentType];
   if (!ext) return auth.reply(json(422, "Logo must be PNG, JPEG, or WebP", "validation_failed"));
-  const bytes = new Uint8Array(await req.arrayBuffer());
-  if (bytes.length === 0 || bytes.length > MAX_LOGO_BYTES) {
+  const bytes = await readLimitedBody(req, MAX_LOGO_BYTES);
+  if (!bytes || bytes.length === 0) {
     return auth.reply(json(422, "Logo must be 1 byte to 2 MB", "validation_failed"));
   }
-  return audited(auth, "upsert", ext, (ws, op) => platformWriteWorkspaceLogo(ws, ext, bytes, contentType, op));
+  if (sniffLogo(bytes) !== ext) return auth.reply(json(422, "The file is not a valid image of that type", "validation_failed"));
+  const path = workspaceLogoPath(auth.api.ctx!.workspace!.id, ext);
+  return audited(auth, "upsert", path, (ws, op) => platformWriteWorkspaceLogo(ws, ext, bytes, contentType, op), {
+    afterSuccess: () => recordLogo(auth.api, path),
+  });
 }
 
+/**
+ * `?ext=png|jpg|webp` deletes `{workspace}/logo.{ext}`; without `ext`, deletes the current logo
+ * (whatever its name). The logo record is cleared first, while the claim on the object is held, so the
+ * record never names a deleted object.
+ */
 export async function DELETE(req: NextRequest) {
   const auth = await authorize(req, true);
   if (auth.error) return auth.error;
+  const ws = auth.api.ctx!.workspace!.id;
   const ext = req.nextUrl.searchParams.get("ext") as LogoExtension | null;
-  if (!ext || !LOGO_EXTENSIONS.includes(ext)) return auth.reply(json(422, "ext must be png, jpg, or webp", "validation_failed"));
-  return audited(auth, "delete", ext, (ws, op) => platformDeleteWorkspaceLogo(ws, ext, op));
+  let path: string;
+  if (ext !== null) {
+    if (!LOGO_EXTENSIONS.includes(ext)) return auth.reply(json(422, "ext must be png, jpg, or webp", "validation_failed"));
+    path = workspaceLogoPath(ws, ext);
+  } else {
+    const { data, error } = await auth.api.supabase!.from("workspace_settings").select("logo_path").eq("workspace_id", ws).maybeSingle();
+    if (error) return auth.reply(unavailableResponse());
+    const current = (data as { logo_path: string | null } | null)?.logo_path ?? null;
+    if (!current) return auth.reply(json(404, "This workspace has no logo", "not_found"));
+    path = workspaceLogoObject(ws, current);
+  }
+  return audited(auth, "delete", path, (w, op) => platformDeleteWorkspaceLogo(w, path, op), {
+    beforePerform: () => recordLogo(auth.api, null, path),
+  });
 }
 
 /**

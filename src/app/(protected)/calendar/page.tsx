@@ -5,7 +5,7 @@ import { WaitingForSync } from "@/components/WaitingForSync";
 import { BookAppointment, CalendarEditor, EditAppointment } from "@/components/records/NativeCalendar";
 import { getPageData, getPageScope } from "@/lib/data";
 import { listCalendars, type CalendarItem } from "@/lib/native/calendars";
-import { calendarAppointments } from "@/lib/ui/board";
+import { calendarAppointments, soonestFirst } from "@/lib/ui/board";
 import { PLACEHOLDER_CONFIG_CALENDARS, dataCopy, syncColumnEmpty } from "@/lib/ui/sync-copy";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ function utcLabel(iso: string): string {
 }
 
 export default async function CalendarPage() {
+  const now = Date.now();
   const data = await getPageData();
   const { native } = data;
   const copy = dataCopy(native);
@@ -84,7 +85,8 @@ export default async function CalendarPage() {
       <div className="grid grid-3" style={{ marginTop: "1.1rem" }}>
         {calendars.map((cal) => {
           const shown = calendarAppointments(native, cal, appointments);
-          const visible = shown.filter((a) => a.status !== "cancelled");
+          const live = shown.filter((a) => a.status !== "cancelled");
+          const visible = native ? soonestFirst(live, now) : live;
           return (
             <Card
               key={native ? cal.id : cal.name}

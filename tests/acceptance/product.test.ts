@@ -181,7 +181,9 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
     const img = await fetch(up.body.logo.url);
     assert.equal(img.status, 200);
     assert.deepEqual(Buffer.from(await img.arrayBuffer()), PNG);
-    assert.equal((await db.query("select logo_path from public.workspace_settings where workspace_id = $1", [ws])).rows[0].logo_path, `${ws}/logo.png`);
+    const logoPath = async () => (await db.query<{ logo_path: string | null }>("select logo_path from public.workspace_settings where workspace_id = $1", [ws])).rows[0].logo_path;
+    const firstPath = await logoPath();
+    assert.match(firstPath ?? "", new RegExp(`^${ws}/logo-[0-9a-f-]{36}\\.png$`), "each upload has its own object name");
 
     for (const [raw, type, label] of [
       [Buffer.from("hello"), "text/plain", "wrong type"], [Buffer.from("not really a png"), "image/png", "spoofed type"],
@@ -197,7 +199,7 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
     assert.equal((await call(employeeCookie, "DELETE", "/api/settings/logo")).status, 403);
     assert.equal((await ok(call(rivalCookie, "GET", "/api/settings/logo"), "rival read")).body.logo, null);
     const rivalToken = readSessionCookie(rivalCookie).session.access_token;
-    const direct = await fetch(`${env.apiUrl}/storage/v1/object/workspace-assets/${ws}/logo.png`, {
+    const direct = await fetch(`${env.apiUrl}/storage/v1/object/workspace-assets/${firstPath}`, {
       headers: { apikey: env.anonKey, Authorization: `Bearer ${rivalToken}` },
     });
     assert.notEqual(direct.status, 200, "another business cannot read the object directly");
@@ -207,7 +209,8 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
     await ok(call(ownerCookie, "PUT", "/api/settings/logo", { raw: JPEG, type: "image/jpeg" }), "upload jpeg");
     const objects = async () => (await db.query<{ name: string }>(
       "select name from storage.objects where bucket_id = 'workspace-assets' and name like $1 order by 1", [`${ws}/%`])).rows.map((r) => r.name);
-    assert.deepEqual(await objects(), [`${ws}/logo.jpg`]);
+    assert.deepEqual(await objects(), [await logoPath()]);
+    assert.match((await logoPath()) ?? "", /\.jpg$/);
 
     const { browser, page, base } = await browserAs(owner);
     try {
@@ -215,7 +218,8 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
       await page.getByRole("img", { name: "Business logo" }).waitFor();
       await page.locator("#biz-logo").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: PNG });
       await page.getByRole("status").filter({ hasText: "Logo updated." }).waitFor();
-      assert.deepEqual(await objects(), [`${ws}/logo.png`]);
+      assert.deepEqual(await objects(), [await logoPath()]);
+      assert.match((await logoPath()) ?? "", /\.png$/);
       await page.waitForFunction(() => {
         const el = document.querySelector<HTMLImageElement>("img[alt='Business logo']");
         return Boolean(el && el.complete && el.naturalWidth > 0);
@@ -317,6 +321,20 @@ describe("product rehearsal: overrides, business hours, logos, full board, logou
       const cookies = await ctx.cookies();
       const replay = cookies.filter((c) => /^sb-.+-auth-token/.test(c.name)).map((c) => `${c.name}=${c.value}`).join("; ");
       assert.ok(replay, "captured the session cookie");
+
+      // A sign-out that never reaches the server says so, keeps the page, and can be retried.
+      const errors: string[] = [];
+      tabA.on("pageerror", (e) => errors.push(e.message));
+      await tabA.route("**/api/auth/logout", (r) => r.abort("internetdisconnected"));
+      const dialog = tabA.waitForEvent("dialog");
+      await tabA.getByRole("button", { name: "Sign out" }).click();
+      const shown = await dialog;
+      assert.match(shown.message(), /did not reach the server, so you are still signed in/);
+      await shown.dismiss();
+      assert.doesNotMatch(tabA.url(), /\/login/, "still on the page");
+      assert.equal((await appFetch(app, "/api/contacts", { cookie: replay })).status, 200, "the session really is still live");
+      await tabA.unroute("**/api/auth/logout");
+      assert.deepEqual(errors, [], "no unhandled error");
 
       await tabA.getByRole("button", { name: "Sign out" }).click();
       await tabA.waitForURL(/\/login/);

@@ -75,6 +75,7 @@ export async function contactNames(scope: DataScope, ids: (string | null | undef
           .from("contacts")
           .select("id, first_name, last_name, email, phone")
           .eq("workspace_id", activeWorkspaceId(scope))
+          .is("deleted_at", null)
           .in("id", chunk)
       ) as { id: string; first_name: string; last_name: string; email: string | null; phone: string | null }[] | null) ?? []
     )

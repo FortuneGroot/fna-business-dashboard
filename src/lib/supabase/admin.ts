@@ -34,6 +34,13 @@ export function workspaceLogoPath(workspaceId: string, ext: LogoExtension): stri
   return `${workspaceId}/logo.${ext}`;
 }
 
+/** A logo object of `workspaceId` (fixed or unique name, as set_workspace_logo accepts), or throws. */
+export function workspaceLogoObject(workspaceId: string, objectPath: string): string {
+  const m = objectPath.match(/^([0-9a-f-]{36})\/logo(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.(png|jpg|webp)$/);
+  if (!UUID.test(workspaceId) || !m || m[1] !== workspaceId) throw new Error("invalid logo path");
+  return objectPath;
+}
+
 function adminClient() {
   const url = (process.env.SUPABASE_URL || "").trim().replace(/\/$/, "");
   const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
@@ -151,8 +158,8 @@ function storageResponded(error: unknown): boolean {
 }
 
 /** `{workspaceId}/.platform-trash/{requestId}-{token}.{ext}` — must match private.platform_storage_tombstone. */
-export function workspaceLogoTombstone(workspaceId: string, ext: LogoExtension, operation: PlatformOperation): string {
-  workspaceLogoPath(workspaceId, ext);
+export function workspaceLogoTombstone(workspaceId: string, objectPath: string, operation: PlatformOperation): string {
+  const ext = workspaceLogoObject(workspaceId, objectPath).split(".").pop();
   return `${workspaceId}/.platform-trash/${operation.requestId}-${operation.token}.${ext}`;
 }
 
@@ -182,19 +189,19 @@ export async function platformWriteWorkspaceLogo(
 }
 
 /**
- * A5. Deletes `{workspaceId}/logo.{ext}` as a move to the operation's tombstone (so the database can
- * attribute it to this operation), then removes the tombstone. A tombstone left by a failed cleanup
- * stays inside the workspace's own folder.
+ * A5. Deletes the logo object `objectPath` of `workspaceId` as a move to the operation's tombstone (so
+ * the database can attribute it to this operation), then removes the tombstone. A tombstone left by a
+ * failed cleanup stays inside the workspace's own folder.
  */
 export async function platformDeleteWorkspaceLogo(
   workspaceId: string,
-  ext: LogoExtension,
+  objectPath: string,
   operation: PlatformOperation
 ): Promise<{ returned: boolean }> {
   const bucket = () => adminClient().storage.from(WORKSPACE_ASSETS_BUCKET);
-  const tombstone = workspaceLogoTombstone(workspaceId, ext, operation);
+  const tombstone = workspaceLogoTombstone(workspaceId, objectPath, operation);
   try {
-    const { error } = await bucket().move(workspaceLogoPath(workspaceId, ext), tombstone);
+    const { error } = await bucket().move(workspaceLogoObject(workspaceId, objectPath), tombstone);
     if (!error) await bucket().remove([tombstone]).catch(() => undefined);
     return { returned: storageResponded(error) };
   } catch {

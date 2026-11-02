@@ -6,6 +6,7 @@ import { StatusBanner } from "@/components/Chrome";
 import { Card, PageHead, DataTable, Button, LoadError } from "@/components/ui";
 import { WaitingForSync } from "@/components/WaitingForSync";
 import { dataCopy } from "@/lib/ui/sync-copy";
+import { markWorkspaceStale, workspaceHeaders } from "@/lib/ui/workspace-pin";
 
 const FILTERS = ["All", "Unread", "Awaiting Reply"] as const;
 
@@ -34,12 +35,19 @@ export function InboxClient() {
     setState("loading");
     setErrorMessage("");
     try {
-      const res = await fetch("/api/dashboard/conversations");
+      const res = await fetch("/api/dashboard/conversations", { cache: "no-store", headers: workspaceHeaders() });
       if (res.status === 401 || res.status === 403) {
         setRows([]);
         setWaiting(true);
         setState("unauthorized");
         setErrorMessage("Your session expired or you are not signed in. Sign out and sign back in.");
+        return;
+      }
+      if (res.status === 409) {
+        markWorkspaceStale();
+        setRows([]);
+        setState("error");
+        setErrorMessage("You switched to a different business in another tab. Reload this page to continue.");
         return;
       }
       if (!res.ok) {
@@ -132,7 +140,12 @@ export function InboxClient() {
       <Card title="Conversation Threads">
         {state === "loading" ? (
           <EmptyLoading />
-        ) : waiting || state !== "ready" ? (
+        ) : state !== "ready" ? (
+          <div className="empty">
+            <strong>Conversations could not be loaded</strong>
+            <span>See the message above, then try again.</span>
+          </div>
+        ) : waiting ? (
           <WaitingForSync entity="conversations" native={native} />
         ) : (
           <DataTable

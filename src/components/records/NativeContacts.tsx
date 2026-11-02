@@ -82,6 +82,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
   const [noteBusy, setNoteBusy] = useState(false);
   const first = useRef(true);
   const latest = useRef(0);
+  const latestDetail = useRef(0);
 
   useEffect(() => {
     void loadMembers().then(setMembers);
@@ -116,12 +117,19 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
   }, [query, tag, search]);
 
   const openDetail = useCallback(async (id: string) => {
+    const request = ++latestDetail.current;
     const { body } = await api(`/api/contacts/${id}`);
+    if (request !== latestDetail.current) return;
     if (body.ok) {
       setError("");
       setDetail(body as unknown as Detail);
     } else setError(failure(body, "Could not open this contact."));
   }, []);
+
+  function closeDetail() {
+    latestDetail.current++;
+    setDetail(null);
+  }
 
   function edit(id: string | null, form: Form) {
     setError("");
@@ -156,7 +164,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
       setError(failure(body, "Could not delete the contact."));
       return;
     }
-    setDetail(null);
+    closeDetail();
     setNotice(`${c.name} was deleted.`);
     await search(query, tag);
   }
@@ -283,7 +291,7 @@ export function NativeContacts({ initial, permissions }: { initial: ContactPage;
         ) : null}
       </Modal>
 
-      <Modal open={Boolean(detail) && !editing} onClose={() => setDetail(null)} title={detail?.contact.name ?? "Contact"}>
+      <Modal open={Boolean(detail) && !editing} onClose={closeDetail} title={detail?.contact.name ?? "Contact"}>
         {detail ? (
           <div>
             {errorBanner}

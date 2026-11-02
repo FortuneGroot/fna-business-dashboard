@@ -37,34 +37,35 @@ const SUITES = {
       "tests/p2-auth.test.ts", "tests/p2-review-fixes.test.ts", "tests/p3-data.test.ts",
       "tests/p3-display.test.ts", "tests/p4-team-settings.test.ts", "tests/p5-crm.test.ts",
       "tests/p6-platform.test.ts", "tests/p7-retirement.test.ts", "tests/bootstrap-platform-admin.test.ts",
+      "tests/p8-integrity.test.ts",
     ],
     timeoutMs: 60_000,
-    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1; the api() upload and stale-pin order checks added 2.
-    min: 260,
+    // P7 deleted 78 tests of retired workflow-sync code (sync, onboarding readiness, deployment validation) and added 20; acceptance fixes added 1; the bootstrap CLI and override lists added 10; M22 CLI changes added 4; the runner file-minimum check added 1; the api() upload and stale-pin order checks added 2; round-3 integrity checks added 16.
+    min: 276,
   },
   db: {
     label: "database tests (PGlite + Supabase shim)",
     files: () => list("tests/db"),
-    minFiles: 15,
+    minFiles: 16,
     timeoutMs: 60_000,
-    // M24 invitation authority added 3; M25 appointment rules added 2.
-    min: 237,
+    // M24 invitation authority added 3; M25 appointment rules added 2; M26 integrity round 3 added 13.
+    min: 250,
   },
   realpg: {
     label: "database concurrency tests (real local PostgreSQL, independent sessions)",
     files: () => list("tests/db-real"),
-    minFiles: 3,
+    minFiles: 4,
     timeoutMs: 240_000,
-    // M23 booking races added 3.
-    min: 38,
+    // M23 booking races added 3; M26 invitation authority, admin removal, booking and provisioning races added 26.
+    min: 64,
   },
   stack: {
     label: "real local Supabase stack (CLI migrations, GoTrue JWTs, PostgREST, Storage)",
     files: () => list("tests/supabase-stack"),
     minFiles: 2,
     timeoutMs: 1_200_000,
-    // The invitation-page settle and retry check added 1.
-    min: 70,
+    // The invitation-page settle and retry check added 1; the concurrent member logo check added 1.
+    min: 71,
     serial: true,
   },
   acceptance: {

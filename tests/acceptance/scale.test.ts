@@ -255,6 +255,21 @@ describe("scale: more than 1,000 records per list in one synthetic business", ()
     assert.equal(summary.appointmentsCount, await count("select count(*) n from public.appointments where workspace_id = $1 and deleted_at is null"));
     const pipelineHtml = await page("/pipeline")();
     assert.ok(pipelineHtml.includes(`${opps.length} opportunities across`), "board count is exact beyond the 1,000-row cap");
+    // A populated stage whose deals are all older than the board's newest 500 still offers every one of
+    // them (it once showed "No opportunities yet"). Triggers are skipped only to backdate the rows.
+    const lastStage = (await db.query<{ id: string; n: number }>(
+      `select ps.id, (select count(*)::int from public.opportunities o where o.stage_id = ps.id and o.deleted_at is null) n
+       from public.pipeline_stages ps join public.pipelines p on p.id = ps.pipeline_id and p.is_default
+       where ps.workspace_id = $1 order by ps.position desc limit 1`, [big])).rows[0];
+    assert.ok(lastStage.n > 0, "the last stage has deals");
+    await db.query("begin");
+    await db.query("set local session_replication_role = replica");
+    await db.query("update public.opportunities set updated_at = '2001-01-01T00:00:00Z' where stage_id = $1", [lastStage.id]);
+    await db.query("commit");
+    const newest = await db.query("select 1 from public.opportunities where workspace_id = $1 and deleted_at is null and updated_at > '2001-01-01' limit 500", [big]);
+    assert.equal(newest.rowCount, 500, "at least 500 newer deals push the stage out of the board's window");
+    const olderHtml = await page("/pipeline")();
+    assert.ok(olderHtml.includes(`Show ${lastStage.n} more`), `the stage offers its ${lastStage.n} older deals`);
     const tasksHtml = await page("/tasks")();
     assert.ok(tasksHtml.includes(`${tasks.length} task(s) · ${open.length} open`), "task counts are exact");
   });

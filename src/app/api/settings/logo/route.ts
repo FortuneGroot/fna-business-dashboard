@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { invalid, nativeApi } from "@/lib/api/native";
+import { readLimitedBody } from "@/lib/http/limited-body";
 import { MAX_LOGO_BYTES, deleteLogo, putLogo, signedLogo } from "@/lib/native/logo";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +13,9 @@ export async function GET(req: NextRequest) {
 /** PUT: the raw image as the body, with its Content-Type (PNG, JPEG, or WebP, under 2 MB). */
 export async function PUT(req: NextRequest) {
   return nativeApi(req, { permission: "settings.write" }, async (scope) => {
-    const declared = Number(req.headers.get("content-length") ?? 0);
-    if (declared > MAX_LOGO_BYTES) throw invalid({ file: "The image must be under 2 MB" });
     const contentType = (req.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    const bytes = new Uint8Array(await req.arrayBuffer());
+    const bytes = await readLimitedBody(req, MAX_LOGO_BYTES);
+    if (!bytes) throw invalid({ file: "The image must be under 2 MB" });
     return { logo: await putLogo(scope, contentType, bytes) };
   });
 }

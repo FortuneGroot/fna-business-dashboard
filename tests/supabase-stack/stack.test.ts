@@ -408,13 +408,15 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       rpc(env, user.token, "accept_invitation", { p_token: creator.invite_token }),
       rpc(env, user.token, "accept_invitation", { p_token: creator.invite_token }),
     ]);
-    const statuses = [a1.status, a2.status].sort();
-    assert.equal(statuses[0], 200);
-    assert.notEqual(statuses[1], 200, "the same invitation was accepted twice");
-    assert.match((a1.status === 200 ? a2 : a1).text, /invitation_used|already_member/);
+    // The invitee's second request is answered as the acceptance it repeats (a retry after a lost
+    // response), never applied twice.
+    assert.deepEqual([a1.status, a2.status], [200, 200], `${a1.text} | ${a2.text}`);
     const members = await db.query<{ n: number }>(
       "select count(*)::int n from public.workspace_members where workspace_id = $1 and status = 'active'", [creator.workspace_id]);
     assert.equal(members.rows[0].n, 1);
+    const audits = await db.query<{ n: number }>(
+      "select count(*)::int n from public.workspace_audit_log where workspace_id = $1 and action = 'invitation.accepted'", [creator.workspace_id]);
+    assert.equal(audits.rows[0].n, 1, "the acceptance is recorded once");
   });
 
   test("a one-minute platform grant expires by the clock across PostgREST and Storage", async () => {
@@ -951,6 +953,48 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
       assert.equal((await storageAudit(writeGrant)).length, total, "a logged-out session records nothing");
     });
 
+    test("member logo: overlapping uploads and removals over HTTP keep logo_path naming exactly one stored object", async () => {
+      const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(16)]);
+      const jpg = Buffer.concat([Buffer.from("ffd8ffe0", "hex"), Buffer.alloc(16)]);
+      const put = (body: Buffer, contentType: string) =>
+        appFetch(app, "/api/settings/logo", { method: "PUT", cookie: ownerCookie, body, contentType });
+      const del = () => appFetch(app, "/api/settings/logo", { method: "DELETE", cookie: ownerCookie });
+      const consistent = async (label: string) => {
+        const path = (await db.query<{ p: string | null }>(
+          "select logo_path p from public.workspace_settings where workspace_id = $1", [wsA])).rows[0].p;
+        const stored = (await db.query<{ name: string }>(
+          "select name from storage.objects where bucket_id = 'workspace-assets' and name ~ $1 order by 1",
+          [`^${wsA}/logo(-[0-9a-f-]{36})?\\.(png|jpg|webp)$`])).rows.map((r) => r.name);
+        if (path) assert.ok(stored.includes(path), `${label}: logo_path names a stored object`);
+        assert.deepEqual(stored.filter((n) => n !== path), [], `${label}: no superseded object is left`);
+        return path;
+      };
+
+      assert.equal((await del()).status, 200);
+      for (let round = 0; round < 3; round++) {
+        const replaced = await Promise.all([put(png, "image/png"), put(jpg, "image/jpeg"), put(png, "image/png")]);
+        for (const r of replaced) assert.equal(r.status, 200, r.text);
+        assert.ok(await consistent(`replace/replace ${round}`), "a logo is set");
+        const mixed = await Promise.all([put(jpg, "image/jpeg"), del(), put(png, "image/png"), del()]);
+        for (const r of mixed) assert.equal(r.status, 200, r.text);
+        const path = await consistent(`replace/remove ${round}`);
+        const shown = await appFetch(app, "/api/settings/logo", { cookie: ownerCookie });
+        assert.equal(Boolean(shown.body.logo), Boolean(path), "the settings page shows exactly what is recorded");
+      }
+
+      // A failure between upload and record: the record refuses a name whose object does not exist,
+      // and an upload that was never recorded is removed by a later change once it is old enough.
+      const missing = await rpc(env, ownerA.token, "set_workspace_logo", { p_path: `${wsA}/logo-${crypto.randomUUID()}.png` });
+      assert.match(missing.text, /logo_missing/);
+      const orphan = `${wsA}/logo-${crypto.randomUUID()}.png`;
+      assert.equal((await storage(env, ownerA.token, "POST", `workspace-assets/${orphan}`, "never recorded")).status, 200);
+      await db.query("update storage.objects set created_at = now() - interval '11 minutes' where bucket_id = 'workspace-assets' and name = $1", [orphan]);
+      assert.equal((await put(png, "image/png")).status, 200);
+      await consistent("after an unrecorded upload");
+      assert.equal((await del()).status, 200);
+      assert.equal(await consistent("removed"), null);
+    });
+
     // P3: pages and /api/dashboard/* read each workspace's native tables through the app, as the
     // signed-in user. Business records are created with the owners' own JWTs; reviews and activity
     // events have no client write path yet, so the superuser setup connection inserts those rows.
@@ -1383,10 +1427,12 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         assert.deepEqual(created.rows, [{ email: newcomer, confirmed: true }], "the account uses the invited address");
 
         expect(await accept(token, undefined, { password: "Local-newcomer-pass-2" }), 410, "invitation_used", "reuse without session");
-        expect(await accept(token, cookie), 410, "invitation_used", "reuse with session");
+        const retried = await accept(token, cookie);
+        assert.deepEqual([retried.status, retried.body.workspace?.id], [200, ws], `the invitee's own retry is answered: ${retried.text}`);
         expect(await appFetch(app, `/api/invitations/${token}`), 410, "invitation_used", "preview after use");
         const accepted = await audit(ownerCookie);
-        assert.ok(accepted.some((a) => a.action === "invitation.accepted" && a.actorId === me.body.user.id), "acceptance is audited");
+        assert.equal(accepted.filter((a) => a.action === "invitation.accepted" && a.actorId === me.body.user.id).length, 1,
+          "acceptance is audited once");
       });
 
       test("INV-3/4: expired, revoked, mismatched, and concurrent acceptances are refused exactly once", async () => {
@@ -1430,7 +1476,11 @@ describe("real local Supabase stack (CLI migrations, GoTrue, PostgREST, Storage)
         expect(await accept(exToken, undefined, { password: "Local-existing-pass-1" }), 409, "account_exists",
           "an existing account must sign in");
         const results = await Promise.all([accept(exToken, existingCookie), accept(exToken, existingCookie)]);
-        assert.deepEqual(results.map((x) => x.status).sort(), [200, 410], results.map((x) => x.text).join(" | "));
+        assert.deepEqual(results.map((x) => x.status), [200, 200], results.map((x) => x.text).join(" | "));
+        assert.equal((await db.query("select 1 from public.workspace_audit_log where action = 'invitation.accepted' and target = $1",
+          [forExisting.body.invitation.id])).rowCount, 1, "accepted once, answered twice");
+        const other = await accept(exToken, empCookie);
+        assert.ok(["invitation_used", "invitation_email_mismatch"].includes(other.body.code), `someone else cannot reuse it: ${other.text}`);
         const rows = await db.query("select role, status from public.workspace_members where workspace_id = $1 and user_id = $2",
           [ws, existing.id]);
         assert.deepEqual(rows.rows, [{ role: "employee", status: "active" }], "exactly one membership");

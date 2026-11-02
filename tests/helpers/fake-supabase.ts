@@ -97,7 +97,13 @@ export async function startFakeSupabase() {
     const perms = (ctx?.permissions as string[] | undefined) ?? [];
     const visible = (t: string, r: Row) =>
       service || (t === "profiles" ? true : Boolean(ws) && r.workspace_id === ws && perms.includes(TABLE_PERMISSION[t] ?? "∅"));
-    let found = (tables.get(table) ?? []).filter((r) => visible(table, r));
+    let source = tables.get(table) ?? [];
+    if (table === "workspace_settings") {
+      // logo_path follows set_workspace_logo; a workspace without seeded settings still has its row.
+      const owner = ws ?? logo.path?.split("/")[0];
+      source = source.length ? source.map((r) => ({ ...r, logo_path: logo.path })) : owner ? [{ workspace_id: owner, logo_path: logo.path }] : [];
+    }
+    let found = source.filter((r) => visible(table, r));
     for (const [column, filter] of url.searchParams) {
       if (["select", "order", "limit", "offset"].includes(column)) continue;
       found = found.filter((r) => matches(r, column, filter));
@@ -178,7 +184,29 @@ export async function startFakeSupabase() {
       user: userJson(user) };
   }
 
+  /** workspace_settings.logo_path of the (single) fake workspace, changed only through set_workspace_logo. */
+  const logo = { path: null as string | null };
+  /** When each object was written (Storage `created_at`); tests may backdate entries. */
+  const objectTimes = new Map<string, string>();
+
   const rpc: Record<string, RpcHandler> = {
+    set_workspace_logo: (a, c) => {
+      const ctx = c.userId ? contexts.get(c.userId) : undefined;
+      const ws = (ctx?.workspace as { id?: string } | null | undefined)?.id;
+      const canWrite = ((ctx?.permissions as string[] | undefined) ?? []).includes("settings.write")
+        || (ctx?.grant as { mode?: string } | null | undefined)?.mode === "write";
+      if (!ws || !canWrite) return { status: 403, body: { code: "42501", message: "forbidden" } };
+      const path = (a.p_path as string | null) ?? null;
+      const onlyIf = (a.p_only_if as string | null | undefined) ?? null;
+      if (path !== null && !new RegExp(`^${ws}/logo(-[0-9a-f-]{36})?\\.(png|jpg|webp)$`).test(path)) {
+        return { status: 400, body: { code: "22023", message: "validation_failed" } };
+      }
+      const previous = logo.path;
+      if (onlyIf !== null && previous !== onlyIf) return { status: 200, body: { previous, changed: false } };
+      if (path !== null && !objects.has(path)) return { status: 404, body: { code: "P0002", message: "logo_missing" } };
+      logo.path = path;
+      return { status: 200, body: { previous, changed: previous !== path } };
+    },
     request_context: (_a, c) => c.userId
       ? { status: 200, body: contexts.get(c.userId) ?? { authenticated: true, user_id: c.userId, is_platform_admin: false,
           workspace: null, role: null, grant: null, permissions: [] } }
@@ -297,8 +325,26 @@ export async function startFakeSupabase() {
         const refused = recordWrite(token, "upsert", path, undefined, objects.get(path)?.token);
         if (refused) return refused;
         objects.set(path, { version: ++version, token, writtenBy: service ? "service" : "user" });
+        objectTimes.set(path, new Date().toISOString());
         return { status: 200, body: { Key: `workspace-assets/${objectPath}`, Id: `obj-${version}` } };
       });
+    }
+    const signPath = url.pathname.match(/^\/storage\/v1\/object\/sign\/workspace-assets\/(.+)$/)?.[1];
+    if (signPath && req.method === "POST") {
+      if (!service && !userId) return send(res, { status: 403, body: { statusCode: "403", error: "Unauthorized", message: "denied" } });
+      const path = decodeURIComponent(signPath);
+      return send(res, objects.has(path)
+        ? { status: 200, body: { signedURL: `/object/sign/workspace-assets/${signPath}?token=fake` } }
+        : { status: 400, body: { statusCode: "404", error: "not_found", message: "Object not found" } });
+    }
+    if (url.pathname === "/storage/v1/object/list/workspace-assets" && req.method === "POST") {
+      if (!service && !userId) return send(res, { status: 403, body: { message: "denied" } });
+      const { prefix = "", search = "" } = (body ?? {}) as { prefix?: string; search?: string };
+      const dir = prefix.replace(/\/$/, "");
+      const listed = [...objects.keys()]
+        .filter((k) => k.startsWith(`${dir}/`) && !k.slice(dir.length + 1).includes("/") && k.slice(dir.length + 1).includes(search))
+        .map((k) => ({ name: k.slice(dir.length + 1), id: k, created_at: objectTimes.get(k) ?? new Date().toISOString() }));
+      return send(res, { status: 200, body: listed });
     }
     if (url.pathname === "/storage/v1/object/move" && req.method === "POST") {
       if (!service && !userId) return send(res, { status: 403, body: { message: "denied" } });
@@ -325,7 +371,7 @@ export async function startFakeSupabase() {
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   return {
-    url, anonKey, serviceKey, calls, objects, requests, faults, contexts, issue, storageArrivals, tables, limits,
+    url, anonKey, serviceKey, calls, objects, objectTimes, requests, faults, contexts, issue, storageArrivals, tables, limits, logo,
     /** RPC handlers by name; tests may add or replace entries. */
     rpc,
     /** Adds rows to a table (PostgREST reads apply RLS from the caller's request context). */

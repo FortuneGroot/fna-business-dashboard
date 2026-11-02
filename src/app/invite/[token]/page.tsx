@@ -22,6 +22,7 @@ export default function InvitePage() {
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [signInHref, setSignInHref] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -60,7 +61,23 @@ export default function InvitePage() {
       router.refresh();
       return;
     }
-    setError(body.fields?.password || body.error || "Could not accept the invitation. Try again.");
+    setSignInHref(null);
+    if (!res) {
+      // The request may have completed: a repeat by the same signed-in user is answered as accepted;
+      // a new account may already exist, so offer sign-in rather than a second account creation.
+      setError(withPassword
+        ? "The connection dropped before the server answered, so your account may already be set up. Sign in with the invited email and the password you just chose."
+        : "The connection dropped before the server answered, so you may already have joined. Try again; if you joined, you will go straight to the dashboard.");
+      if (withPassword) setSignInHref("/login");
+    } else if (withPassword && (body.code === "invitation_used" || body.code === "account_exists")) {
+      setError(body.code === "invitation_used"
+        ? "This invitation has already been used. If you just set your password here, sign in with it."
+        : body.error || "An account already exists for this email. Sign in to accept the invitation.");
+      setSignInHref(body.code === "invitation_used" ? "/login" : loginHref);
+    } else {
+      setError(body.fields?.password || body.error || "Could not accept the invitation. Try again.");
+      if (withPassword && /account was created/i.test(body.error ?? "")) setSignInHref(loginHref);
+    }
     setBusy(false);
   }
 
@@ -120,6 +137,9 @@ export default function InvitePage() {
               using {preview.emailMasked}.
             </p>
             {error ? <div className="banner error" role="alert">{error}</div> : null}
+            {signInHref ? (
+              <Link className="btn secondary" href={signInHref} style={{ width: "100%", margin: "0.5rem 0 1rem" }}>Sign in</Link>
+            ) : null}
 
             {me ? (
               <>

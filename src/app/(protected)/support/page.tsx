@@ -3,6 +3,7 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, PageHead, Button, LoadError } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
+import { markWorkspaceStale, workspaceHeaders } from "@/lib/ui/workspace-pin";
 import { useCallback, useEffect, useState } from "react";
 
 type TenantContact = {
@@ -21,10 +22,16 @@ export default function SupportPage() {
     setLoadState("loading");
     setErrorMessage("");
     try {
-      const res = await fetch("/api/tenant/config");
+      const res = await fetch("/api/tenant/config", { cache: "no-store", headers: workspaceHeaders() });
       if (res.status === 401 || res.status === 403) {
         setLoadState("error");
         setErrorMessage("Your session expired or you are not signed in.");
+        return;
+      }
+      if (res.status === 409) {
+        markWorkspaceStale();
+        setLoadState("error");
+        setErrorMessage("You switched to a different business in another tab. Reload this page to continue.");
         return;
       }
       if (!res.ok) {
@@ -73,6 +80,8 @@ export default function SupportPage() {
             <p className="muted" role="status">
               Loading contact details…
             </p>
+          ) : loadState === "error" ? (
+            <p className="muted">Contact details could not be loaded.</p>
           ) : hasChannels ? (
             <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
               {email ? (

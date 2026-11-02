@@ -16,6 +16,13 @@ function endOf(q: { to?: string }): number {
   return q.to ? Date.parse(q.to) : Date.now();
 }
 
+/** The [from, to) a validated query covers: `to` defaults to now, `from` to 30 days before `to`. */
+export function reportRange(query: z.infer<typeof reportQuery>, now = Date.now()): { from: string; to: string } {
+  const to = query.to ? new Date(query.to) : new Date(now);
+  const from = query.from ? new Date(query.from) : new Date(to.getTime() - 30 * DAY_MS);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 const APPOINTMENT_STATUSES = ["booked", "confirmed", "completed", "cancelled", "no_show"] as const;
 
 /**
@@ -24,9 +31,7 @@ const APPOINTMENT_STATUSES = ["booked", "confirmed", "completed", "cancelled", "
  */
 export async function reportSummary(scope: DataScope, query: z.infer<typeof reportQuery>) {
   const ws = activeWorkspaceId(scope);
-  const to = query.to ? new Date(query.to) : new Date();
-  const from = query.from ? new Date(query.from) : new Date(to.getTime() - 30 * DAY_MS);
-  const range = { from: from.toISOString(), to: to.toISOString() };
+  const range = reportRange(query);
 
   const head = (table: string) => scope.supabase.from(table).select("id", { count: "exact", head: true }).eq("workspace_id", ws);
   const counted = async (q: PromiseLike<{ data: unknown; count: number | null; error: { message?: string; code?: string } | null }>) => {
@@ -55,7 +60,7 @@ export async function reportSummary(scope: DataScope, query: z.infer<typeof repo
       entry.valueCents += cents;
       openByStage.set(r.stage_id, entry);
       const closed = r.closed_at ? Date.parse(r.closed_at) : NaN;
-      if (r.status === "won" && closed >= from.getTime() && closed < to.getTime()) {
+      if (r.status === "won" && closed >= Date.parse(range.from) && closed < Date.parse(range.to)) {
         wonCount += 1;
         wonValueCents += cents;
       }

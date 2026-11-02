@@ -38,7 +38,13 @@ const INVITATION_MESSAGES: Record<string, string> = {
   invitation_revoked: "This invitation was revoked.",
   invitation_not_found: "This invitation link is not valid.",
   invitation_email_mismatch: "This invitation was sent to a different email address.",
+  invitation_email_unverified: "Confirm your email address first, then open this invitation again.",
 };
+
+/** PostgREST refusals of the JWT itself (expired, invalid) and M21's ended-session check. */
+const SESSION_REFUSALS = new Set(["PGRST301", "PGRST302", "PGRST303", "PT401"]);
+/** Serialization failure and deadlock: the transaction was rolled back and can simply be retried. */
+const RETRYABLE = new Set(["40001", "40P01"]);
 
 type DbError = { message?: string; code?: string; status?: number } | null | undefined;
 
@@ -52,7 +58,16 @@ export function dbFailure(error: DbError): ApiError {
   const code = error?.code ?? "";
   if (INVITATION_GONE.has(message)) return new ApiError(410, message, INVITATION_MESSAGES[message]);
   if (message === "invitation_not_found") return new ApiError(404, message, INVITATION_MESSAGES[message]);
-  if (message === "invitation_email_mismatch") return new ApiError(403, message, INVITATION_MESSAGES[message]);
+  if (message === "invitation_email_mismatch" || message === "invitation_email_unverified") {
+    return new ApiError(403, message, INVITATION_MESSAGES[message]);
+  }
+  if (SESSION_REFUSALS.has(code) || message === "session_ended") {
+    return new ApiError(401, "unauthenticated", "Your session has ended. Sign in again.");
+  }
+  if (RETRYABLE.has(code)) {
+    return conflict("This change collided with another one made at the same moment. Nothing was saved; try again.", "retry");
+  }
+  if (message === "logo_missing") return conflict("The logo was changed at the same moment. Reload and try again.");
   if (message === "already_member") return conflict("This person is already a member of the workspace", "already_member");
   if (message === "workspace_suspended") return new ApiError(423, "workspace_suspended", "This workspace is suspended");
   if (message === "forbidden" || code === "42501") return forbidden();
