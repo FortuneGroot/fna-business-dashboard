@@ -7,6 +7,8 @@ build/
 *.tsbuildinfo
 
 # secrets / env
+.env*
+!.env.example
 .env
 .env.local
 .env.*.local
